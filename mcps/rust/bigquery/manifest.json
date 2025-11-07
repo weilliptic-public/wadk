@@ -1,0 +1,11 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "bigquery.wasm",
+  "widl": "bigquery.widl",
+  "config": "config.yaml",
+  "organization": "Weilliptic",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/bigquery.svg",
+  "description": "BigQuery is Google Cloud’s fully managed, serverless data warehouse that enables fast SQL queries and large-scale analytics.",
+  "outcall": true
+}

@@ -1,0 +1,16 @@
+[package]
+name = "aurora"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = {workspace = true}
+serde =  {workspace = true}
+serde_json =  {workspace = true}
+
+weil_macros = {workspace = true}
+weil_rs =  {workspace = true}
+weil_contracts = {workspace = true}
+
+[lib]
+crate-type = ["cdylib"]

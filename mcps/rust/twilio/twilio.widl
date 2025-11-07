@@ -1,0 +1,63 @@
+record TwilioConfig {
+    twilio_account_sid: string,
+    twilio_auth_token: string,
+    twilio_phone_number: string
+}
+
+record TwilioMessage {
+    sid: string,
+    body: string,
+    from: string,
+    to: string,
+    status: string,
+    date_created: string
+}
+
+record TwilioCall {
+    sid: string,
+    from: string,
+    to: string,
+    status: string,
+    duration: option<string>,
+    date_created: string
+}
+
+
+record AccountInfo {
+    friendly_name: string,
+    status: string,
+    sid: string
+}
+
+@mcp
+interface Twilio {
+    config -> TwilioConfig;
+    // Send SMS message
+    mutate func send_sms(
+        // sender's number
+        from: string, 
+        // receiver's number
+        to: string, 
+        // content of the message
+        body: string
+    ) -> result<string, string>;
+    
+    // Make a phone call
+    mutate func send_voice_note(
+        // sender's number
+        from: string,
+        // receiver's number
+        to: string,
+        // twim url
+        twiml_url: string
+    ) -> result<string, string>;
+    
+    // Get message history with optional limit
+    query func get_messages(
+        //max number of entries
+        limit: option<u32>
+    ) -> result<list<TwilioMessage>, string>;
+    
+    // Get account information
+    query func get_account_info() -> result<AccountInfo, string>
+}

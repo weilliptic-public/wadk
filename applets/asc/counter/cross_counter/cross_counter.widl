@@ -1,0 +1,4 @@
+interface CrossCounter {
+    query func fetch_counter_from(contract_id: string) -> result<uint,string>;
+    mutate func increment_counter_of(contract_id: string) -> result<(),string>
+}

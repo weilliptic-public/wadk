@@ -1,0 +1,7 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "yutaka.wasm",
+  "widl": "yutaka.widl",
+  "organization": "Weilliptic",
+  "author": "Weilliptic"
+}

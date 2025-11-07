@@ -1,0 +1,10 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "sap_hana.wasm",
+  "widl": "sap_hana.widl",
+  "config": "config.yaml",
+  "organization": "Weilliptic",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/sap.svg",
+  "description": "SAP HANA is an in-memory, column-oriented database from SAP that provides real-time analytics and high-speed transaction processing."
+}

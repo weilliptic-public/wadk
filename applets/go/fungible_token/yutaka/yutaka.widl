@@ -1,0 +1,12 @@
+interface Yutaka {
+    query func name() -> string;
+    query func symbol() -> string;
+    query func decimals() -> u8;
+    query func details() -> tuple<string, string, u8>;
+    query func total_supply() -> u64;
+    query func balance_for(addr: string) -> result<u64, string>;
+    mutate func transfer(to_addr: string, amount: u64) -> result<(), string>;
+    mutate func approve(spender: string, amount: u64);
+    mutate func transfer_from(from_addr: string, to_addr: string, amount: u64) -> result<(), string>;
+    query func allowance(owner: string, spender: string) -> u64
+}

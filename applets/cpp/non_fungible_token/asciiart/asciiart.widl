@@ -1,0 +1,27 @@
+
+record TokenDetails {
+    title: string,
+    name: string,
+    description: string,
+    payload: string
+}
+
+interface AsciiArt {
+    query func name() -> string;
+    query func balance_of(addr: string) -> uint;
+    query func owner_of(token_id: string) -> result<string, string>;
+    query func details(token_id: string) -> result<TokenDetails, string>;
+    mutate func approve(spender: string, token_id: string) -> result<(), string>;
+    mutate func set_approve_for_all(spender: string, approval: bool);
+    mutate func transfer(to_addr: string, token_id: string) -> result<(), string>;
+    mutate func transfer_from(from_addr: string, to_addr: string, token_id: string) -> result<(), string>;
+    query func get_approved(token_id: string) -> result<list<string>, string>;
+    query func is_approved_for_all(owner: string, spender: string) -> bool;
+    mutate func mint(
+        token_id: string,
+        title: string,
+        name: string,
+        description: string,
+        payload: string
+    ) -> result<(), string>
+}

@@ -1,0 +1,249 @@
+Account:
+Id
+Name
+AccountNumber
+AccountSource
+AnnualRevenue
+BillingAddress
+BillingCity
+BillingCountry
+BillingPostalCode
+BillingState
+BillingStreet
+Description
+Fax
+Industry
+NumberOfEmployees
+Ownership
+Phone
+Rating
+Sic
+Site
+TickerSymbol
+Type
+Website
+ParentId → Account
+OwnerId → User / Queue
+CreatedById → User
+LastModifiedById → User
+
+#
+
+Contact:
+Id
+FirstName
+LastName
+Salutation
+Name
+Title
+Department
+Birthdate
+Email
+Phone
+MobilePhone
+HomePhone
+OtherPhone
+Fax
+AssistantName
+AssistantPhone
+MailingAddress
+MailingCity
+MailingCountry
+MailingPostalCode
+MailingState
+MailingStreet
+OtherAddress
+OtherCity
+OtherCountry
+OtherPostalCode
+OtherState
+OtherStreet
+Description
+LeadSource
+AccountId → Account
+ReportsToId → Contact
+OwnerId → User / Queue
+CreatedById → User
+LastModifiedById → User
+
+#
+
+Lead:
+Id
+FirstName
+LastName
+Salutation
+Name
+Title
+Company
+Email
+Phone
+MobilePhone
+Fax
+Street
+City
+State
+PostalCode
+Country
+AnnualRevenue
+Industry
+NumberOfEmployees
+Rating
+Status
+LeadSource
+Description
+IsConverted
+ConvertedDate
+ConvertedAccountId → Account
+ConvertedContactId → Contact
+ConvertedOpportunityId → Opportunity
+OwnerId → User / Queue
+CreatedById → User
+LastModifiedById → User
+
+#
+
+Opportunity:
+Id
+Name
+StageName
+CloseDate
+Amount
+Probability
+ExpectedRevenue
+Type
+LeadSource
+Description
+NextStep
+ForecastCategory
+ForecastCategoryName
+Fiscal
+FiscalQuarter
+FiscalYear
+IsClosed
+IsWon
+TotalOpportunityQuantity
+AccountId → Account
+CampaignId → Campaign
+OwnerId → User
+Pricebook2Id → Pricebook2
+CreatedById → User
+LastModifiedById → User
+
+#
+
+Case:
+Id
+CaseNumber
+Subject
+Description
+Status
+Priority
+Origin
+Reason
+Type
+IsClosed
+IsEscalated
+ClosedDate
+SuppliedName
+SuppliedEmail
+SuppliedPhone
+SuppliedCompany
+AccountId → Account
+ContactId → Contact
+ParentId → Case
+OwnerId → User / Queue
+AssetId → Asset
+CreatedById → User
+LastModifiedById → User
+
+#
+
+Task:
+Id
+Subject
+Status
+Priority
+Description
+ActivityDate
+CallDisposition
+CallDurationInSeconds
+CallObject
+CallType
+IsClosed
+IsHighPriority
+IsReminderSet
+ReminderDateTime
+AccountId → Account
+WhatId → Account / Opportunity / Campaign / Case / CustomObject
+WhoId → Contact / Lead
+OwnerId → User
+CreatedById → User
+LastModifiedById → User
+
+#
+
+Event:
+Id
+Subject
+Location
+Description
+StartDateTime
+EndDateTime
+ActivityDate
+ActivityDateTime
+DurationInMinutes
+IsAllDayEvent
+ShowAs
+IsPrivate
+IsDeleted
+IsRecurrence
+RecurrenceType
+RecurrenceStartDateTime
+RecurrenceEndDateOnly
+RecurrenceDayOfWeekMask
+RecurrenceDayOfMonth
+RecurrenceInstance
+RecurrenceInterval
+RecurrenceMonthOfYear
+RecurrenceTimeZoneSidKey
+RecurrenceActivityId → Event
+AccountId → Account
+WhatId → Account / Opportunity / Campaign / Case / CustomObject
+WhoId → Contact / Lead
+OwnerId → User
+CreatedById → User
+LastModifiedById → User
+
+#
+
+User:
+Id
+Username
+Alias
+Email
+Name
+FirstName
+LastName
+Title
+Department
+CompanyName
+Division
+Phone
+MobilePhone
+Fax
+Address
+City
+State
+PostalCode
+Country
+TimeZoneSidKey
+LocaleSidKey
+EmailEncodingKey
+LanguageLocaleKey
+ProfileId → Profile
+RoleId → UserRole
+ManagerId → User
+CreatedById → User
+LastModifiedById → User
+

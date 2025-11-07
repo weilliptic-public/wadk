@@ -1,0 +1,12 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "snowflake.wasm",
+  "widl": "snowflake.widl",
+  "config": "snowflake.yaml",
+  "context": "context.txt",
+  "organization": "Weilliptic",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/snowflake.svg",
+  "description": "Snowflake is a cloud-native data warehousing platform that enables scalable data storage, processing, and analytics with high performance and ease of use.",
+  "outcall": true
+}

@@ -1,0 +1,37 @@
+record AuroraDBConfig{
+    username: string,
+    password: string,
+    endpoint: string
+}
+
+interface Aurora{
+    config -> AuroraDBConfig;
+
+    // This runs a query provided in `query_str` in aurora on the database with name given by argument `db_name`.
+    query func run_query(
+        // the query string that you want to run
+        query_str: string, 
+        // the name of the database you want to run the query in
+        db_name: string
+    ) -> result<list<string>,string>;
+    // This executes the statement in aurora provided in argument `statement` potentially mutating the rows of the database with name given by argument `db_name`.
+    query func execute(
+        // the name of the database you want to run the query in
+        db_name: string,
+        // the statement you want to execute
+        statement: string
+    ) -> result<u64,string>;
+    // exports the data returned by running a query provided in `query_str` in aurora on the database with name given by argument `db_name`, returns a file descriptor to the uploaded file
+    query func run_query_and_export(
+        // the query string that you want to run
+        query_str: string, 
+        // the name of the database you want to run the query in
+        db_name: string,
+        // the filename to save to
+        filename: string
+    ) -> result<string,string>
+}
+
+impl mcp for Aurora {
+    tools -> [execute, run_query, run_query_and_export]
+}

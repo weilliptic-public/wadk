@@ -1,0 +1,39 @@
+[workspace]
+members = [
+    "arithmetic",
+    "aurora", 
+    "bigquery",
+    "confluence", 
+    "databricks",
+    "datadog",
+    "s3",
+    "salesforce",
+    "sap_hana",
+    "secured_aurora",
+    "servicenow",
+    "snowflake",
+    "sqs",
+    "stocks",
+    "twilio",
+]
+resolver = "2"
+
+[workspace.dependencies]
+weil_rs = { path = "../../adk/rust/weil_rs/" }
+weil_macros = { path = "../../adk/rust/weil_rs/weil_macros" }
+weil_contracts = { path = "../../adk/rust/weil_rs/weil_contracts" }
+
+anyhow = "1.0.98"
+base64 = "0.22"
+bincode = {version = "2.0.1", features = ["serde"]}
+chrono = { version = "0.4.41", default-features = false, features = ["alloc", "serde"]}
+getrandom = { version = "0.3", features = ["wasm_js"] }
+hex = "0.4.3"
+humantime = "2.2.0"
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = { version = "1.0.140", features = ["raw_value"] }
+sha3 = "0.10.8"
+thiserror = "2.0.12"
+urlencoding = "2.1"
+
+

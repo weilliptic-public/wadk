@@ -1,0 +1,83 @@
+record Config {
+    access_key_id: string,
+    secret_access_key: string,
+    region: string
+}
+
+interface AwsSQS {
+    config -> Config;
+    // Lists the queues in the AWS account. 
+    // Supports pagination via max_results and next_token parameters.
+    //
+    // Returns a tuple containing a list of queue names and an optional continuation token
+    // to be used in a subsequent call to retrieve the next set of results.
+    query func list_queues(
+        // Maximum number of queues to return (optional)
+        max_results: option<i32>,
+        // Continuation token for pagination (optional)
+        next_token: option<string>
+    ) -> result<tuple<list<string>,option<string>>, string>;
+
+    // Creates a queue with the specified name. If the name ends with ".fifo", a FIFO queue is created.
+    // Returns the URL of the created queue.
+    query func create_queue(
+        // Name of the queue to create
+        name: string
+    ) -> result<string, string>;
+
+    // Deletes the queue with the specified name.
+    // Returns an optional string indicating success.
+    query func delete_queue(
+        // Name of the queue to create
+        name: string
+    ) -> result<option<string>, string>;
+
+    // Sends a list of messages to the specified queue.
+    // The list may contain a single element.
+    // Returns a vector with the indexes of messages whose sending failed.
+    query func send_messages(
+        // Name of the queue to which to send the messages.
+        queue: string,
+        // The list of messages to send.
+        messages: list<string>
+    ) -> result<list<string>, string>;
+
+    // Receives messages from the specified queue.
+    // Returns a list of tuples of messages and their receipt handles (used for deletion).
+    //
+    // Options include: 
+    // - max_results: the maximum number of messages to return (default of 1 and up to 10).
+    query func receive_messages(
+        // Name of the queue from which to receive the messages.
+        queue: string,
+        // Maximum number of messages to return (optional)
+        max_results: option<i32>
+    ) -> result<list<tuple<string,string>>, string>;
+
+    // Receives messages from the specified queue and immediately tries to delete them.
+    // Returns a tuple with
+    // - a list of all messages received and 
+    // - a list of indexes of messages not deleted.
+    //
+    // Options include: 
+    // - max_results: the maximum number of messages to return (defaults of 1 and up to 10).
+    query func receive_and_delete_messages(
+        // Name of the queue from which to receive the messages.
+        queue: string,
+        // Maximum number of messages to return (optional)
+        max_results: option<i32>
+    ) -> result<tuple<list<string>,list<string>>, string>;
+
+    // Deletes a batch of messages with the specified receipt handles from the specified queue.
+    // Returns a vector with the indexes of messages whose deletion failed.
+    query func delete_messages (
+        // Name of the queue from which to delete the messages.
+        queue: string,
+        // The receipt handles of messages to delete.
+        handles: list<string>
+    ) -> result<list<string>, string>
+}
+
+impl mcp for AwsSQS{
+    tools -> [create_queue, delete_queue, list_queues, send_messages, receive_messages, receive_and_delete_messages, delete_messages]
+}

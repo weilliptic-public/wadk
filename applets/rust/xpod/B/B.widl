@@ -1,0 +1,5 @@
+interface B {
+    query func generate_greetings_1(name: string) -> string;
+    query func generate_greetings_2(name: string) -> string;
+    mutate func generate_greetings_3(name: string) -> string
+}

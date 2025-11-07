@@ -1,0 +1,7 @@
+@mcp
+interface Arithmetic {
+    // adds two numbers
+    query func add(x: int, y: int) -> int;
+    // multiply two numbers
+    query func multiply(x: int, y: int) -> int
+}

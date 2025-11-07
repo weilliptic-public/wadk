@@ -1,0 +1,644 @@
+record ServicenowConfig{
+    base_url: string,
+    username: string,
+    password: string
+}
+
+record Incident{
+    sys_id: option<string>,
+    number: option<string>,
+    short_description: option<string>,
+    description: option<string>,
+    priority: option<string>,
+    state: option<string>
+}
+
+record Comment{
+    sys_id: option<string>,
+    element: option<string>,
+    value: option<string>,
+    sys_created_on: option<string>
+}
+
+record CatalogItem{
+    sys_id: option<string>,
+    name: option<string>,
+    short_description: option<string>,
+    description: option<string>,
+    category: option<string>,
+    price: option<string>,
+    active: option<bool>
+}
+
+record CatalogCategory{
+    sys_id: option<string>,
+    title: option<string>,
+    description: option<string>,
+    parent: option<string>,
+    active: option<bool>
+}
+
+record CatalogVariable{
+    sys_id: option<string>,
+    name: option<string>,
+    question_text: option<string>,
+    var_type: option<string>,
+    mandatory: option<bool>,
+    catalog_item: option<string>
+}
+
+record ChangeRequest{
+    sys_id: option<string>,
+    number: option<string>,
+    short_description: option<string>,
+    description: option<string>,
+    priority: option<string>,
+    state: option<string>,
+    risk: option<string>,
+    impact: option<string>,
+    requested_by: option<string>,
+    requested_date: option<string>
+}
+
+record ChangeTask{
+    sys_id: option<string>,
+    number: option<string>,
+    short_description: option<string>,
+    description: option<string>,
+    state: option<string>,
+    assigned_to: option<string>,
+    change_request: option<string>
+}
+
+record Story{
+    sys_id: option<string>,
+    number: option<string>,
+    short_description: option<string>,
+    description: option<string>,
+    priority: option<string>,
+    story_points: option<string>,
+    state: option<string>,
+    epic: option<string>
+}
+
+record Epic{
+    sys_id: option<string>,
+    number: option<string>,
+    short_description: option<string>,
+    description: option<string>,
+    priority: option<string>,
+    state: option<string>
+}
+
+record ScrumTask{
+    sys_id: option<string>,
+    number: option<string>,
+    short_description: option<string>,
+    description: option<string>,
+    state: option<string>,
+    assigned_to: option<string>,
+    story: option<string>
+}
+
+record Project{
+    sys_id: option<string>,
+    name: option<string>,
+    short_description: option<string>,
+    state: option<string>,
+    number: option<string>,
+    status: option<string>,
+    goal: option<string>
+}
+
+record Workflow{
+    sys_id: option<string>,
+    name: option<string>,
+    description: option<string>,
+    table: option<string>,
+    active: option<bool>
+}
+
+record ScriptInclude{
+    sys_id: option<string>,
+    name: option<string>,
+    description: option<string>,
+    script: option<string>,
+    api_name: option<string>,
+    active: option<bool>
+}
+
+record Changeset{
+    sys_id: option<string>,
+    name: option<string>,
+    description: option<string>,
+    state: option<string>,
+    created_by: option<string>,
+    created_on: option<string>
+}
+
+record KnowledgeBase{
+    sys_id: option<string>,
+    title: option<string>,
+    description: option<string>,
+    active: option<bool>
+}
+
+record KnowledgeArticle{
+    sys_id: option<string>,
+    number: option<string>,
+    short_description: option<string>,
+    text: option<string>,
+    knowledge_base: option<string>,
+    category: option<string>,
+    workflow_state: option<string>
+}
+
+record User{
+    sys_id: option<string>,
+    user_name: option<string>,
+    first_name: option<string>,
+    last_name: option<string>,
+    email: option<string>,
+    department: option<string>,
+    active: option<bool>
+}
+
+record Group{
+    sys_id: option<string>,
+    name: option<string>,
+    description: option<string>,
+    manager: option<string>,
+    active: option<bool>
+}
+
+record UIPolicy{
+    sys_id: option<string>,
+    name: option<string>,
+    description: option<string>,
+    table: option<string>,
+    catalog_item: option<string>,
+    active: option<bool>
+}
+
+record UIPolicyAction{
+    sys_id: option<string>,
+    name: option<string>,
+    description: option<string>,
+    field_name: option<string>,
+    action: option<string>,
+    ui_policy: option<string>
+}
+
+@mcp
+interface Servicenow{
+    config -> ServicenowConfig;
+
+    // create an incident on servicenow
+    query func create_incident(       
+        // a short description for the incident
+        short_description: string,
+        // a description for the incident
+        description: string,
+        // priority for the incident
+        priority: string) -> result<Incident, string>;
+    
+    // get an incident from servicenow
+    query func get_incident(  
+        // id of the incident     
+        sys_id: string) -> result<Incident, string>;
+    
+    // delete an incident on servicenow
+    query func delete_incident(       
+        // id of the incident     
+        sys_id: string) -> result<(), string>;
+    
+    // query incidents on servicenow
+    query func query_incidents(       
+        // the query to run
+        query_str: string,
+        // the limit on the number of results 
+        limit: u32) -> result<list<Incident>, string>;
+    
+    // add a comment to an incident
+    query func add_comment(
+        // system id of the incident
+        incident_sys_id: string,
+        // comment text to add
+        comment: string) -> result<Comment, string>;
+    
+    // resolve an incident
+    query func resolve_incident(
+        // system id of the incident
+        sys_id: string,
+        // resolution notes
+        resolution_notes: string) -> result<Incident, string>;
+    
+    // list incidents from servicenow
+    query func list_incidents(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<Incident>, string>;
+
+    // list service catalog items
+    query func list_catalog_items(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<CatalogItem>, string>;
+    
+    // get a specific catalog item
+    query func get_catalog_item(
+        // system id of the catalog item
+        sys_id: string) -> result<CatalogItem, string>;
+    
+    // list catalog categories
+    query func list_catalog_categories(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<CatalogCategory>, string>;
+    
+    // create a new catalog category
+    query func create_catalog_category(
+        // category title
+        title: string,
+        // category description (optional)
+        description: option<string>,
+        // parent category id (optional)
+        parent_category_id: option<string>) -> result<CatalogCategory, string>;
+    
+    // move catalog items between categories
+    query func move_catalog_items(
+        // array of catalog item system ids
+        item_sys_ids: list<string>,
+        // target category system id
+        target_category_sys_id: string) -> result<(), string>;
+    
+    // create a new variable for a catalog item
+    query func create_catalog_item_variable(
+        // catalog item system id
+        catalog_item_sys_id: string,
+        // variable name
+        name: string,
+        // question text for the variable
+        question_text: string,
+        // variable type
+        var_type: string,
+        // whether the variable is mandatory
+        mandatory: bool) -> result<CatalogVariable, string>;
+    
+    // list variables for a catalog item
+    query func list_catalog_item_variables(
+        // catalog item system id
+        catalog_item_sys_id: string) -> result<list<CatalogVariable>, string>;
+    
+    // list service catalogs
+    query func list_catalogs(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<string>, string>;
+    
+    // get optimization recommendations for catalog items
+    query func get_optimization_recommendations(
+        // catalog item system id (optional)
+        catalog_item_id: option<string>) -> result<list<string>, string>;
+
+    // create a new change request
+    query func create_change_request(
+        // short description
+        short_description: string,
+        // description
+        description: string,
+        // priority
+        priority: string,
+        // risk level (optional)
+        risk: option<string>,
+        // impact level (optional)
+        impact: option<string>) -> result<ChangeRequest, string>;
+    
+    // list change requests
+    query func list_change_requests(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<ChangeRequest>, string>;
+    
+    // get detailed information about a change request
+    query func get_change_request_details(
+        // system id of the change request
+        sys_id: string) -> result<ChangeRequest, string>;
+    
+    // add a task to a change request
+    query func add_change_task(
+        // change request system id
+        change_request_sys_id: string,
+        // task short description
+        short_description: string,
+        // task description
+        description: string,
+        // assigned user (optional)
+        assigned_to: option<string>) -> result<ChangeTask, string>;
+    
+    // submit a change request for approval
+    query func submit_change_for_approval(
+        // system id of the change request
+        sys_id: string) -> result<ChangeRequest, string>;
+    
+    // approve a change request
+    query func approve_change(
+        // system id of the change request
+        sys_id: string,
+        // approval notes (optional)
+        notes: option<string>) -> result<ChangeRequest, string>;
+    
+    // reject a change request
+    query func reject_change(
+        // system id of the change request
+        sys_id: string,
+        // rejection notes
+        notes: string) -> result<ChangeRequest, string>;
+
+    // create a new user story
+    query func create_story(
+        // short description
+        short_description: string,
+        // description
+        description: string,
+        // priority (optional)
+        priority: option<string>,
+        // story points (optional)
+        story_points: option<string>,
+        // epic system id (optional)
+        epic_sys_id: option<string>) -> result<Story, string>;
+    
+    // list user stories
+    query func list_stories(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<Story>, string>;
+    
+    // delete a dependency between stories
+    query func delete_story_dependency(
+        // dependency system id
+        dependency_id: string) -> result<(), string>;
+
+    // create a new epic
+    query func create_epic(
+        // short description
+        short_description: string,
+        // description
+        description: string,
+        // priority (optional)
+        priority: option<string>) -> result<Epic, string>;
+    
+    // list epics
+    query func list_epics(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<Epic>, string>;
+
+
+    // create a new scrum task
+    query func create_scrum_task(
+        // short description
+        short_description: string,
+        // description
+        description: string,
+        // story system id (optional)
+        story_id: option<string>,
+        // assigned user (optional)
+        assigned_to: option<string>) -> result<ScrumTask, string>;
+    
+    // list scrum tasks
+    query func list_scrum_tasks(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<ScrumTask>, string>;
+
+    // create a new project
+    query func create_project(
+        // project name
+        name: string,
+        // short description
+        short_description: string,
+        // goal (optional)
+        goal: option<string>) -> result<Project, string>;
+    
+    // list projects
+    query func list_projects(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<Project>, string>;
+
+    // list workflows
+    query func list_workflows(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<Workflow>, string>;
+    
+    // get a specific workflow
+    query func get_workflow(
+        // system id of the workflow
+        sys_id: string) -> result<Workflow, string>;
+    
+    // create a new workflow
+    query func create_workflow(
+        // workflow name
+        name: string,
+        // description (optional)
+        description: option<string>,
+        // table name
+        table: string) -> result<Workflow, string>;
+    
+    // delete a workflow
+    query func delete_workflow(
+        // system id of the workflow
+        sys_id: string) -> result<(), string>;
+
+    // list script includes
+    query func list_script_includes(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<ScriptInclude>, string>;
+    
+    // get a specific script include
+    query func get_script_include(
+        // system id of the script include
+        sys_id: string) -> result<ScriptInclude, string>;
+    
+    // create a new script include
+    query func create_script_include(
+        // script include name
+        name: string,
+        // description (optional)
+        description: option<string>,
+        // script content
+        script: string,
+        // api name (optional)
+        api_name: option<string>) -> result<ScriptInclude, string>;
+    
+    // delete a script include
+    query func delete_script_include(
+        // system id of the script include
+        sys_id: string) -> result<(), string>;
+
+    // list changesets
+    query func list_changesets(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<Changeset>, string>;
+    
+    // get detailed information about a changeset
+    query func get_changeset_details(
+        // system id of the changeset
+        sys_id: string) -> result<Changeset, string>;
+    
+    // create a new changeset
+    query func create_changeset(
+        // changeset name
+        name: string,
+        // description (optional)
+        description: option<string>) -> result<Changeset, string>;
+    
+    // commit a changeset
+    query func commit_changeset(
+        // system id of the changeset
+        sys_id: string) -> result<Changeset, string>;
+    
+    // publish a changeset
+    query func publish_changeset(
+        // system id of the changeset
+        sys_id: string) -> result<Changeset, string>;
+
+    // Knowledge Base Management
+    // create a new knowledge base
+    query func create_knowledge_base(
+        // knowledge base title
+        title: string,
+        // description (optional)
+        description: option<string>) -> result<KnowledgeBase, string>;
+    
+    // list knowledge bases
+    query func list_knowledge_bases(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<KnowledgeBase>, string>;
+    
+    // create a new knowledge article
+    query func create_article(
+        // short description
+        short_description: string,
+        // article content
+        text: string,
+        // knowledge base system id
+        knowledge_base_sys_id: string,
+        // category system id (optional)
+        category_sys_id: option<string>) -> result<KnowledgeArticle, string>;
+    
+    // publish a knowledge article
+    query func publish_article(
+        // system id of the article
+        sys_id: string) -> result<KnowledgeArticle, string>;
+    
+    // list knowledge articles
+    query func list_articles(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<KnowledgeArticle>, string>;
+    
+    // get a specific knowledge article
+    query func get_article(
+        // system id of the article
+        sys_id: string) -> result<KnowledgeArticle, string>;
+
+    // create a new user
+    query func create_user(
+        // username
+        user_name: string,
+        // first name
+        first_name: string,
+        // last name
+        last_name: string,
+        // email address
+        email: string,
+        // department (optional)
+        department: option<string>) -> result<User, string>;
+    
+    // get a specific user
+    query func get_user(
+        // user id, username, or email
+        identifier: string) -> result<User, string>;
+    
+    // list users
+    query func list_users(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<User>, string>;
+    
+    // create a new group
+    query func create_group(
+        // group name
+        name: string,
+        // description (optional)
+        description: option<string>,
+        // group manager (optional)
+        manager: option<string>) -> result<Group, string>;
+    
+    // add members to a group
+    query func add_group_members(
+        // group system id
+        group_id: string,
+        // array of user system ids
+        user_ids: list<string>) -> result<(), string>;
+    
+    // remove members from a group
+    query func remove_group_members(
+        // group system id
+        group_id: string,
+        // array of user system ids
+        user_ids: list<string>) -> result<(), string>;
+    
+    // list groups
+    query func list_groups(
+        // query string (optional)
+        query_str: option<string>,
+        // limit on number of results (optional)
+        limit: option<u32>) -> result<list<Group>, string>;
+
+    // UI Policy Management
+    // create a ui policy
+    query func create_ui_policy(
+        // policy name
+        name: string,
+        // description (optional)
+        description: option<string>,
+        // table name
+        table: string,
+        // catalog item system id (optional)
+        catalog_item_sys_id: option<string>) -> result<UIPolicy, string>;
+    
+    // create a ui policy action
+    query func create_ui_policy_action(
+        // ui policy system id
+        ui_policy_sys_id: string,
+        // action name
+        name: string,
+        // description (optional)
+        description: option<string>,
+        // field name
+        field_name: string,
+        // action type
+        action: string) -> result<UIPolicyAction, string>
+}

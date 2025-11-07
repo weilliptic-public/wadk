@@ -1,0 +1,598 @@
+record ConfluenceConfig {
+    confluence_url: string,
+    email: string,
+    api_key: string
+}
+
+record SpaceListResponse {
+    total_spaces: uint,
+    space_keys: list<string>,
+    spaces: list<string>
+}
+
+record SpaceSummary {
+    key: string,
+    name: string,
+    space_type: string,
+    status: option<string>
+}
+
+
+record ContentDetails {
+    id: string,
+    title: string,
+    status: string,
+    space_id: string,
+    parent_id: option<string>,
+    version: string,
+    body: option<string>,
+    owner_id: string,
+    author_id: string,
+    created_at: string,
+    parent_type: string
+}
+
+record CreatePageResponse {
+    page_id: string,
+    title: string,
+    status: string,
+    space_id: string,
+    created_at: option<string>,
+    parent_type: option<string>
+}
+
+record CreateBlogPostResponse {
+    blog_post_id: string,
+    title: string,
+    status: string,
+    space_id: string,
+    created_at: option<string>,
+    parent_type: option<string>,
+    body: string
+}
+
+record DeleteResult {
+    success: bool,
+    message: string
+}
+
+// was: PageVersion
+record PageVersion {
+    number: uint,
+    message: option<string>
+}
+
+// was: PageBody
+record PageBody {
+    // was: StorageBody
+    storage: string
+}
+
+// was: StorageBody
+ record StorageBody {
+    representation: string,
+    value: string
+}
+
+// TODO: minimizing
+record BlogPostDetails {
+    id: string,
+    title: string,
+    status: string,
+    space_id: string,
+    // was: PageVersion
+    version: string,
+    // was: option<PageBody>
+    body: option<string>,
+    created_at: option<string>,
+    author_id: option<string>
+}
+
+record BlogPostHierarchyItem {
+    id: string,
+    title: string,
+    status: string,
+    space_id: string,
+    created_at: option<string>,
+    author_id: option<string>
+}
+
+record BlogPostHierarchyResponse {
+    results: list<BlogPostHierarchyItem>,
+    total_count: uint
+}
+
+record Label {
+    id: string,
+    name: string,
+    prefix: string
+}
+
+// was: ListResponse<T>
+record ListResponse<T> {
+    results: list<T>
+}
+
+record CommentDetails {
+    id: string,
+    status: string,
+    page_id: option<string>,
+    blog_post_id: option<string>,
+    parent_comment_id: option<string>,
+    version: PageVersion,
+    // was: option<PageBody>
+    body: option<string>
+}
+
+record SpacePermission {
+    id: string,
+    // was: PermissionPrincipal
+    principal: string,
+    // was: PermissionOperation
+    operation: string
+}
+
+// was: PermissionPrincipal
+record PermissionPrincipal {
+    principal_type: string,
+    id: string
+}
+
+// was: PermissionOperation
+record PermissionOperation {
+    key: string,
+    target_type: string
+}
+
+record PageHierarchyItem {
+    id: string,
+    title: string,
+    status: string,
+    parent_id: option<string>,
+    space_id: option<string>,
+    depth: option<uint>
+}
+
+record PageHierarchyResponse {
+    results: list<PageHierarchyItem>,
+    total_count: uint
+}
+
+record PageAncestor {
+    id: string
+}
+
+@mcp
+interface Confluence {
+    config -> ConfluenceConfig;
+
+    // list spaces in confluence
+    query func list_spaces() -> result<list<SpaceSummary>, string>;
+
+    // create a page in confluence, prividing the space id. The content should be in Confluence Native Markup Language.
+    query func create_page_by_space_id(
+        // id of the space, integer
+        space_id: u64, 
+        // 
+        title: string, 
+        // 
+        content: string
+    ) -> result<CreatePageResponse, string>;
+
+    // create page with table structured input as content, with a specified parent page
+    query func create_page_with_table_by_space_name_with_parent_page(
+        // space name
+        space_name: string, 
+        // new page's title
+        title: string, 
+        // name of the parent page
+        parent_page_name: string, 
+        // headers or column names of the table. format : [header1, header2, header3, ...] , i.e. a serialized version of a list. Use double quotes, not single quotes.
+        headers: string, 
+        // Complete row data as a single JSON string. Pass the entire 2D array structure as one stringified JSON value. Example value: \"[[\\\"row11\\\", \\\"row12\\\"], [\\\"row21\\\", \\\"row22\\\"]]\" (note this is ONE string, not an array). Do not pass multiple array elements - serialize everything into a single string. Use double quotes, not single quotes.
+        rows: string 
+    ) -> result<CreatePageResponse, string>;
+
+    // Reads a file from the encoded filedescriptor (like ey9320... ), and then create page with table structured input as content, with a specified parent page. 
+    query func import_file_and_create_page_with_table_with_parent_page(
+        space_name: string, 
+        title: string, 
+        parent_page_name: string, 
+         // The base64 encoded file descriptor to the file to read and upload
+        file_descriptor: string
+    ) -> result<CreatePageResponse, string>;
+    
+    // Reads a file from the encoded filedescriptor (like ey9320... ), and then create page with table structured input as content, without a specified parent page. 
+    query func import_file_and_create_page_with_table_without_parent_page(
+        space_name: string, 
+        title: string, 
+         // The base64 encoded file descriptor to the file to read and upload
+        file_descriptor: string
+    ) -> result<CreatePageResponse, string>;
+
+    // create page with table structured input as content, without a specified parent page
+    query func create_page_with_table_by_space_name_without_parent_page(
+        space_name: string, 
+        // new page's title
+        title: string, 
+        // headers or column names of the table. format : [header1, header2, header3, ...] , i.e. a serialized version of a list. Use double quotes, not single quotes.
+        headers: string, 
+        // Complete row data as a single JSON string. Pass the entire 2D array structure as one stringified JSON value. Example value: \"[[\\\"row11\\\", \\\"row12\\\"], [\\\"row21\\\", \\\"row22\\\"]]\" (note this is ONE string, not an array). Do not pass multiple array elements - serialize everything into a single string. Use double quotes, not single quotes.
+        rows: string 
+    ) -> result<CreatePageResponse, string>;
+
+    // append content to page , in confluence. The content should be in Confluence Native Markup Language.
+    query func append_to_page_by_id(
+        page_id: u64,
+        content: string
+    ) -> result<ContentDetails, string>;
+
+    // Reads a file from the encoded filedescriptor (like ey9320... ) and appends content in table structured format, to a given page. 
+    query func import_file_and_append_table_to_page_by_page_name(
+         // The base64 encoded file descriptor to the file to read and upload
+        file_descriptor: string, 
+        page_name: string, 
+        space_name: string
+    ) -> result<ContentDetails, string>;
+
+    // append content to page , in confluence. The content should be in Confluence Native Markup Language.
+    query func append_to_page_by_page_name(
+        page_name: string,
+        space_name: string,
+        content: string
+    ) -> result<ContentDetails, string>;
+
+    // append content in table structured format , to a given page. 
+    query func append_table_to_page_by_page_name(
+        page_name: string,
+        space_name: string,
+        // headers or column names of the table. format : [header1, header2, header3, ...] , i.e. a serialized version of a list. Use double quotes, not single quotes.
+        headers: string, 
+        // Complete row data as a single JSON string. Pass the entire 2D array structure as one stringified JSON value. Example value: \"[[\\\"row11\\\", \\\"row12\\\"], [\\\"row21\\\", \\\"row22\\\"]]\" (note this is ONE string, not an array). Do not pass multiple array elements - serialize everything into a single string. Use double quotes, not single quotes.
+        rows: string 
+    ) -> result<ContentDetails, string>;
+
+    // create a page in confluence, providing the space name. The content should be in Confluence Native Markup Language.  
+    query func create_page_by_space_name(
+        // name of the space
+        space_name: string, 
+        // 
+        title: string, 
+        // 
+        content: string
+    ) -> result<CreatePageResponse, string>;
+
+    // create a page in confluence, prividing the space id and parent page id. The content should be in Confluence Native Markup Language.
+    query func create_page_by_space_id_with_parent_page_id(
+        // id of the space, integer
+        space_id: u64, 
+        // 
+        title: string, 
+        // id of the parent page
+        parent_id: u64,
+        // 
+        content: string
+    ) -> result<CreatePageResponse, string>;
+
+    // create a page in confluence, providing the space name and parent page name. The content should be in Confluence Native Markup Language.
+    query func create_page_by_space_name_with_parent_page_name(
+        // name of the space
+        space_name: string, 
+        // 
+        title: string, 
+        // id of the parent page
+        parent_page_name: string,  
+        // 
+        content: string
+    ) -> result<CreatePageResponse, string>;
+
+    // get page information by id
+    query func get_page_by_id(
+        // id of the page. get it from the get_pages_in_space or create_page function. this is an integer
+        page_id: u64
+    ) -> result<ContentDetails, string>;
+        
+    // get page information by page title 
+    query func get_page_by_name(
+        // name of the page
+        page_name: string,
+        // name of the space
+        space_name: string
+    ) -> result<ContentDetails, string>;
+
+    // update an existing page by page id. The content should be in Confluence Native Markup Language.
+    query func update_page_by_id(
+        // id of the page. passed as integer
+        page_id: u64, 
+        // id of the space. passed as integer
+        space_id: option<u64>, 
+        // 
+        new_title: string, 
+        // 
+        new_content: string 
+    ) -> result<ContentDetails, string>;
+
+    // updata an existing page by page name. The content should be in Confluence Native Markup Language.
+    query func update_page_by_name(
+        // name of the page.
+        page_name: string, 
+        // name of the space
+        space_name: string,
+        // 
+        new_title: string, 
+        // 
+        new_content: string 
+    ) -> result<ContentDetails, string>;
+
+    // delete a page by id
+    query func delete_page(
+        // id of the page. get it from the get_pages_in_space or create_page function, passed as integer
+        page_id: u64
+    ) -> result<DeleteResult, string>;
+
+    // create a blog post in a space by providing the space_id. The content should be in Confluence Native Markup Language.
+    query func create_blog_post_by_space_id(
+        // id of the space, passed as integer
+        space_id: u64, 
+        // 
+        title: string, 
+        // 
+        content: string
+    ) -> result<CreateBlogPostResponse, string>;
+
+    // create a blog post in a space , providing the space_name. The content should be in Confluence Native Markup Language.
+    query func create_blog_post_by_space_name(
+        // name of the space.
+        space_name: string, 
+        // 
+        title: string, 
+        // 
+        content: string
+    ) -> result<CreateBlogPostResponse, string>;
+
+
+    // get blog post information by id. 
+    query func get_blog_post_by_id(
+        // id of the blog post, passed as integer
+        blog_post_id: u64
+    ) -> result<ContentDetails, string>;
+
+    // get blog post information by name 
+    query func get_blog_post_by_name(
+        // name of the blog post
+        blog_post_name: string ,
+        space_name: string
+    ) -> result<ContentDetails, string>;
+
+    // update an existing blog post by id. The content should be in Confluence Native Markup Language.
+    query func update_blog_post_by_id(
+        // id of the blog post, passed as integer
+        blog_post_id: u64, 
+        // id of the space, passed as integer
+        space_id: option<u64>, 
+        // 
+        new_title: string, 
+        // 
+        new_content: string, 
+        // 
+        new_version_number: option<uint>
+    ) -> result<BlogPostDetails, string>;
+    
+    // update an existing blog post by name. The content should be in Confluence Native Markup Language. 
+    query func update_blog_post_by_name(
+        // name of the blog post
+        blog_post_name: string, 
+        // name of the space
+        space_name: string, 
+        // 
+        new_title: string, 
+        // 
+        new_content: string, 
+        // 
+        new_version_number: option<uint>
+    ) -> result<BlogPostDetails, string>;
+
+    // delete a blog post by id
+    query func delete_blog_post(
+        // id of the blog post. get it from the list_blog_posts_in_space or create_blog_post function, passed as integer
+        blog_post_id: u64 
+    ) -> result<DeleteResult, string>;
+
+    // list all blog posts in a space, with space_id passed in argument. 
+    query func list_blog_posts_in_space_by_id(
+        // space id, passed as integer
+        space_id: u64
+    ) -> result<BlogPostHierarchyResponse, string>;
+
+    // list all blog posts in a space, with space_name passed in argument
+    query func list_blog_posts_in_space_by_name(
+        // 
+        space_name: string
+    ) -> result<BlogPostHierarchyResponse, string>;
+
+        // list all labels on a page, providing page id
+    query func list_page_labels_by_id(
+        // page id , passed as integer
+        page_id: u64
+    ) -> result<list<Label>, string>;
+
+    // list all labels on a page, providing page name
+    query func list_page_labels_by_name(
+        // 
+       page_name: string,
+       space_name: string
+    ) -> result<list<Label>, string>;
+
+    // list all labels in a space , providing space id
+    query func list_space_labels_by_id(
+        // space id , passed as integer
+        space_id: u64
+    ) -> result<list<Label>, string>;
+
+    // list all labels in a space , providing space name
+    query func list_space_labels_by_name(
+        // 
+        space_name: string 
+    ) -> result<list<Label>, string>;
+
+    // list all labels on a blog post, providing blog post id
+    query func list_blog_post_labels_by_id(
+        // blog post id , passed as integer
+        blog_post_id: u64
+    ) -> result<list<Label>, string>;
+
+    // list all labels on a blog post, providing blog post name
+    query func list_blog_post_labels_by_name(
+        // 
+        blog_post_name: string,
+        space_name: string
+    ) -> result<list<Label>, string>;
+
+    // create a footer comment on a page, by providing the page id
+    query func create_footer_comment_on_page_by_page_id(
+        // page id, passed as integer value
+        page_id: string, 
+        // 
+        content: string
+    ) -> result<CommentDetails, string>;
+
+    // create a footer comment on a page, by providing the page name 
+    query func create_footer_comment_on_page_by_page_name(
+        page_name: string,
+        space_name: string,
+        content: string
+    ) -> result<CommentDetails, string>;
+
+    // create a footer comment on a blog post, by providing the blog post id
+    query func create_footer_comment_on_blog_post_by_id(
+        // blog post id, passed as integer
+        blog_post_id: u64, 
+        // 
+        content: string
+    ) -> result<CommentDetails, string>;
+
+    // create a footer comment on a blog post, by providing the blog post name 
+    query func create_footer_comment_on_blog_post_by_name(
+        // 
+        blog_post_name: string, 
+        //
+        space_name: string,
+        // 
+        content: string
+    ) -> result<CommentDetails, string>;
+
+    // reply to a footer comment
+    query func reply_footer_comment(
+        // parent commit id, paseed as integer
+        parent_comment_id: u64, 
+        // 
+        content: string
+    ) -> result<CommentDetails, string>;
+
+    // get a footer comment by id
+    query func get_footer_comment_by_id(
+        // comment id, passed as integer
+        comment_id: u64
+    ) -> result<CommentDetails, string>;
+
+    // list direct footer comments on a page, providing the page id
+    query func list_page_direct_footer_comments_by_id(
+        // page id, passed as integer
+        page_id: u64
+    ) -> result<list<CommentDetails>, string>;
+
+    // list direct footer comments on a page, providing the page name 
+    query func list_page_direct_footer_comments_by_name(
+        // 
+        page_name: string,
+        space_name: string
+    ) -> result<list<CommentDetails>, string>;
+
+
+    // update a comment
+    query func update_comment(
+        // comment id, passed as integer
+        comment_id: u64, 
+        // 
+        new_content: string
+    ) -> result<CommentDetails, string>;
+
+    // delete a comment by id
+    query func delete_comment(
+        // comment id, passed as integer
+        comment_id: u64
+    ) -> result<DeleteResult, string>;
+
+    // list direct footer comments on a blog post, providing the blog post id
+    query func list_blog_post_direct_footer_comments_by_id(
+        // blog post id, passed as integer
+        blog_post_id: u64
+    ) -> result<list<CommentDetails>, string>;
+
+    // list direct footer comments on a blog post, providing the blog post name
+    query func list_blog_post_direct_footer_comments_by_name(
+        // 
+        blog_post_name: string,
+        //
+        space_name: string
+    ) -> result<list<CommentDetails>, string>;
+
+    // get children of a comment, providing the comment id
+    query func get_comment_children(
+        //
+        comment_id: u64
+    ) -> result<list<CommentDetails>, string>;
+
+    // list all permissions for a space
+    query func list_space_permissions(
+        // space id, passed as integer
+        space_id: u64
+    ) -> result<list<SpacePermission>, string>;
+
+    // get the direct children of a page
+    query func get_page_children(
+        // page id , passed as integer
+        page_id: u64
+    ) -> result<PageHierarchyResponse, string>;
+
+    // get all descendants of a page, providing the page id
+    query func get_page_descendants_by_page_id(
+        // page id, passed as integer
+        page_id: u64
+    ) -> result<PageHierarchyResponse, string>;
+
+    // get all ancestors of a page, providing the page id
+    query func get_page_ancestors_by_page_id(
+        // page id , passed as integer
+        page_id: u64
+    ) -> result<list<PageAncestor>, string>;
+
+    // get all descendants of a page, providing the page name
+    query func get_page_descendants_by_page_name(
+        // 
+        page_name: string,
+        //
+        space_name: string
+    ) -> result<PageHierarchyResponse, string>;
+
+    // get all ancestors of a page, providing the page name
+    query func get_page_ancestors_by_page_name(
+        // 
+        page_name: string,
+        //
+        space_name: string
+    ) -> result<list<PageAncestor>, string>;
+
+    // get all pages in a space with the given id
+    query func get_pages_in_space_by_id(
+        // space id, passed as integer
+        space_id: u64
+    ) -> result<list<ContentDetails>, string>;
+
+    // get all pages in a space with the given space name
+    query func get_pages_in_space_by_name(
+        // 
+        space_name: string
+    ) -> result<list<ContentDetails>, string>
+
+}

@@ -1,0 +1,7 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "asciiart.wasm",
+  "widl": "asciiart.widl",
+  "organization": "Weilliptic",
+  "author": "Weilliptic"
+}

@@ -1,0 +1,67 @@
+record BigQueryConfig {
+    project_id: string,
+    access_token: string,
+    refresh_token: string,
+    client_id: string,
+    client_secret: string
+}
+
+record Dataset {
+    dataset_id: string,
+    project_id: string,
+    friendly_name: option<string>,
+    description: option<string>
+}
+
+record Table {
+    table_id: string,
+    dataset_id: string,
+    project_id: string,
+    friendly_name: option<string>,
+    description: option<string>
+}
+
+@mcp
+interface BigQuery {
+    config -> BigQueryConfig;
+    // Create a new dataset in bigquery
+    query func create_dataset(
+        //the id of the dataset
+        dataset_id: string,
+        // the friendly name for this dataset you want to give
+        friendly_name: option<string>,
+        // the description of the dataset you want to give
+        description: option<string>
+    ) -> result<(), string>;
+    // Read/get dataset details in bigquery
+    query func get_dataset(
+        //the id of the dataset you want to read
+        dataset_id: string
+    ) -> result<Dataset, string>;
+    // Update dataset metadata  in bigquery
+    query func update_dataset(
+        //the id of the dataset you want to update
+        dataset_id: string,
+        // the new `friendly name` you want to give this dataset
+        friendly_name: option<string>,
+        // the new `description` you want to give this dataset
+        description: option<string>
+    ) -> result<(), string>;
+    // Delete a dataset  in bigquery
+    query func delete_dataset(
+        //the id of the dataset you want to delete
+        dataset_id: string,
+        //whether you want to delete the contents also
+        delete_contents: bool
+    ) -> result<(), string>;
+    // list all the tables in the dataset  in bigquery
+    query func list_tables(
+        //the id of the dataset you want to list tables of
+        dataset_id: string
+    ) -> result<list<Table>, string>;
+    // executes a sql query given by the parameter `sql` on the bigQuery database
+    query func execute_query(
+        // the raw sql query you want to execute
+        sql: string
+    ) -> result<string, string>
+}

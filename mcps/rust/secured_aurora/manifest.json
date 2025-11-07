@@ -1,0 +1,11 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "secured_aurora.wasm",
+  "widl": "secured_aurora.widl",
+  "config": "config.yaml",
+  "context": "context.txt",
+  "organization": "Engineering",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/aurora.svg",
+  "description": "Amazon Aurora is a fully managed relational database service from AWS that's compatible with MySQL and PostgreSQL, designed for high performance, scalability, and availability"
+}

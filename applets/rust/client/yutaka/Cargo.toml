@@ -1,0 +1,18 @@
+[package]
+name = "yutaka"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+weil_rs        = { path = "../../../../adk/rust/weil_rs/" }
+weil_contracts = { path = "../../../../adk/rust/weil_rs/weil_contracts" }
+weil_wallet    = { path = "../../../../adk/rust/weil_rs/weil_wallet" }
+
+anyhow = "1.0.98"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+tokio = { version = "1.40.0", features = ["full"] }
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = { version = "1.0.140", features = ["raw_value"] }
+thiserror = "2.0.12"

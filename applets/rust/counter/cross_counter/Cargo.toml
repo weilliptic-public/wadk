@@ -1,0 +1,17 @@
+[package]
+name = "cross_counter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.97"
+serde = "1.0.219"
+serde_json = "1.0.140"
+
+weil_rs = { path = "../../../../adk/rust/weil_rs/" }
+weil_macros = { path = "../../../../adk/rust/weil_rs/weil_macros" }
+weil_contracts = { path = "../../../../adk/rust/weil_rs/weil_contracts" }
+
+[lib]
+crate-type = ["cdylib"]
+

@@ -1,0 +1,5 @@
+package constants
+
+const UNREACHABLE = "unreachable!"
+const WASM_MEMORY_SEGMENT_LENGTH_BYTES_SIZE = 4
+const WASM_MEMORY_SEGMENT_ERROR_BYTES_SIZE = 1

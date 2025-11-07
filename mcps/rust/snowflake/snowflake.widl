@@ -1,0 +1,94 @@
+record SnowflakeConfig {
+    account_identifier: string,
+    pat_token: string,
+    role: string
+}
+
+record ProcedureDetail {
+    arguments: string,
+    min_num_arguments: string,
+    max_num_arguments: string,
+    name: string,
+    description: string
+}
+
+record Constraint {
+    fk_schema_name: string,
+    fk_column_name: string,
+    fk_table_name: string,
+    pk_schema_name: string,
+    pk_column_name: string,
+    pk_table_name: string
+}
+
+record TablePrivilege {
+    grantor: string,
+    grantee: string,
+    table_schema: string,
+    table_name: string,
+    privilege_type: string,
+    is_grantable: string,
+    with_herirachy: string
+}
+
+record RunQueryResponse {
+    data: list<string>,
+    message: string
+}
+
+enum RunQueryResult{
+    WrongSqlGenerated(string),
+    SuccessfulSqlRun(RunQueryResponse),
+    CorrectSqlGeneratedButTimeout(string)
+}
+
+@mcp
+interface Snowflake {
+    config -> SnowflakeConfig;
+    // This runs a query provided in argument `query_str` on the schema database, given by the `schema_name` parameter.
+    query func run_query(
+        // raw sql statement query without any backslashes or any other escape characters.
+        query_str: string,
+        // the name of schema to run the query in
+        schema_name: string,
+        // the name of warehouse to run the query in
+        warehouse: string,
+        // the name of database to run the query in
+        database: string
+    ) -> RunQueryResult;
+
+    // This executes the statement provided in argument `statement` potentially mutating the rows of the schema database, given by the `schema_name` parameter.
+    query func execute(
+        // raw sql statement query without any backslashes or any other escape characters.
+        statement: string, 
+        // the name of schema to run the query in
+        schema_name: string,
+        // the name of warehouse to run the query in
+        warehouse: string,
+        // the name of database to run the query in
+        database: string
+    ) -> result<string, string>;
+
+    // This gets the list of procedures and their metadata in snowflake, for the given schema
+    query func list_procedures(
+        // the name of schema to run the query in
+        schema_name: string,
+        // the name of warehouse to run the query in
+        warehouse: string,
+        // the name of database to run the query in
+        database: string
+    ) -> result<list<ProcedureDetail>, string>;
+    // This executes the query and writes it to an in-memory-file-system(imfs).
+    query func run_query_and_export(
+        // raw sql statement query without any backslashes or any other escape characters.
+        query_str: string,
+        // the name of schema to run the query in
+        schema_name: string,
+        // the name of warehouse to run the query in
+        warehouse: string,
+        // the name of database to run the query in
+        database: string,
+        // the name of imfs file to write into
+        filename: string
+    ) -> result<string, string>
+}

@@ -1,0 +1,380 @@
+record DatabricksConfig{
+    pat_token: string
+}
+
+@mcp
+interface Databricks{
+    config -> DatabricksConfig;
+    
+    // get all users in databricks
+    query func list_users()-> result<string,string>;
+    // get a specific user in databricks from id
+    query func get_user(
+        // user id
+        user_id: string
+    ) -> result<string, string>;
+    // Create a new user
+    query func create_user(
+        // name of the user
+        username: string, 
+        // email of the user
+        email: string, 
+        // display name of the user
+        display_name: option<string>
+    ) -> result<string, string>;
+    // run an sql query on databricks
+    query func execute_sql(
+        // the raw sql to run
+        query_str: string, 
+        // the id of the warehouse to run this query in
+        warehouse_id: string
+    ) -> result<string, string>;
+    // get all warehouses
+    query func list_sql_warehouses(
+        // the id of the warehouse to run this query in
+        warehouse_id: string
+    ) -> result<string, string>;
+    // start a warehouse
+    query func start_sql_warehouse(
+        // the id of the warehouse to start
+        warehouse_id: string
+    ) -> result<string, string>;
+    // start a warehouse
+    query func stop_sql_warehouse(
+        // the id of the warehouse to stop
+        warehouse_id: string
+    ) -> result<string, string>;
+    // create a warehouse
+    query func create_sql_warehouse(
+        // name of the warehourse
+        name: string, 
+        // cluster size of the warehourse
+        cluster_size: string, 
+        // minimum number of clusters
+        min_num_clusters: i32, 
+        // maximum number of clusters
+        max_num_clusters: i32, 
+        // time in minutes of inactivity for stopping
+        auto_stop_mins: i32
+    ) -> result<string, string>;
+    // list files in databricks file system
+    query func list_dbfs_files(
+        // the path to look for files in
+        path: string
+    ) -> result<string, string>;
+    // get file info in databricks file system
+    query func get_dbfs_file_info(
+        // the path to look for the file in
+        path: string
+    ) -> result<string, string>;
+    // delete file in databricks file system
+    query func delete_dbfs_file(
+        // the path to delete
+        path: string
+    ) -> result<string, string>;
+    // move file in databricks file system
+    query func move_dbfs_file(
+        // the path of the source
+        source_path: string,
+        // the path of the destination
+        destination_path: string
+    ) -> result<string, string>;
+    // copy file in databricks file system
+    query func copy_dbfs_file(
+        // the path of the source
+        source_path: string,
+        // the path of the destination
+        destination_path: string
+    ) -> result<string, string>;
+    // write to a file in databricks file system
+    query func write_dbfs_file(
+        // the path of the file
+        path: string,
+        // content to write
+        content: string,
+        // whether to overwrite or not
+        overwrite: bool
+    ) -> result<string, string>;
+    // read from a file in databricks file system
+    query func read_dbfs_file(
+        // the path of the file
+        path: string,
+        // the offset to read from
+        offset: option<i64>,
+        // length to read
+        length: option<i64>
+    ) -> result<string, string>;
+    // list all clusters
+    query func list_clusters() -> result<string, string>;
+    // get a cluster
+    query func get_cluster(
+        // the id of the cluster
+        cluster_id: string
+    ) -> result<string, string>;
+    // create a cluster
+    query func create_cluster(
+        // the name of the cluster
+        name: string,
+        // the versions of spark
+        spark_version: string,
+        // the node type
+        node_type: string,
+        // the number of workers
+        num_workers: i32
+    ) -> result<string, string>;
+    // list all sql queries
+    query func list_sql_queries(
+        // id of the user 
+        user_id: string,
+        // whether to include metrics
+        include_metrics: option<bool>
+    ) -> result<string, string>;
+    // create a directory in workspace
+    query func create_directory(
+        // the path to create the directory
+        path: string
+    ) -> result<string, string>;
+    // list contents of a workspace directory (use this for workspace paths like /Users/...)
+    query func list_workspace_directory(
+        // the workspace path to list
+        path: string
+    ) -> result<string, string>;
+    // list all registered models in the model registry
+    query func list_registered_models() -> result<string, string>;
+    // get details of a specific registered model
+    query func get_registered_model(
+        // name of the registered model
+        name: string
+    ) -> result<string, string>;
+    // create a new registered model
+    query func create_registered_model(
+        // name of the model
+        name: string,
+        // description of the model
+        description: option<string>
+    ) -> result<string, string>;
+    // list all versions of a registered model
+    query func list_model_versions(
+        // name of the registered model
+        name: string
+    ) -> result<string, string>;
+    // get details of a specific model version
+    query func get_model_version(
+        // name of the registered model
+        name: string,
+        // version of the model
+        version: string
+    ) -> result<string, string>;
+    // set the stage of a model version (e.g., Production, Staging)
+    query func set_model_version_stage(
+        // name of the registered model
+        name: string,
+        // version of the model
+        version: string,
+        // stage to set (e.g., Production, Staging, Archived)
+        stage: string
+    ) -> result<string, string>;
+    // delete a registered model
+    query func delete_registered_model(
+        // name of the registered model to delete
+        name: string
+    ) -> result<string, string>;
+    // list all model serving endpoints
+    query func list_serving_endpoints() -> result<string, string>;
+    // get details of a specific serving endpoint
+    query func get_serving_endpoint(
+        // name of the serving endpoint
+        name: string
+    ) -> result<string, string>;
+    // create a new model serving endpoint
+    query func create_serving_endpoint(
+        // name of the serving endpoint
+        name: string,
+        // JSON configuration for the serving endpoint
+        configuration: string
+    ) -> result<string, string>;
+    // update configuration of a serving endpoint
+    query func update_serving_endpoint(
+        // name of the serving endpoint
+        name: string,
+        // JSON configuration for the serving endpoint
+        configuration: string
+    ) -> result<string, string>;
+    // delete a serving endpoint
+    query func delete_serving_endpoint(
+        // name of the serving endpoint to delete
+        name: string
+    ) -> result<string, string>;
+    // get logs from a serving endpoint
+    query func get_serving_endpoint_logs(
+        // name of the serving endpoint
+        name: string,
+        // number of log lines to retrieve
+        lines: option<i32>
+    ) -> result<string, string>;
+    // make predictions using a serving endpoint
+    query func query_serving_endpoint(
+        // name of the serving endpoint
+        name: string,
+        // JSON data for prediction
+        data: string
+    ) -> result<string, string>;
+    // list all jobs in databricks
+    query func list_jobs() -> result<string, string>;
+    // get details of a specific job
+    query func get_job(
+        // the id of the job
+        job_id: string
+    ) -> result<string, string>;
+    // run a job now
+    query func run_job_now(
+        // the id of the job to run
+        job_id: string
+    ) -> result<string, string>;
+    // get details of a specific job run
+    query func get_job_run(
+        // the id of the job run
+        run_id: string
+    ) -> result<string, string>;
+    // cancel a job run
+    query func cancel_job_run(
+        // the id of the job run to cancel
+        run_id: string
+    ) -> result<string, string>;
+    // create a SQL alert
+    query func create_sql_alert(
+        // name of the alert
+        name: string,
+        // id of the query to monitor
+        query_id: string,
+        // column to monitor
+        column: string,
+        // comparison operator ()">", "<", ">=", "<=", "==", "!=")
+        op: string,
+        // threshold value
+        threshold: string,
+        // rearm count (0 for no rearm)
+        rearm: i32
+    ) -> result<string, string>;
+    // list all catalogs in Unity Catalog
+    query func list_catalogs() -> result<string, string>;
+    // get details of a specific catalog
+    query func get_catalog(
+        // name of the catalog
+        catalog_name: string
+    ) -> result<string, string>;
+    // list all schemas in a catalog
+    query func list_schemas(
+        // name of the catalog
+        catalog_name: string
+    ) -> result<string, string>;
+    // get details of a specific schema
+    query func get_schema(
+        // name of the catalog
+        catalog_name: string,
+        // name of the schema
+        schema_name: string
+    ) -> result<string, string>;
+    // list all tables in a schema
+    query func list_tables(
+        // name of the catalog
+        catalog_name: string,
+        // name of the schema
+        schema_name: string
+    ) -> result<string, string>;
+    // get details of a specific table
+    query func get_table(
+        // name of the catalog
+        catalog_name: string,
+        // name of the schema
+        schema_name: string,
+        // name of the table
+        table_name: string
+    ) -> result<string, string>;
+    // list all metastores in Unity Catalog
+    query func list_metastores() -> result<string, string>;
+    // list all functions in a Unity Catalog schema
+    query func list_functions(
+        // name of the catalog
+        catalog_name: string,
+        // name of the schema
+        schema_name: string
+    ) -> result<string, string>;
+    // get details of a specific function
+    query func get_function(
+        // full name of the function (catalog.schema.function)
+        function_name: string
+    ) -> result<string, string>;
+    // create a new function in Unity Catalog
+    query func create_function(
+        // name of the function
+        name: string,
+        // name of the catalog
+        catalog_name: string,
+        // name of the schema
+        schema_name: string,
+        // JSON string of input parameters array like "[{\"name\": \"param1\", \"type\": \"STRING\"}, {\"name\": \"param2\", \"type\": \"INT\"}]"
+        input_params: string,
+        // return data type of the function
+        data_type: string,
+        // programming language (PYTHON, SQL, etc.)
+        language: string,
+        // function routine definition/code
+        routine_definition: string
+    ) -> result<string, string>;
+    // delete a function from Unity Catalog
+    query func delete_function(
+        // full name of the function to delete (catalog.schema.function)
+        function_name: string
+    ) -> result<string, string>;
+    // list all pipelines
+    query func list_pipelines() -> result<string, string>;
+    // create a new pipeline
+    query func create_pipeline(
+        // name of the pipeline
+        name: string,
+        // catalog name for the pipeline
+        catalog: string,
+        // target schema name
+        target: string,
+        // notebook path for the pipeline
+        notebook_path: string,
+        // whether to run continuously
+        continuous: bool
+    ) -> result<string, string>;
+    // get details of a specific pipeline
+    query func get_pipeline(
+        // id of the pipeline
+        pipeline_id: string
+    ) -> result<string, string>;
+    // update a pipeline
+    query func update_pipeline(
+        // id of the pipeline
+        pipeline_id: string,
+        // new name of the pipeline (optional)
+        name: option<string>,
+        // new catalog name (optional)
+        catalog: option<string>,
+        // new target schema name (optional)
+        target: option<string>,
+        // new notebook path (optional)
+        notebook_path: option<string>,
+        // whether to run continuously (optional)
+        continuous: option<bool>
+    ) -> result<string, string>;
+    // delete a pipeline
+    query func delete_pipeline(
+        // id of the pipeline to delete
+        pipeline_id: string
+    ) -> result<string, string>;
+    // execute/run a pipeline
+    query func execute_pipeline(
+        // id of the pipeline to execute
+        pipeline_id: string
+    ) -> result<string, string>;
+    // get events/logs for a pipeline
+    query func get_pipeline_events(
+        // id of the pipeline
+        pipeline_id: string
+    ) -> result<string, string>
+}

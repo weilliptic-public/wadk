@@ -1,0 +1,11 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "databricks.wasm",
+  "widl": "databricks.widl",
+  "config": "config.yaml",
+  "context": "context.txt",
+  "organization": "Weilliptic",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/databricks.svg",
+  "description": "Databricks is a cloud-based data analytics and AI platform built on Apache Spark, enabling organizations to unify data engineering, data science, and machine learning for faster innovation."
+}

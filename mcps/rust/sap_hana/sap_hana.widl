@@ -1,0 +1,16 @@
+record HanaConfig{
+    conn_str: string
+}
+
+@mcp
+interface HanaDB {
+    config -> HanaConfig;
+    // This returns the schema of the SAP HANA database
+    query func schema() -> result<string, string>;
+    
+    // This runs a query provided in argument `query_str` on the SAP HANA database.
+    query func run_query(query_str: string) -> result<list<string>, string>;
+    
+    // This executes the statement provided in argument `statement` potentially mutating the rows of the SAP HANA database
+    query func execute(statement: string) -> result<u64, string>
+}

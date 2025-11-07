@@ -1,0 +1,11 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "servicenow.wasm",
+  "widl": "servicenow.widl",
+  "config": "config.yaml",
+  "organization": "Weilliptic",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/servicenow.svg",
+  "description": "ServiceNow is a cloud-based workflow automation platform that helps organizations manage IT, HR, customer service, and enterprise operations.",
+  "outcall": true
+}

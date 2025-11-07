@@ -1,0 +1,31 @@
+record DatadogConfig {
+    site: string,
+    api_key: string,
+    app_key: string
+}
+
+record FromToInterval {
+    from: string,
+    to: string
+}
+
+@mcp
+interface Datadog {
+    config -> DatadogConfig;
+    // Gets the current unix timestamp from the human time string which might be substring of a larger user prompt.
+    query func get_from_to_unix_timestamp(
+        // human time for eg. 'right now', '15 minutes', '6 hours', '1 day', 'one month'
+        human_time: string
+    ) -> result<FromToInterval, string>;
+    // Retrieve metrics from Datadog using the Metrics Query API.
+    query func query_metrics(
+        // Datadog metric query, e.g. 'avg:system.cpu.user{*}'
+        query_str: string,
+        // Start time in unix timestamp.
+        from: string,
+        // End time in unix timstamp.
+        to: string
+    ) -> result<plottable, string>;
+    // List all the Datadog metrics.
+    query func list_metrics() -> result<list<string>, string>
+}

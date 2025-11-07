@@ -1,0 +1,7 @@
+interface A {
+    query func greetings(name: string, contract_addr: string) -> result<string, string>;
+    xpod func x_greetings {
+        main: (name: string, contract_addr: string) -> result<(), string>;
+        callback: (resp: result<string, string>)
+    }
+}

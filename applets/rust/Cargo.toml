@@ -1,0 +1,31 @@
+[workspace]
+members = [
+   "xpod/A",
+   "xpod/B",
+   "non_fungible_token/asciiart",
+   "xpod_2/first",
+   "xpod_2/second",
+   "counter/cross_counter",
+   "counter/counter",
+   "fungible_token/yutaka",
+]
+
+resolver = "2"
+
+[workspace.dependencies]
+weil_rs        = { path = "../../adk/rust/weil_rs/" }
+weil_contracts = { path = "../../adk/rust/weil_rs/weil_contracts" }
+weil_macros    = { path = "../../adk/rust/weil_rs/weil_macros" }
+weil_wallet    = { path = "../../adk/rust/weil_rs/weil_wallet" }
+
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = { version = "1.0.140", features = ["raw_value"] }
+
+anyhow = "1.0.98"
+bincode = {version = "2.0.1", features = ["serde"]}
+sha3 = "0.10.8"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+hex = "0.4.3"
+humantime = "2.2.0"
+thiserror = "2.0.12"
+tokio = { version = "1.40.0", features = ["full"] }

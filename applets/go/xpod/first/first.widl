@@ -1,0 +1,8 @@
+interface First {
+    query func health_check() -> string;
+    query func counter(id: string) -> result<u32, string>;
+    xpod func set_list_in_second {
+        main: (contract_id: string, id: string, val: i8) -> result<(), string>;
+        callback: (xpod_id: string, result: result<list<i8>, string>)
+    }
+}

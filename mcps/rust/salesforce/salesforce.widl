@@ -1,0 +1,84 @@
+
+
+record SalesforceConfig{
+    client_id: string,
+    client_secret: string,
+    username: string,
+    password: string,
+    security_token: string
+}
+
+@mcp
+interface SalesforceCRM {
+    config -> SalesforceConfig;
+    // Create a new record in Salesforce
+    query func create(
+        // Salesforce object type (e.g., "Account", "Contact")
+        object_type: string,
+        // Names of fields to set, all in strings
+        field_names: list<string>,
+        // Values for the fields (must match field_names in order and length), all in strings
+        field_values: list<string> 
+    ) -> result<string, string>;
+    
+    // Read a record from Salesforce
+    query func read(
+        // Salesforce object type (e.g., "Account", "Contact")
+        object_type: string,
+        // ID of the record to read
+        record_id: string 
+    ) -> result<string, string>;
+    
+    // Update an existing record in Salesforce
+    query func update(
+        // Salesforce object type (e.g., "Account", "Contact")
+        object_type: string,
+        // ID of the record to update
+        record_id: string,
+        // Names of fields to update, all in strings
+        field_names: list<string>,
+        // Updated values (must match field_names in order and length), all in strings
+        field_values: list<string>
+    ) -> result<string, string>;
+    
+    // Delete a record from Salesforce
+    query func delete(
+        // Salesforce object type (e.g., "Account", "Contact")
+        object_type: string,
+        // ID of the record to delete
+        record_id: string
+    ) -> result<string, string>;
+
+    // Takes a raw query and executes it on the salesforce server
+    query func execute_soql_query(
+        // the raw soql query
+        soql_query: string
+    ) -> result<string, string>;
+
+    // gets the schema of the given object from salesforce
+    query func get_object_metadata(
+        // the name of the object to get the metadata of
+        object_name: string
+    ) -> result<string, string>;
+
+    // Run a specific Apex test class and return the job ID
+    query func run_apex_test(
+        // Name of the Apex test class to run (e.g., 'AccountControllerTest')
+        test_class_name: string
+    ) -> result<string, string>;
+
+    // Get the status and results of an Apex test job
+    query func get_test_status(
+        // AsyncApexJob ID returned from run_apex_test
+        job_id: string
+    ) -> result<string, string>;
+
+    // Run all Apex test classes in the org
+    query func run_all_tests() -> result<string, string>;
+
+    // Get details about a permission set including assigned users
+    query func get_permission_set_details(
+        // Name of the permission set (e.g., 'Account_Manager_Extra_Access')
+        permission_set_name: string
+    ) -> result<string, string>
+}

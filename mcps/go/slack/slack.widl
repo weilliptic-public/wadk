@@ -1,0 +1,81 @@
+record SlackConfig {
+    token: string
+}
+
+record UserProfile {
+    status_text : string,
+    status_emoji: string,
+    email: string
+}
+
+record SlackUser {
+    id: string,
+    name: string,
+    real_name: string,
+    deleted: bool,
+    tz: string,
+    profile: UserProfile
+}
+
+record PurposeTopic {
+    value : string,
+    creator : string,
+    last_set : u64 
+}
+
+record Channel {
+    id : string,
+    name : string,
+    num_members : uint, 
+    is_member : bool,
+    purpose : PurposeTopic,
+    topic : PurposeTopic
+}  
+
+record Message {
+    user : string,
+    text : string
+}
+
+@mcp
+interface Slack {
+    config -> SlackConfig;
+
+    // Lists all users visible to the token, including their Slack profile metadata.
+    query func list_users() -> result<list<SlackUser>, string>;
+
+    // Lists every public channel the token can access, including membership counts.
+    query func list_public_channels() -> result<list<Channel>, string>;
+    
+    // Lists private channels (a.k.a. private conversations) the token is a member of.
+    query func list_private_channels() -> result<list<Channel>, string>;
+
+    // Gets message history from a channel by name, returning a list of messages in the conversation.
+    query func get_conversations_from_channel(
+        // the exact channel name to fetch history from
+        channel_name: string
+    ) -> result<list<Message>, string>;
+
+    // Gets direct message history between the token owner and the specified user.
+    query func get_conversations_with_user(
+        // the target user's real name (not display name)
+        user_name: string
+    ) -> result<list<Message>, string>;
+
+    // Sends a message to a channel by name.
+    query func send_message_to_channel(
+        // the exact channel name to post to
+        channel_name: string,
+        // the text content to send
+        message: string
+    ) -> result<string, string>;
+
+    // Sends a direct message to a specific user.
+    query func send_message_to_user(
+        // the target user's real name (not display name)
+        user_name: string,
+        
+        // the text content to send
+        message: string
+    ) -> result<string, string>
+}

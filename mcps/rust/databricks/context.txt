@@ -1,0 +1,272 @@
+US Counties COVID-19 Data
+- Location: `/databricks-datasets/COVID/covid-19-data/us-counties.csv`
+- warehouse_id: c979ef6456a064c9
+- Columns:
+  - `date` (string): Date in YYYY-MM-DD format
+  - `county` (string): County name
+  - `state` (string): State name
+  - `fips` (string): Federal Information Processing Standards code for county
+  - `cases` (integer): Cumulative number of cases
+  - `deaths` (integer): Cumulative number of deaths
+  
+- Example Query:
+  ```sql
+  SELECT state, county, MAX(cases) as total_cases, MAX(deaths) as total_deaths
+  FROM read_files('/databricks-datasets/COVID/covid-19-data/us-counties.csv')
+  WHERE state = 'California'
+  GROUP BY state, county
+  ORDER BY total_cases DESC
+  LIMIT 10;
+  ```
+#
+US States COVID-19 Data
+- Location: `/databricks-datasets/COVID/covid-19-data/us-states.csv`
+- warehouse_id: c979ef6456a064c9
+- Columns:
+  - `date` (string): Date in YYYY-MM-DD format
+  - `state` (string): State name
+  - `fips` (string): Federal Information Processing Standards code for state
+  - `cases` (integer): Cumulative number of cases
+  - `deaths` (integer): Cumulative number of deaths
+- Example Query:
+  ```sql
+  SELECT state, MAX(cases) as total_cases, MAX(deaths) as total_deaths,
+         ROUND(MAX(deaths) * 100.0 / MAX(cases), 2) as death_rate
+  FROM read_files('/databricks-datasets/COVID/covid-19-data/us-states.csv')
+  GROUP BY state
+  ORDER BY total_cases DESC
+  LIMIT 5;
+  ```
+#
+Global COVID-19 Data
+- Location: `/databricks-datasets/COVID/covid-19-data/global.csv`
+- warehouse_id: c979ef6456a064c9
+- Columns:
+  - `date` (string): Date in YYYY-MM-DD format
+  - `country` (string): Country name
+  - `cases` (integer): Cumulative number of cases
+  - `deaths` (integer): Cumulative number of deaths
+- Example Query:
+  ```sql
+  SELECT country, MAX(cases) as total_cases, MAX(deaths) as total_deaths
+  FROM read_files('/databricks-datasets/COVID/covid-19-data/global.csv')
+  WHERE country IN ('United States', 'China', 'India', 'Brazil', 'Russia')
+  GROUP BY country
+  ORDER BY total_cases DESC;
+  ```
+#
+Sales Data
+- Location: `/databricks-datasets/samples/sales/sales.csv`
+- Columns:
+  - `order_id` (string): Unique order identifier
+  - `customer_id` (string): Customer identifier
+  - `product_id` (string): Product identifier
+  - `quantity` (integer): Quantity sold
+  - `unit_price` (double): Price per unit
+  - `total_amount` (double): Total order amount
+  - `order_date` (string): Date of order
+  - `sales_rep` (string): Sales representative name
+- Example Query:
+  ```sql
+  SELECT sales_rep, COUNT(*) as order_count, SUM(total_amount) as total_sales
+  FROM read_files('/databricks-datasets/samples/sales/sales.csv')
+  WHERE order_date >= '2023-01-01'
+  GROUP BY sales_rep
+  ORDER BY total_sales DESC
+  LIMIT 10;
+  ```
+#
+Customer Data
+- Location: `/databricks-datasets/samples/customers/customers.csv`
+- warehouse_id: c979ef6456a064c9
+- Columns:
+  - `customer_id` (string): Unique customer identifier
+  - `first_name` (string): Customer first name
+  - `last_name` (string): Customer last name
+  - `email` (string): Customer email address
+  - `phone` (string): Customer phone number
+  - `address` (string): Customer address
+  - `city` (string): Customer city
+  - `state` (string): Customer state
+  - `zip_code` (string): Customer ZIP code
+  - `country` (string): Customer country
+  - `registration_date` (string): Customer registration date
+- Example Query:
+  ```sql
+  SELECT state, COUNT(*) as customer_count
+  FROM read_files('/databricks-datasets/samples/customers/customers.csv')
+  GROUP BY state
+  ORDER BY customer_count DESC
+  LIMIT 10;
+  ```
+#
+Products Data
+- Location: `/databricks-datasets/samples/products/products.csv`
+- warehouse_id: c979ef6456a064c9
+- Columns:
+  - `product_id` (string): Unique product identifier
+  - `product_name` (string): Product name
+  - `category` (string): Product category
+  - `subcategory` (string): Product subcategory
+  - `brand` (string): Product brand
+  - `price` (double): Product price
+  - `cost` (double): Product cost
+  - `weight` (double): Product weight
+  - `dimensions` (string): Product dimensions
+  - `description` (string): Product description
+  - `in_stock` (boolean): Whether product is in stock
+- Example Query:
+  ```sql
+  SELECT category, COUNT(*) as product_count, AVG(price) as avg_price
+  FROM read_files('/databricks-datasets/samples/products/products.csv')
+  WHERE in_stock = true
+  GROUP BY category
+  ORDER BY avg_price DESC;
+  ```
+#
+Orders Data
+- Location: `/databricks-datasets/samples/orders/orders.csv`
+- warehouse_id: c979ef6456a064c9
+- Columns:
+  - `order_id` (string): Unique order identifier
+  - `customer_id` (string): Customer identifier
+  - `order_date` (string): Date order was placed
+  - `ship_date` (string): Date order was shipped
+  - `delivery_date` (string): Date order was delivered
+  - `status` (string): Order status (pending, shipped, delivered, cancelled)
+  - `total_amount` (double): Total order amount
+  - `shipping_cost` (double): Shipping cost
+  - `tax_amount` (double): Tax amount
+  - `discount_amount` (double): Discount amount
+- Example Query:
+  ```sql
+  SELECT status, COUNT(*) as order_count, AVG(total_amount) as avg_order_value
+  FROM read_files('/databricks-datasets/samples/orders/orders.csv')
+  GROUP BY status
+  ORDER BY order_count DESC;
+  ```
+#
+Web Logs Data
+- Location: `/databricks-datasets/samples/weblogs/weblogs.csv`
+- warehouse_id: c979ef6456a064c9
+- Columns:
+  - `timestamp` (string): Request timestamp
+  - `ip_address` (string): Client IP address
+  - `user_agent` (string): Browser user agent
+  - `request_method` (string): HTTP method (GET, POST, etc.)
+  - `request_url` (string): Requested URL
+  - `status_code` (integer): HTTP status code
+  - `response_size` (integer): Response size in bytes
+  - `referer` (string): Referer URL
+  - `session_id` (string): Session identifier
+- Example Query:
+  ```sql
+  SELECT status_code, COUNT(*) as request_count, AVG(response_size) as avg_response_size
+  FROM read_files('/databricks-datasets/samples/weblogs/weblogs.csv')
+  GROUP BY status_code
+  ORDER BY request_count DESC;
+  ```
+#
+IoT Sensor Data
+- Location: `/databricks-datasets/samples/iot/iot.csv`
+- Columns:
+  - `device_id` (string): Unique device identifier
+  - `timestamp` (string): Reading timestamp
+  - `sensor_type` (string): Type of sensor
+  - `value` (double): Sensor reading value
+  - `unit` (string): Unit of measurement
+  - `location` (string): Device location
+  - `battery_level` (double): Device battery level
+  - `signal_strength` (double): Signal strength
+- Example Query:
+  ```sql
+  SELECT device_id, sensor_type, AVG(value) as avg_value, MIN(battery_level) as min_battery
+  FROM read_files('/databricks-datasets/samples/iot/iot.csv')
+  WHERE battery_level < 20
+  GROUP BY device_id, sensor_type
+  ORDER BY min_battery ASC;
+  ```
+#
+Airline Data
+- Location: `/databricks-datasets/samples/airlines/airlines.csv`
+- warehouse_id: c979ef6456a064c9
+- Columns:
+  - `flight_id` (string): Unique flight identifier
+  - `airline` (string): Airline name
+  - `flight_number` (string): Flight number
+  - `origin_airport` (string): Origin airport code
+  - `destination_airport` (string): Destination airport code
+  - `departure_time` (string): Scheduled departure time
+  - `arrival_time` (string): Scheduled arrival time
+  - `actual_departure` (string): Actual departure time
+  - `actual_arrival` (string): Actual arrival time
+  - `delay_minutes` (integer): Delay in minutes
+  - `cancelled` (boolean): Whether flight was cancelled
+  - `distance` (double): Flight distance in miles
+- Example Query:
+  ```sql
+  SELECT airline, COUNT(*) as flight_count, AVG(delay_minutes) as avg_delay
+  FROM read_files('/databricks-datasets/samples/airlines/airlines.csv')
+  WHERE cancelled = false
+  GROUP BY airline
+  ORDER BY avg_delay DESC
+  LIMIT 10;
+  ```
+
+#
+NYC Taxi Trips
+- Location: `samples.nyctaxi.trips`
+- warehouse_id: c979ef6456a064c9
+- Columns:
+  - `trip_id` (string): Unique trip identifier
+  - `vendor_id` (string): Taxi vendor identifier
+  - `pickup_datetime` (timestamp): Pickup date and time
+  - `dropoff_datetime` (timestamp): Dropoff date and time
+  - `passenger_count` (integer): Number of passengers
+  - `trip_distance` (double): Trip distance in miles
+  - `pickup_longitude` (double): Pickup longitude
+  - `pickup_latitude` (double): Pickup latitude
+  - `dropoff_longitude` (double): Dropoff longitude
+  - `dropoff_latitude` (double): Dropoff latitude
+  - `payment_type` (string): Payment method
+  - `fare_amount` (double): Fare amount
+  - `tip_amount` (double): Tip amount
+  - `total_amount` (double): Total trip amount
+- Example Query:
+  ```sql
+  SELECT HOUR(pickup_datetime) as hour, COUNT(*) as trip_count, AVG(fare_amount) as avg_fare
+  FROM samples.nyctaxi.trips
+  WHERE pickup_datetime >= '2023-01-01'
+  GROUP BY HOUR(pickup_datetime)
+  ORDER BY hour;
+  ```
+#
+Million Song Dataset Sample
+- Location: `/databricks-datasets/songs/data-001/`
+- warehouse_id: c979ef6456a064c9
+- Columns:
+  - `artist_id` (string): Artist identifier
+  - `artist_name` (string): Artist name
+  - `artist_latitude` (double): Artist location latitude
+  - `artist_longitude` (double): Artist location longitude
+  - `artist_location` (string): Artist location
+  - `song_id` (string): Song identifier
+  - `title` (string): Song title
+  - `duration` (double): Song duration in seconds
+  - `year` (double): Release year
+  - `tempo` (double): Song tempo
+  - `loudness` (double): Song loudness
+  - `key` (integer): Musical key
+  - `key_confidence` (double): Key confidence score
+  - `time_signature` (double): Time signature
+  - `time_signature_confidence` (double): Time signature confidence
+  - `song_hotness` (double): Song popularity score
+- Example Query:
+  ```sql
+  SELECT artist_name, COUNT(*) as song_count, AVG(song_hotness) as avg_hotness
+  FROM read_files('/databricks-datasets/songs/data-001/part-00000')
+  WHERE year >= 2000 AND song_hotness > 0
+  GROUP BY artist_name
+  ORDER BY avg_hotness DESC
+  LIMIT 20;
+  ```

@@ -1,0 +1,130 @@
+DATABASE: chinook
+Table: album
+Description: Stores albums of music.
+Columns:
+  - album_id (INTEGER, NOT NULL, PK) — Primary key
+  - title (NVARCHAR(160), NOT NULL)
+  - artist_id (INTEGER, NOT NULL, FK → artist.artist_id)
+#
+
+DATABASE: chinook
+Table: artist
+Description: Stores artists who produce music.
+Columns:
+  - artist_id (INTEGER, NOT NULL, PK) — Primary key
+  - name (NVARCHAR(120), NULL)
+
+#
+DATABASE: chinook
+Table: customer
+Description: Stores customer data.
+Columns:
+  - customer_id (INTEGER, NOT NULL, PK)
+  - first_name (NVARCHAR(40), NOT NULL)
+  - last_name (NVARCHAR(20), NOT NULL)
+  - company (NVARCHAR(80), NULL)
+  - address (NVARCHAR(70), NULL)
+  - city (NVARCHAR(40), NULL)
+  - state (NVARCHAR(40), NULL)
+  - country (NVARCHAR(40), NULL)
+  - postal_code (NVARCHAR(10), NULL)
+  - phone (NVARCHAR(24), NULL)
+  - fax (NVARCHAR(24), NULL)
+  - email (NVARCHAR(60), NOT NULL)
+  - support_rep_id (INTEGER, NULL, FK → employee.employee_id)
+
+#
+DATABASE: chinook
+Table: employee
+Description: Stores employee data.
+Columns:
+  - employee_id (INTEGER, NOT NULL, PK)
+  - last_name (NVARCHAR(20), NOT NULL)
+  - first_name (NVARCHAR(20), NOT NULL)
+  - title (NVARCHAR(30), NULL)
+  - reports_to (INTEGER, NULL, FK → employee.employee_id)
+  - birth_date (DATETIME, NULL)
+  - hire_date (DATETIME, NULL)
+  - address (NVARCHAR(70), NULL)
+  - city (NVARCHAR(40), NULL)
+  - state (NVARCHAR(40), NULL)
+  - country (NVARCHAR(40), NULL)
+  - postal_code (NVARCHAR(10), NULL)
+  - phone (NVARCHAR(24), NULL)
+  - fax (NVARCHAR(24), NULL)
+  - email (NVARCHAR(60), NULL)
+
+#
+DATABASE: chinook
+Table: genre
+Description: Stores music genres.
+Columns:
+  - genre_id (INTEGER, NOT NULL, PK)
+  - name (NVARCHAR(120), NULL)
+
+
+#
+DATABASE: chinook
+Table: invoice
+Description: Stores invoices for customer purchases.
+Columns:
+  - invoice_id (INTEGER, NOT NULL, PK)
+  - customer_id (INTEGER, NOT NULL, FK → customer.customer_id)
+  - invoice_date (DATETIME, NOT NULL)
+  - billing_address (NVARCHAR(70), NULL)
+  - billing_city (NVARCHAR(40), NULL)
+  - billing_state (NVARCHAR(40), NULL)
+  - billing_country (NVARCHAR(40), NULL)
+  - billing_postal_code (NVARCHAR(10), NULL)
+  - total (NUMERIC(10,2), NOT NULL)
+
+#
+DATABASE: chinook
+Table: invoice_line
+Description: Stores individual invoice line items.
+Columns:
+  - invoice_line_id (INTEGER, NOT NULL, PK)
+  - invoice_id (INTEGER, NOT NULL, FK → invoice.invoice_id)
+  - track_id (INTEGER, NOT NULL, FK → track.track_id)
+  - unit_price (NUMERIC(10,2), NOT NULL)
+  - quantity (INTEGER, NOT NULL)
+
+
+#
+DATABASE: chinook
+Table: media_type
+Description: Stores media types (e.g., MPEG, AAC).
+Columns:
+  - media_type_id (INTEGER, NOT NULL, PK)
+  - name (NVARCHAR(120), NULL)
+
+#
+DATABASE: chinook
+Table: playlist
+Description: Stores playlists of tracks.
+Columns:
+  - playlist_id (INTEGER, NOT NULL, PK)
+  - name (NVARCHAR(120), NULL)
+
+#
+DATABASE: chinook
+Table: playlist_track
+Description: Join table for many-to-many relationship between playlists and tracks.
+Columns:
+  - playlist_id (INTEGER, NOT NULL, FK → playlist.playlist_id)
+  - track_id (INTEGER, NOT NULL, FK → track.track_id)
+
+#
+DATABASE: chinook
+Table: track
+Description: Stores music tracks.
+Columns:
+  - track_id (INTEGER, NOT NULL, PK)
+  - name (NVARCHAR(200), NOT NULL)
+  - album_id (INTEGER, NULL, FK → album.album_id)
+  - media_type_id (INTEGER, NOT NULL, FK → media_type.media_type_id)
+  - genre_id (INTEGER, NULL, FK → genre.genre_id)
+  - composer (NVARCHAR(220), NULL)
+  - milliseconds (INTEGER, NOT NULL)
+  - bytes (INTEGER, NULL)
+  - unit_price (NUMERIC(10,2), NOT NULL)

@@ -1,0 +1,24 @@
+[package]
+name = "weil_wallet"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+base32 = "0.5.1"
+anyhow.workspace = true
+async-compat.workspace = true
+async-stream.workspace = true
+bytes.workspace = true
+crossbeam-skiplist.workspace = true
+flate2.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+libsecp256k1.workspace = true
+openssl.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true

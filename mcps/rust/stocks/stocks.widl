@@ -1,0 +1,173 @@
+
+// Stocks is a comprehensive financial data service that provides real-time and historical stock market data,
+// technical analysis indicators, and company information to help you analyze market trends and make informed investment decisions.
+
+record AlphaVantageConfig {
+    api_key_1: string,
+    api_key_2: string,
+    api_key_3: string,
+    api_key_4: string,
+    api_key_5: string
+}
+
+record StockDataPoint {
+    timestamp: string,
+    open: string,
+    high: string,
+    low: string,
+    close: string,
+    volume: string
+}
+
+record TimeSeriesData {
+    symbol: string,
+    interval: string,
+    data_points: list<StockDataPoint>
+}
+
+record QuoteData {
+    symbol: string,
+    price: string,
+    change: string,
+    change_percent: string,
+    volume: string,
+    latest_trading_day: string
+}
+
+@mcp
+interface Stocks {
+    config -> AlphaVantageConfig;
+
+    // Get intraday time series data for stocks with absolute time range and return as plottable chart
+    // Use this method when you have specific start and end dates/times (e.g., "for year 2023", "from January to March")
+    query func get_intraday_data_range(
+        // Stock symbols as comma-separated string (e.g., "IBM, AAPL, GOOGL")
+        symbol: string,
+        // Time interval: 1min, 5min, 15min, 30min, 60min
+        interval: string,
+        // Unix timestamp filter
+        from_timestamp: string,
+        // Unix timestamp filter
+        to_timestamp: string
+    ) -> result<plottable, string>;
+
+    // Get intraday time series data for stocks with relative time range and return as plottable chart
+    // Use this method when you want data relative to now (e.g., "for the last month", "past 30 days", "last week")
+    query func get_intraday_data_recent(
+        // Stock symbols as comma-separated string (e.g., "IBM, AAPL, GOOGL")
+        symbol: string,
+        // Time interval: 1min, 5min, 15min, 30min, 60min
+        interval: string,
+        // Number of seconds back from now (e.g., "2592000" for ~30 days, "604800" for 1 week)
+        seconds_back: string
+    ) -> result<plottable, string>;
+
+    // Get daily time series data for stocks with absolute time range and return as plottable chart
+    // Use this method when you have specific start and end dates/times (e.g., "for year 2023", "from January to March")
+    query func get_daily_data_range(
+        // Stock symbols as comma-separated string (e.g., "IBM, AAPL, GOOGL")
+        symbol: string,
+        // Unix timestamp filter
+        from_timestamp: string,
+        // Unix timestamp filter
+        to_timestamp: string
+    ) -> result<plottable, string>;
+
+    // Get daily time series data for stocks with relative time range and return as plottable chart
+    // Use this method when you want data relative to now (e.g., "for the last month", "past 30 days", "last week")
+    query func get_daily_data_recent(
+        // Stock symbols as comma-separated string (e.g., "IBM, AAPL, GOOGL")
+        symbol: string,
+        // Number of seconds back from now (e.g., "2592000" for ~30 days, "604800" for 1 week)
+        seconds_back: string
+    ) -> result<plottable, string>;
+
+    // Get weekly time series data for stocks with absolute time range and return as plottable chart
+    // Use this method when you have specific start and end dates/times (e.g., "for year 2023", "from January to March")
+    query func get_weekly_data_range(
+        // Stock symbols as comma-separated string (e.g., "IBM, AAPL, GOOGL")
+        symbol: string,
+        // Unix timestamp filter
+        from_timestamp: string,
+        // Unix timestamp filter
+        to_timestamp: string
+    ) -> result<plottable, string>;
+
+    // Get weekly time series data for stocks with relative time range and return as plottable chart
+    // Use this method when you want data relative to now (e.g., "for the last month", "past 30 days", "last week")
+    query func get_weekly_data_recent(
+        // Stock symbols as comma-separated string (e.g., "IBM, AAPL, GOOGL")
+        symbol: string,
+        // Number of seconds back from now (e.g., "2592000" for ~30 days, "604800" for 1 week)
+        seconds_back: string
+    ) -> result<plottable, string>;
+
+    // Get monthly time series data for stocks with absolute time range and return as plottable chart
+    // Use this method when you have specific start and end dates/times (e.g., "for year 2023", "from January to March")
+    query func get_monthly_data_range(
+        // Stock symbols as comma-separated string (e.g., "IBM, AAPL, GOOGL")
+        symbol: string,
+        // Unix timestamp filter
+        from_timestamp: string,
+        // Unix timestamp filter
+        to_timestamp: string
+    ) -> result<plottable, string>;
+
+    // Get monthly time series data for stocks with relative time range and return as plottable chart
+    // Use this method when you want data relative to now (e.g., "for the last month", "past 30 days", "last week")
+    query func get_monthly_data_recent(
+        // Stock symbols as comma-separated string (e.g., "IBM, AAPL, GOOGL")
+        symbol: string,
+        // Number of seconds back from now (e.g., "2592000" for ~30 days, "604800" for 1 week)
+        seconds_back: string
+    ) -> result<plottable, string>;
+
+    // Get real-time quote for a stock
+    query func get_quote(
+        // Stock symbol (e.g., IBM, AAPL)
+        symbol: string
+    ) -> result<string, string>;
+
+    // Search for stocks by keyword
+    query func search_symbol(
+        // Keywords to search for (e.g., "microsoft", "MSFT")
+        keywords: string
+    ) -> result<string, string>;
+
+    // Get company overview and fundamental data
+    query func get_company_overview(
+        // Stock symbol (e.g., IBM, AAPL)
+        symbol: string
+    ) -> result<string, string>;
+
+    // Get earnings data for a company
+    query func get_earnings(
+        // Stock symbol (e.g., IBM, AAPL)
+        symbol: string
+    ) -> result<string, string>;
+
+    // Get technical indicator data (SMA - Simple Moving Average) and return as plottable chart
+    query func get_sma(
+        // Stock symbol (e.g., IBM, AAPL)
+        symbol: string,
+        // Time interval: 1min, 5min, 15min, 30min, 60min, daily, weekly, monthly
+        interval: string,
+        // Time period for SMA calculation (e.g., 20, 50, 200)
+        time_period: u32,
+        // Price type: close, open, high, low
+        series_type: string
+    ) -> result<plottable, string>;
+
+    // Get technical indicator data (RSI - Relative Strength Index) and return as plottable chart
+    query func get_rsi(
+        // Stock symbol (e.g., IBM, AAPL)
+        symbol: string,
+        // Time interval: 1min, 5min, 15min, 30min, 60min, daily, weekly, monthly
+        interval: string,
+        // Time period for RSI calculation (typically 14)
+        time_period: u32,
+        // Price type: close, open, high, low
+        series_type: string
+    ) -> result<plottable, string>
+}
+

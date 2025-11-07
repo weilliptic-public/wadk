@@ -1,0 +1,4 @@
+interface Second {
+    query func get_list(id: string) -> result<list<i8>, string>;
+    mutate func set_val(id: string, val: i8) -> list<i8>
+}

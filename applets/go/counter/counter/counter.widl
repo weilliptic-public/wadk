@@ -1,0 +1,5 @@
+interface Counter {
+    query func get_count() -> uint;
+    mutate func increment();
+    mutate func set_value(val: uint)
+}

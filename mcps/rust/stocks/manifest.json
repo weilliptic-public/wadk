@@ -1,0 +1,11 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "stocks.wasm",
+  "widl": "stocks.widl",
+  "config": "config.yaml",
+  "organization": "Weilliptic",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/stocks.svg",
+  "description": "Comprehensive financial data service that provides real-time and historical stock market data, technical analysis indicators, and company information to help you connect, analyze, and share insights from your financial data.",
+  "outcall": true
+}

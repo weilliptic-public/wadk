@@ -1,0 +1,35 @@
+{
+  "name": "@weilliptic/weil-sdk-asc",
+  "version": "0.0.1",
+  "description": "SDK for smart contract development for Weil-Chain in AssemblyScript",
+  "main": "index.js",
+  "scripts": {
+    "test": "node tests",
+    "asbuild:debug": "asc assembly/index.ts --target debug",
+    "asbuild:release": "asc assembly/index.ts --target release",
+    "asbuild": "npm run asbuild:debug && npm run asbuild:release",
+    "start": "npx serve ."
+  },
+  "author": "Bhavya Bhatt",
+  "license": "ISC",
+  "devDependencies": {
+    "assemblyscript": "^0.25.0"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./build/release.js",
+      "types": "./build/release.d.ts"
+    },
+    "./assembly/*": {
+      "import": "./assembly/*",
+      "types": "./assembly/*"
+    }
+  },
+  "dependencies": {
+    "assemblyscript-json": "^1.1.0",
+    "json-as": "^0.9.21",
+    "prettier": "^3.3.3",
+    "visitor-as": "^0.11.4"
+  }
+}

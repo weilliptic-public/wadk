@@ -5,11 +5,14 @@ import (
 	"fmt"
 )
 
+// Result represents a value that can be either a success (Ok) or an error (Err).
+// It is similar to Rust's Result type and provides a way to handle errors without exceptions.
 type Result[T any, E any] struct {
 	val *T
 	err *E
 }
 
+// NewOkResult creates a new Result representing a successful value.
 func NewOkResult[T any, E any](val *T) *Result[T, E] {
 	return &Result[T, E]{
 		val: val,
@@ -17,6 +20,7 @@ func NewOkResult[T any, E any](val *T) *Result[T, E] {
 	}
 }
 
+// NewErrResult creates a new Result representing an error.
 func NewErrResult[T any, E any](err *E) *Result[T, E] {
 	return &Result[T, E]{
 		val: nil,
@@ -24,22 +28,28 @@ func NewErrResult[T any, E any](err *E) *Result[T, E] {
 	}
 }
 
+// TryOkResult returns the contained value if the Result is Ok, or nil if it is Err.
 func (obj *Result[T, E]) TryOkResult() *T {
 	return obj.val
 }
 
+// TryErrResult returns the contained error if the Result is Err, or nil if it is Ok.
 func (obj *Result[T, E]) TryErrResult() *E {
 	return obj.err
 }
 
+// IsOkResult returns true if the Result contains a successful value.
 func (obj *Result[T, E]) IsOkResult() bool {
 	return obj.err == nil
 }
 
+// IsErrResult returns true if the Result contains an error.
 func (obj *Result[T, E]) IsErrResult() bool {
 	return obj.err != nil
 }
 
+// MarshalJSON implements the json.Marshaler interface for Result.
+// Results are marshaled as a map with either an "Ok" or "Err" key.
 func (obj Result[T, E]) MarshalJSON() ([]byte, error) {
 	m := make(map[string]interface{}, 2)
 
@@ -52,6 +62,8 @@ func (obj Result[T, E]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&m)
 }
 
+// UnmarshalJSON implements the json.Unmarshaler interface for Result.
+// Expects a map with either an "Ok" or "Err" key.
 func (obj *Result[T, E]) UnmarshalJSON(data []byte) error {
 	var tmp map[string]interface{}
 	err := json.Unmarshal(data, &tmp)

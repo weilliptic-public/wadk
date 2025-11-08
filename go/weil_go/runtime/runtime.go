@@ -1,3 +1,6 @@
+// Package runtime provides runtime functions and utilities for Weil contracts.
+// It includes functions for interacting with the contract state, making cross-contract calls,
+// accessing blockchain information, and managing collections.
 package runtime
 
 import (
@@ -61,21 +64,25 @@ func read_bulk_collection(key int32) int32
 
 var WasmHostMemorySegment []byte // this is to keep data alive!: TODO - find a different way rather than this
 
+// StateArgsValue represents the state and arguments passed to a contract method.
 type StateArgsValue struct {
 	State string `json:"state"`
 	Args  string `json:"args"`
 }
 
+// StateResultValue represents the state and result value returned from a contract method.
 type StateResultValue struct {
 	State *types.Option[string] `json:"state"`
 	Value string                `json:"value"`
 }
 
+// WeilValue represents a value that may optionally include updated state.
 type WeilValue[T any, U any] struct {
 	State *types.Option[T] `json:"state"`
 	OkVal *U               `json:"ok_val"`
 }
 
+// NewWeilValueWithOkValue creates a new WeilValue with only a result value (no state update).
 func NewWeilValueWithOkValue[T any, U any](val *U) *WeilValue[T, U] {
 	return &WeilValue[T, U]{
 		State: types.NewNoneOption[T](),
@@ -83,6 +90,7 @@ func NewWeilValueWithOkValue[T any, U any](val *U) *WeilValue[T, U] {
 	}
 }
 
+// NewWeilValueWithStateAndOkValue creates a new WeilValue with both a state update and a result value.
 func NewWeilValueWithStateAndOkValue[T any, U any](state *T, val *U) *WeilValue[T, U] {
 	return &WeilValue[T, U]{
 		State: types.NewSomeOption[T](state),
@@ -120,6 +128,8 @@ func (v *WeilValue[T, U]) raw() *StateResultValue {
     }
 }
 
+// Allocate allocates memory for WASM host interface communication.
+// This is an internal function and should not be called directly by contract code.
 func Allocate(len uint) uintptr {
 	data := make([]byte, len)
 	ptr := uintptr(unsafe.Pointer(&data[0]))
@@ -127,6 +137,8 @@ func Allocate(len uint) uintptr {
 	return ptr
 }
 
+// Deallocate deallocates memory used for WASM host interface communication.
+// This is an internal function and should not be called directly by contract code.
 func Deallocate(ptr uintptr, len uint) {
 	WasmHostMemorySegment = make([]byte, 0) // remove the global reference to the underlying buffer so that it can be collected!
 }
@@ -211,7 +223,7 @@ func lengthPrefixedBytesFromResult[T any](result *types.Result[T, errors.WeilErr
 
 // Below functions are the Go-style wrapper functions over raw runtime functions
 
-// Adds/Overwrites an entry to the collection
+// WriteCollectionEntry adds or overwrites an entry in the collection with the given key and value.
 func WriteCollectionEntry[V any](key []byte, val *V) {
 	lfKey := lengthPrefixedBytesFromString(key, 0)
 	lfVal := lengthPrefixedBytesFromResult(types.NewOkResult[V, errors.WeilError](val))
@@ -221,7 +233,8 @@ func WriteCollectionEntry[V any](key []byte, val *V) {
 	runtime.KeepAlive(lfVal)
 }
 
-// Deletes and returns an entry from the collection.
+// DeleteCollectionEntry deletes and returns an entry from the collection.
+// Returns the deleted value if it existed, or nil if the key was not found.
 func DeleteCollectionEntry[V any](key []byte) (*V, error) {
 	lfKey := lengthPrefixedBytesFromString(key, 0)
 	valPtr := (uintptr)(delete_collection(getWasmPtr(&lfKey[0])))
@@ -248,6 +261,8 @@ func DeleteCollectionEntry[V any](key []byte) (*V, error) {
 	return &val, nil
 }
 
+// ReadCollection reads an entry from the collection with the given key.
+// Returns an error if the key is not found.
 func ReadCollection[V any](key []byte) (*V, error) {
 	lfKey := lengthPrefixedBytesFromString(key, 0)
 	valPtr := (uintptr)(read_collection(getWasmPtr(&lfKey[0])))
@@ -273,6 +288,8 @@ func ReadCollection[V any](key []byte) (*V, error) {
 	return &val, nil
 }
 
+// ReadBulkCollection reads all entries from the collection that have keys with the given prefix.
+// Returns an error if no entries are found with the prefix.
 func ReadBulkCollection[V any](prefix []byte) (*V, error) {
 	lfKey := lengthPrefixedBytesFromString(prefix, 0)
 	valPtr := (uintptr)(read_bulk_collection(getWasmPtr(&lfKey[0])))
@@ -297,6 +314,8 @@ func ReadBulkCollection[V any](prefix []byte) (*V, error) {
 	return &val, nil
 }
 
+// State retrieves the current contract state.
+// The state is deserialized into the type parameter T.
 func State[T any]() *T {
 	dataPtr := (uintptr)(get_state_and_args())
 	dataJSON := *read(dataPtr).TryOkResult()
@@ -312,6 +331,9 @@ func State[T any]() *T {
 	return &state
 }
 
+// Args retrieves the arguments passed to the current contract method call.
+// The arguments are deserialized into the type parameter T.
+// Returns an error if deserialization fails.
 func Args[T any]() (*T, error) {
 	dataPtr := (uintptr)(get_state_and_args())
 	dataJSON := *read(dataPtr).TryOkResult()
@@ -331,6 +353,9 @@ func Args[T any]() (*T, error) {
 	}
 }
 
+// StateAndArgs retrieves both the current contract state and the method arguments.
+// The state is deserialized into type T and arguments into type U.
+// Returns an error if argument deserialization fails (state is always returned).
 func StateAndArgs[T any, U any]() (*T, *U, error) {
 	dataPtr := (uintptr)(get_state_and_args())
 	dataJSON := *read(dataPtr).TryOkResult()
@@ -352,6 +377,8 @@ func StateAndArgs[T any, U any]() (*T, *U, error) {
 	}
 }
 
+// SetResult sets the result of the current contract method call.
+// This should be called at the end of a contract method to return a value.
 func SetResult[T any](result *types.Result[T, errors.WeilError]) {
 	var final_result *types.Result[WeilValue[interface{}, T], errors.WeilError]
 
@@ -367,6 +394,8 @@ func SetResult[T any](result *types.Result[T, errors.WeilError]) {
 	SetStateAndResult(final_result)
 }
 
+// SetStateAndResult sets both the updated state and result of the current contract method call.
+// This should be called at the end of a contract method to return a value and update state.
 func SetStateAndResult[T any, U any](result *types.Result[WeilValue[T, U], errors.WeilError]) {
 	var final_result *types.Result[StateResultValue, errors.WeilError]
 
@@ -383,6 +412,7 @@ func SetStateAndResult[T any, U any](result *types.Result[WeilValue[T, U], error
 	runtime.KeepAlive(serializedResult)
 }
 
+// ContractId returns the ID of the current contract.
 func ContractId() string {
 	dataPtr := (uintptr)(get_contract_id())
 
@@ -392,6 +422,7 @@ func ContractId() string {
 	return data
 }
 
+// LedgerContractId returns the ID of the ledger contract.
 func LedgerContractId() string {
 	dataPtr := (uintptr)(get_ledger_contract_id())
 
@@ -401,6 +432,7 @@ func LedgerContractId() string {
 	return data
 }
 
+// Sender returns the address of the account that initiated the current transaction.
 func Sender() string {
 	dataPtr := (uintptr)(get_sender())
 
@@ -409,6 +441,7 @@ func Sender() string {
 	return data
 }
 
+// Initiator returns the address of the account that instantiated the contract.
 func Initiator() string {
 	dataPtr := (uintptr)(get_txn_instantiator_addr())
 
@@ -418,6 +451,7 @@ func Initiator() string {
 	return data
 }
 
+// BlockHeight returns the height of the current block.
 func BlockHeight() uint32 {
 	dataPtr := (uintptr)(get_block_height())
 
@@ -431,6 +465,7 @@ func BlockHeight() uint32 {
 	return uint32(data)
 }
 
+// BlockTimestamp returns the timestamp of the current block as a string.
 func BlockTimestamp() string {
 	dataPtr := (uintptr)(get_block_timestamp())
 
@@ -440,6 +475,9 @@ func BlockTimestamp() string {
 	return data
 }
 
+// CallContract calls a method on another contract and returns the result.
+// The result is deserialized into type T.
+// Returns an error if the call fails or deserialization fails.
 func CallContract[T any](contractId string, methodName string, methodArgs string) (*T, error) {
 	type CrossContractCallArgs struct {
 		ContractId string `json:"id"`
@@ -473,6 +511,8 @@ func CallContract[T any](contractId string, methodName string, methodArgs string
 	return &result, nil
 }
 
+// CallXpodContract calls a method on an Xpod contract and returns the Xpod ID.
+// Returns an error if the call fails.
 func CallXpodContract(contractId string, methodName string, methodArgs string) (string, error) {
 	type CrossContractCallArgs struct {
 		ContractId string `json:"id"`
@@ -501,6 +541,7 @@ func CallXpodContract(contractId string, methodName string, methodArgs string) (
 	return xpod_id, nil
 }
 
+// DebugLog logs a debug message. This is useful for debugging during development.
 func DebugLog(log string) {
 	lfLog := lengthPrefixedBytesFromString([]byte(log), 0)
 	debug_log(getWasmPtr(&lfLog[0]))

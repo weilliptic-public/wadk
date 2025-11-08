@@ -1,3 +1,6 @@
+// Package non_fungible provides a non-fungible token (NFT) implementation for Weil contracts.
+// It implements an ERC-721-like token standard with unique token IDs, ownership tracking,
+// and approval mechanisms.
 package non_fungible
 
 import (
@@ -11,6 +14,7 @@ import (
 	"github.com/weilliptic-inc/contract-sdk/go/weil_go/runtime"
 )
 
+// Token represents the metadata for a non-fungible token.
 type Token struct {
 	Title       string `json:"title"`
 	Name        string `json:"name"`
@@ -27,10 +31,12 @@ type innerNonFungibleToken struct {
 	Allowances collections.WeilMap[string, string]      `json:"allowances"`
 }
 
+// NonFungibleToken represents a non-fungible token contract.
 type NonFungibleToken struct {
 	Inner innerNonFungibleToken `json:"token"`
 }
 
+// Dump returns a string representation of the internal state paths for debugging.
 func (i *innerNonFungibleToken) Dump() string {
 	return fmt.Sprintf("Tokens: %s, Owners: %s, Owned: %s, Allowances: %s",
 		i.Id2Tokens.BaseStatePath(),
@@ -40,6 +46,8 @@ func (i *innerNonFungibleToken) Dump() string {
 	)
 }
 
+// NewNonFungibleToken creates a new non-fungible token contract with the given name.
+// The creator is set to the address of the transaction sender.
 func NewNonFungibleToken(name string) *NonFungibleToken {
 	return &NonFungibleToken{
 		Inner: innerNonFungibleToken{
@@ -53,19 +61,23 @@ func NewNonFungibleToken(name string) *NonFungibleToken {
 	}
 }
 
+// Name returns the name of the NFT contract.
 func (t *NonFungibleToken) Name() string {
 	return t.Inner.Name
 }
 
+// Creator returns the address of the contract creator.
 func (t *NonFungibleToken) Creator() string {
 	return string(t.Inner.Creator)
 }
 
+// isValidId checks if a token ID is valid (non-empty and less than 255 characters).
 func isValidId(tokenId string) bool {
 	len := utf8.RuneCountInString(tokenId)
 	return len > 0 && len < 255
 }
 
+// hasBeenMinted checks if a token with the given ID has already been minted.
 func (t *NonFungibleToken) hasBeenMinted(tokenId string) bool {
 	val, err := t.Inner.Id2Owner.Get(&tokenId)
 	if err != nil {
@@ -74,6 +86,7 @@ func (t *NonFungibleToken) hasBeenMinted(tokenId string) bool {
 	return *val != ""
 }
 
+// BalanceOf returns the number of tokens owned by the given address.
 func (t *NonFungibleToken) BalanceOf(addr string) uint64 {
 	val, err := t.Inner.Owner2Ids.Get(&addr)
 	if err != nil {
@@ -82,6 +95,8 @@ func (t *NonFungibleToken) BalanceOf(addr string) uint64 {
 	return uint64(val.Len())
 }
 
+// OwnerOf returns the address of the owner of the token with the given ID.
+// Returns an error if the token ID is invalid or the token has not been minted.
 func (t *NonFungibleToken) OwnerOf(tokenId string) (*string, error) {
 	if !isValidId(tokenId) {
 		return nil, fmt.Errorf("`%s` is not a valid token id", tokenId)
@@ -94,6 +109,8 @@ func (t *NonFungibleToken) OwnerOf(tokenId string) (*string, error) {
 	return val, nil
 }
 
+// Details returns the metadata for the token with the given ID.
+// Returns an error if the token ID is invalid or the token has not been minted.
 func (t *NonFungibleToken) Details(tokenId string) (*Token, error) {
 	if !isValidId(tokenId) {
 		return nil, fmt.Errorf("`%s` is not a valid token id", tokenId)
@@ -110,6 +127,8 @@ func (t *NonFungibleToken) Details(tokenId string) (*Token, error) {
 	return val, nil
 }
 
+// doTransfer performs the internal transfer logic for moving a token from one address to another.
+// This is a helper function used by Transfer and TransferFrom.
 func (t *NonFungibleToken) doTransfer(tokenId string, fromAddr string, toAddr string) error {
 	// Update the Ledger
 	err := ledger.Transfer(tokenId, fromAddr, toAddr, 1)
@@ -141,6 +160,8 @@ func (t *NonFungibleToken) doTransfer(tokenId string, fromAddr string, toAddr st
 	return nil
 }
 
+// Transfer transfers a token from the sender's address to the specified address.
+// Returns an error if the token ID is invalid, the token is not owned by the sender, or the transfer fails.
 func (t *NonFungibleToken) Transfer(toAddr string, tokenId string) error {
 	fromAddr := runtime.Sender()
 
@@ -160,6 +181,9 @@ func (t *NonFungibleToken) Transfer(toAddr string, tokenId string) error {
 	return t.doTransfer(tokenId, fromAddr, toAddr)
 }
 
+// TransferFrom transfers a token from one address to another on behalf of the sender.
+// The sender must be the owner or have been approved to transfer the token.
+// Returns an error if the transfer is not authorized or fails.
 func (t *NonFungibleToken) TransferFrom(fromAddr string, toAddr string, tokenId string) error {
 	spender := runtime.Sender()
 
@@ -204,6 +228,10 @@ func (t *NonFungibleToken) TransferFrom(fromAddr string, toAddr string, tokenId 
 	return t.doTransfer(tokenId, fromAddr, toAddr)
 }
 
+// Approve approves the spender to transfer the specified token.
+// Only the owner of the token can approve a spender.
+// If spender is an empty string, the approval is removed.
+// Returns an error if the token ID is invalid or the sender is not the owner.
 func (t *NonFungibleToken) Approve(spender string, tokenId string) error {
 	fromAddr := runtime.Sender()
 
@@ -229,6 +257,8 @@ func (t *NonFungibleToken) Approve(spender string, tokenId string) error {
 	return nil
 }
 
+// SetApproveForAll approves or revokes approval for the spender to transfer all tokens
+// owned by the sender. If approval is true, the spender is approved; if false, approval is revoked.
 func (t *NonFungibleToken) SetApproveForAll(spender string, approval bool) {
 	fromAddr := runtime.Sender()
 
@@ -240,6 +270,9 @@ func (t *NonFungibleToken) SetApproveForAll(spender string, approval bool) {
 	}
 }
 
+// GetApproved returns a list of approved spenders for the given token.
+// This includes both token-specific approvals and operator approvals (approve for all).
+// Returns an error if the token ID is invalid or the token has not been minted.
 func (t *NonFungibleToken) GetApproved(tokenId string) (*[]string, error) {
 	response := make([]string, 0)
 	if !isValidId(tokenId) {
@@ -264,6 +297,7 @@ func (t *NonFungibleToken) GetApproved(tokenId string) (*[]string, error) {
 	return &response, nil
 }
 
+// IsApprovedForAll checks if the spender is approved to transfer all tokens owned by the owner.
 func (t *NonFungibleToken) IsApprovedForAll(owner string, spender string) bool {
 	key := fmt.Sprintf("%s$", owner)
 
@@ -274,6 +308,8 @@ func (t *NonFungibleToken) IsApprovedForAll(owner string, spender string) bool {
 	return *allowance == spender
 }
 
+// Mint creates a new token with the given ID and metadata, assigning it to the sender.
+// Returns an error if the token ID is invalid, the token has already been minted, or minting fails.
 func (t *NonFungibleToken) Mint(tokenId string, token Token) error {
 	fromAddr := runtime.Sender()
 

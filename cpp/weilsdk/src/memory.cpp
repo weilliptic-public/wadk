@@ -1,3 +1,11 @@
+/**
+ * @file memory.cpp
+ * @brief Implementation of memory and collection operations for WASM runtime
+ * @details This file provides implementations for reading and writing to collections,
+ *          along with helper functions for memory management and data serialization.
+ *          It interfaces with WASM-imported functions for low-level memory operations.
+ */
+
 #include "weilsdk/memory.h"
 
 // imported from wasm
@@ -34,11 +42,15 @@ __attribute__((import_name("debug_log")));
 
 namespace weilsdk {
 
-// The below two functions have core logic to read underlying data
-// These two are separately defined in both runtime.cpp and memory.cpp
-// instead to having centrally in a header file
-// This is done specifically to safeguard their visibility to outside world
-
+/**
+ * @brief Reads bytes from memory at the given pointer
+ * @details This function has core logic to read underlying data. It is separately
+ *          defined in both runtime.cpp and memory.cpp instead of being in a header file
+ *          to safeguard its visibility from the outside world.
+ * @param ptr The memory pointer to read from
+ * @return A pair where the first element indicates if an error occurred (1) or not (0),
+ *         and the second element contains the serialized string data
+ */
 std::pair<int, std::string> readBytesFromMemory(int32_t ptr) {
   uint8_t *mem_ptr = reinterpret_cast<uint8_t *>(ptr);
   uint32_t len = 0;
@@ -50,6 +62,15 @@ std::pair<int, std::string> readBytesFromMemory(int32_t ptr) {
   return {is_error, serialized_str};
 }
 
+/**
+ * @brief Converts a string to a length-prefixed byte buffer
+ * @details This function creates a buffer with an error flag byte, followed by
+ *          a 4-byte length, followed by the payload data. This is separately
+ *          defined in both runtime.cpp and memory.cpp to safeguard its visibility.
+ * @param payload The string data to convert
+ * @param is_error Error flag byte (0 for no error, 1 for error)
+ * @return A vector of bytes containing the error flag, length, and payload
+ */
 std::vector<uint8_t>
 getLengthPrefixedBytesFromString(const std::string &payload, uint8_t is_error) {
   std::vector<uint8_t> buffer;
@@ -61,7 +82,12 @@ getLengthPrefixedBytesFromString(const std::string &payload, uint8_t is_error) {
   return buffer;
 }
 
-// Memory:
+/**
+ * @brief Reads all collection entries that have keys with the given prefix
+ * @param prefix The prefix to search for in collection keys
+ * @return A pair where the first element indicates if an error occurred (1) or not (0),
+ *         and the second element contains the serialized result data
+ */
 std::pair<int, std::string> Memory::readBulkCollection(std::string prefix) {
   auto raw_prefix = getLengthPrefixedBytesFromString(prefix, 0);
   uintptr_t ptr1 = reinterpret_cast<uintptr_t>(raw_prefix.data());
@@ -72,6 +98,11 @@ std::pair<int, std::string> Memory::readBulkCollection(std::string prefix) {
   return buffer;
 }
 
+/**
+ * @brief Writes a key-value pair to the collection
+ * @param key The key to write to
+ * @param val The value to write
+ */
 void Memory::writeCollection(std::string key, std::string val) {
 
   auto raw_key = getLengthPrefixedBytesFromString(key, 0);
@@ -83,6 +114,12 @@ void Memory::writeCollection(std::string key, std::string val) {
   ::write_collection(key_ptr, val_ptr);
 }
 
+/**
+ * @brief Deletes a key-value pair from the collection
+ * @param key The key to delete
+ * @return A pair where the first element indicates if an error occurred (1) or not (0),
+ *         and the second element contains the deleted value or error message
+ */
 std::pair<int, std::string> Memory::deleteCollection(std::string key) {
   auto raw_key = getLengthPrefixedBytesFromString(key, 0);
 
@@ -93,6 +130,13 @@ std::pair<int, std::string> Memory::deleteCollection(std::string key) {
   auto buffer = readBytesFromMemory(result_ptr);
   return buffer;
 }
+
+/**
+ * @brief Reads a value from the collection using the given key
+ * @param key The key to read from
+ * @return A pair where the first element indicates if an error occurred (1) or not (0),
+ *         and the second element contains the value or error message
+ */
 std::pair<int, std::string> Memory::readCollection(std::string key) {
   auto raw_key = getLengthPrefixedBytesFromString(key, 0);
 

@@ -6,18 +6,42 @@ import { Runtime } from '../runtime'
 import { StringError } from '../error'
 import { Ledger } from '../ledger'
 
+/**
+ * A simple set implementation using an array.
+ * Used internally for managing token ownership sets.
+ * 
+ * @template K - The type of values in the set
+ */
 @json
 class EsSet<K> {
+  /** The internal array storing set values */
   inner: K[]
 
+  /**
+   * Gets the size of the set.
+   * 
+   * @returns The number of elements in the set
+   */
   get size(): i32 {
     return this.inner.length
   }
 
+  /**
+   * Checks if a value exists in the set.
+   * 
+   * @param value - The value to check
+   * @returns True if the value exists, false otherwise
+   */
   has(value: K): bool {
     return this.inner.includes(value)
   }
 
+  /**
+   * Adds a value to the set if it doesn't already exist.
+   * 
+   * @param value - The value to add
+   * @returns This set instance for chaining
+   */
   add(value: K): this {
     if (!this.has(value)) {
       this.inner.push(value)
@@ -26,6 +50,12 @@ class EsSet<K> {
     return this
   }
 
+  /**
+   * Removes a value from the set.
+   * 
+   * @param value - The value to remove
+   * @returns True if the value was removed, false if it didn't exist
+   */
   delete(value: K): boolean {
     if (this.has(value)) {
       const newInner: K[] = []
@@ -42,29 +72,61 @@ class EsSet<K> {
     return false
   }
 
+  /**
+   * Removes all values from the set.
+   */
   clear(): void {
     this.inner.length = 0
   }
+  
+  /**
+   * Gets all values in the set as an array.
+   * 
+   * @returns An array containing all set values
+   */
   values(): K[] {
     return [...this.inner]
   }
 
+  /**
+   * Converts the set to a string representation.
+   * 
+   * @returns A string representation of the set
+   */
   toString(): string {
     return this.inner.toString()
   }
 
+  /**
+   * Creates a new EsSet instance.
+   */
   constructor() {
     this.inner = []
   }
 }
 
+/**
+ * Represents a non-fungible token with metadata.
+ */
 @json
 export class Token {
+  /** The title of the token */
   title: string
+  /** The name of the token */
   name: string
+  /** The description of the token */
   description: string
+  /** Additional payload data for the token */
   payload: string
 
+  /**
+   * Creates a new Token instance.
+   * 
+   * @param title - The title of the token
+   * @param name - The name of the token
+   * @param description - The description of the token
+   * @param payload - Additional payload data
+   */
   constructor(
     title: string,
     name: string,
@@ -78,72 +140,141 @@ export class Token {
   }
 }
 
+/** Type alias for token ID */
 export type TokenId = string
+/** Empty token ID constant */
 const EMPTY_TOKEN_ID: string = ''
+/** Type alias for address */
 type Address = string
+/** Empty address constant */
 const EMPTY_ADDRESS: string = ''
 
+/**
+ * Arguments for the balanceOf method.
+ */
 @json
 export class BalanceOfArgs {
+  /** The address to query */
   addr!: string
 }
 
+/**
+ * Arguments for methods that require a token ID.
+ */
 @json
 export class TokenIdArgs {
-  token_id!: string | null
-}
-@json
-export class ApproveArgs {
-  spender!: string | null
+  /** The token ID */
   token_id!: string | null
 }
 
+/**
+ * Arguments for the approve method.
+ */
+@json
+export class ApproveArgs {
+  /** The spender address to approve */
+  spender!: string | null
+  /** The token ID to approve */
+  token_id!: string | null
+}
+
+/**
+ * Arguments for the setApproveForAll method.
+ */
 @json
 export class SetApproveForAllArgs {
+  /** The spender address */
   spender!: string | null
+  /** Whether to approve (true) or revoke (false) */
   approval!: boolean
 }
 
+/**
+ * Arguments for the isApprovedForAll method.
+ */
 @json
 export class IsApprovedForAllArgs {
+  /** The owner address */
   owner!: string | null
+  /** The spender address */
   spender!: string | null
 }
 
+/**
+ * Arguments for the transfer method.
+ */
 @json
 export class TransferArgs {
+  /** The address to transfer to */
   to_addr!: string | null
+  /** The token ID to transfer */
   token_id!: string | null
 }
 
+/**
+ * Arguments for the transferFrom method.
+ */
 @json
 export class TransferFromArgs {
+  /** The address to transfer from */
   from_addr!: string | null
+  /** The address to transfer to */
   to_addr!: string | null
+  /** The token ID to transfer */
   token_id!: string | null
 }
 
+/**
+ * Arguments for the mint method.
+ */
 @json
 export class MintArgs {
+  /** The token ID to mint */
   token_id!: string | null
+  /** The title of the token */
   title!: string | null
+  /** The name of the token */
   name!: string | null
+  /** The description of the token */
   description!: string | null
+  /** The payload data for the token */
   payload!: string | null
 }
 
+/**
+ * Generates a unique key for an allowance mapping.
+ * 
+ * @param fromAddr - The owner address
+ * @param tokenId - The token ID (use EMPTY_TOKEN_ID for global approvals)
+ * @returns A unique key string
+ */
 const getAllowanceKey = (fromAddr: string, tokenId: string): string =>
   [fromAddr, tokenId].join('$')
 
+/**
+ * NonFungibleToken class implementing ERC-721-like functionality.
+ * Manages unique tokens with ownership, transfers, approvals, and minting.
+ */
 @json
 export class NonFungibleToken {
+  /** The name of the NFT collection */
   name: string
+  /** The address of the collection creator */
   creator: Address
+  /** Map of token IDs to token metadata */
   tokens: WeilMap<TokenId, Token>
+  /** Map of token IDs to owner addresses */
   owners: WeilMap<TokenId, Address>
+  /** Map of addresses to sets of owned token IDs */
   owned: WeilMap<Address, EsSet<TokenId>>
+  /** Map of allowance keys to approved spender addresses */
   allowances: WeilMap<string, Address>
 
+  /**
+   * Creates a new NonFungibleToken instance.
+   * 
+   * @param name - The name of the NFT collection
+   */
   constructor(name: string) {
     this.name = name
     this.creator = Runtime.sender()
@@ -153,20 +284,44 @@ export class NonFungibleToken {
     this.allowances = new WeilMap<string, Address>(new WeilId(4))
   }
 
+  /**
+   * Validates whether a token ID is valid.
+   * 
+   * @param tokenId - The token ID to validate
+   * @returns True if the token ID is valid (length between 1 and 255)
+   */
   isValidId(tokenId: TokenId): boolean {
     return tokenId.length > 0 && tokenId.length < 256
   }
 
+  /**
+   * Checks if a token has been minted.
+   * 
+   * @param tokenId - The token ID to check
+   * @returns True if the token has been minted
+   */
   hasBeenMinted(tokenId: TokenId): boolean {
     const owner = this.owners.get(tokenId)
     return owner != null && owner != EMPTY_ADDRESS
   }
 
+  /**
+   * Gets the balance (number of tokens owned) for a given address.
+   * 
+   * @param addr - The address to query
+   * @returns The number of tokens owned by the address
+   */
   balanceOf(addr: Address): u64 {
     const nfts = this.owned.get(addr)
     return nfts ? nfts.size : 0
   }
 
+  /**
+   * Gets the owner of a specific token.
+   * 
+   * @param tokenId - The token ID to query
+   * @returns A Result containing the owner address or an error
+   */
   ownerOf(tokenId: TokenId): Result<Address, StringError> {
     if (!this.isValidId(tokenId)) {
       return Result.Err<Address, StringError>(
@@ -185,6 +340,12 @@ export class NonFungibleToken {
     }
   }
 
+  /**
+   * Gets the details (metadata) of a specific token.
+   * 
+   * @param tokenId - The token ID to query
+   * @returns A Result containing the token details or an error
+   */
   details(tokenId: TokenId): Result<Token, DetailsFetchError> {
     if (!this.isValidId(tokenId)) {
       return Result.Err<Token, DetailsFetchError>(
@@ -208,6 +369,15 @@ export class NonFungibleToken {
     return Result.Ok<Token, DetailsFetchError>(token)
   }
 
+  /**
+   * Internal method to perform a token transfer.
+   * Updates ownership, owned sets, and clears allowances.
+   * 
+   * @param tokenId - The token ID to transfer
+   * @param fromAddr - The address to transfer from
+   * @param toAddr - The address to transfer to
+   * @returns A Result indicating success or failure
+   */
   private doTransfer(
     tokenId: TokenId,
     fromAddr: Address,
@@ -247,6 +417,13 @@ export class NonFungibleToken {
     return Result.Ok<string, StringError>('null')
   }
 
+  /**
+   * Transfers a token from the sender to another address.
+   * 
+   * @param toAddr - The address to transfer to
+   * @param tokenId - The token ID to transfer
+   * @returns A Result indicating success or failure
+   */
   transfer(toAddr: Address, tokenId: TokenId): Result<string, StringError> {
     const fromAddr = Runtime.sender()
 
@@ -266,6 +443,15 @@ export class NonFungibleToken {
     return this.doTransfer(tokenId, fromAddr, toAddr)
   }
 
+  /**
+   * Transfers a token from one address to another on behalf of the sender.
+   * Requires the sender to have approval from the fromAddr.
+   * 
+   * @param fromAddr - The address to transfer from
+   * @param toAddr - The address to transfer to
+   * @param tokenId - The token ID to transfer
+   * @returns A Result indicating success or failure
+   */
   transferFrom(
     fromAddr: Address,
     toAddr: Address,
@@ -309,7 +495,13 @@ export class NonFungibleToken {
     return Result.Ok<string, StringError>('null')
   }
 
-  // Approve an address to transfer a specific token on behalf of the owner
+  /**
+   * Approves an address to transfer a specific token on behalf of the owner.
+   * 
+   * @param spender - The address to approve as a spender
+   * @param tokenId - The token ID to approve
+   * @returns A Result indicating success or failure
+   */
   approve(spender: Address, tokenId: TokenId): Result<string, StringError> {
     const fromAddr = Runtime.sender()
 
@@ -348,7 +540,14 @@ export class NonFungibleToken {
     return Result.Ok<string, StringError>('null')
   }
 
-  // Check if an address is approved for a specific token or all tokens of an owner
+  /**
+   * Gets the approved addresses for a specific token.
+   * Returns both specific approvals and global approvals for the token owner.
+   * 
+   * @param tokenId - The token ID to query
+   * @returns An array of approved addresses
+   * @throws {Error} If the token ID is invalid or the token has no owner
+   */
   getApproved(tokenId: TokenId): Array<Address> {
     const response: Array<Address> = []
 
@@ -380,14 +579,25 @@ export class NonFungibleToken {
     return response
   }
 
-  // Check if an address is approved for all tokens of a given owner
+  /**
+   * Checks if an address is approved for all tokens of a given owner.
+   * 
+   * @param owner - The owner address
+   * @param spender - The spender address to check
+   * @returns True if the spender is approved for all tokens of the owner
+   */
   isApprovedForAll(owner: Address, spender: Address): bool {
     const key = getAllowanceKey(owner, EMPTY_TOKEN_ID)
     const allowed = this.allowances.get(key)
     return allowed == spender
   }
 
-  // Approve or disapprove an address for all tokens of the caller
+  /**
+   * Approves or revokes approval for an address to transfer all tokens of the caller.
+   * 
+   * @param spender - The address to approve or revoke
+   * @param approval - True to approve, false to revoke
+   */
   setApproveForAll(spender: Address, approval: bool): void {
     const fromAddr = Runtime.sender()
 
@@ -399,6 +609,13 @@ export class NonFungibleToken {
     }
   }
 
+  /**
+   * Mints a new token with the given ID and metadata.
+   * 
+   * @param tokenId - The token ID to mint
+   * @param token - The token metadata
+   * @returns A Result indicating success or failure
+   */
   mint(tokenId: TokenId, token: Token): Result<string, StringError> {
     const fromAddr = Runtime.sender()
 

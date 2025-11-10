@@ -1,0 +1,126 @@
+record S3Config {
+    access_key_id: string,
+    secret_access_key: string,
+    region: string
+}
+
+record S3ObjectInfo {
+    key: string,
+    size: u64,
+    last_modified: string
+}
+
+interface AwsS3 {
+    config -> S3Config;
+    // Uploads a raw file to the specified S3 bucket
+    query func upload(
+        // The name of the bucket
+        bucket: string,
+        // The key (path/filename) for the object
+        key: string,
+        // The file contents as bytes
+        data: list<u8>
+    ) -> result<(), string>;
+    // Uploads a file with given filename to the specified S3 bucket
+    query func upload_from_memory(
+        // The name of the bucket
+        bucket: string,
+        // The key (path/filename) for the object
+        key: string,
+        // The filename
+        filepath: string
+    ) -> result<(), string>;
+    // Downloads a file from the specified S3 bucket
+    query func download(
+        // The name of the bucket
+        bucket: string,
+        // The key (path/filename) for the object
+        key: string
+    ) -> result<string, string>;
+    // Lists objects in the specified S3 bucket (optionally under a prefix)
+    query func list_objects(
+        // The name of the bucket
+        bucket: string,
+        // The prefix to filter objects (optional)
+        prefix: option<string>
+    ) -> result<list<S3ObjectInfo>, string>;
+    // Deletes an object from the specified S3 bucket
+    query func delete(
+        // The name of the bucket
+        bucket: string,
+        // The key (path/filename) for the object
+        key: string
+    ) -> result<(), string>;
+    // Uploads a file from an external URL and  to S3
+    query func upload_external_url_to_s3(
+        // The name of the S3 bucket to upload to
+        bucket: string,
+        // The key (path/filename) for the object in S3
+        key: string,
+        // The external URL to get the file from
+        url: string
+    )-> result<string, string>;
+
+    // Lists all S3 buckets for the given credentials
+    query func list_buckets() -> result<list<string>, string>;
+
+    // Creates a new S3 bucket
+    query func create_bucket(
+        // The bucket name
+        bucket: string
+    ) -> result<string, string>;
+
+    // Deletes an S3 bucket
+    query func delete_bucket(
+        // The bucket name
+        bucket: string
+    ) -> result<string, string>;
+
+    // Gets the location of an S3 bucket
+    query func get_bucket_location(
+        bucket: string
+    ) -> result<string, string>;
+
+    // Gets the ACL of an S3 bucket
+    query func get_bucket_acl(
+        bucket: string
+    ) -> result<string, string>;
+
+    // Gets the versioning status of an S3 bucket
+    query func get_bucket_versioning(
+        // The bucket name
+        bucket: string
+    ) -> result<string, string>;
+
+    // Enables or disables versioning on an S3 bucket
+    query func set_bucket_versioning(
+        // The bucket name
+        bucket: string,
+        // Whether to enable versioning
+        enabled: bool
+    ) -> result<string, string>;
+
+    // Uploads text content to the specified S3 bucket
+    query func upload_text(
+        // The name of the bucket
+        bucket: string,
+        // The key (path/filename) for the object
+        key: string,
+        // The text content to upload
+        text: string
+    ) -> result<string, string>;
+
+    // Reads a file from the encoded filedescriptor (like ey9320... ) and uploads its text content to S3
+    query func upload_from_file(
+        // The name of the bucket
+        bucket: string,
+        // The key (path/filename) for the object
+        key: string,
+        // The base64 encoded file descriptor to the file to read and upload
+        file_descriptor: string
+    ) -> result<string, string>
+}
+
+impl mcp for AwsS3{
+    tools -> [upload_text, upload_from_file, download, list_objects, delete, upload_external_url_to_s3, list_buckets, create_bucket, delete_bucket, get_bucket_location, get_bucket_acl, get_bucket_versioning, set_bucket_versioning]
+}

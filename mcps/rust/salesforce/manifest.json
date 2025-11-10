@@ -1,0 +1,12 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "salesforce.wasm",
+  "widl": "salesforce.widl",
+  "config": "config.yaml",
+  "context": "schema.txt",
+  "organization": "Weilliptic",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/somya-weilliptic/cool-icons/main/icons/salesforce.svg",
+  "description": "Salesforce is a leading cloud-based CRM platform that helps businesses manage customer relationships, sales, marketing, and service operations.",
+  "audit_log": true
+}

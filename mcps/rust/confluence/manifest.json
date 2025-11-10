@@ -1,0 +1,12 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "confluence.wasm",
+  "widl": "confluence.widl",
+  "config": "confluence.yaml",
+  "organization": "Weilliptic",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/somya-weilliptic/cool-icons/main/icons/confluence.svg",
+  "description": "Confluence is a team collaboration and knowledge management tool from Atlassian that helps organizations create, organize, and share content.",
+  "outcall": true,
+  "audit_log": true
+}

@@ -1,0 +1,1 @@
+conn_str: "Driver=HDBODBC;ServerNode=0f7a353f-be3e-471f-a5f9-51cf415305e6.hana.trial-us10.hanacloud.ondemand.com:443;UID=DBADMIN;PWD=Saphana123;Encrypt=True"

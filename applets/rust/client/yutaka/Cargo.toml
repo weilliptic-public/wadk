@@ -1,0 +1,12 @@
+[package]
+name = "yutaka"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+weil_wallet = { path = "../../../../contract-sdk/rust/weil_wallet" }
+wadk-utils = { path = "../../../../wadk-utils" }
+tokio = { version = "1.40.0", features = ["full"]}
+anyhow = "1.0.89"
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = { version = "1.0.128" }

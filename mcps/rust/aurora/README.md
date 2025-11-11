@@ -8,13 +8,7 @@ Aurora is MySQL- and PostgreSQL-compatible, meaning applications written for tho
 
 ## Core Tools
 1. Database Query Execution (`run_query`)
-- Purpose: Execute SELECT queries and retrieve data from database
-- Returns: Query results as a vector of strings
-
 2. Database Statement Execution (`execute`)
-- Purpose: Execute INSERT, UPDATE, DELETE, and DDL statements
-- Returns: Number of rows affected by the operation
-
 
 ## Testing
 In our testing, we populate Aurora with the [`chinook` database](./aurora_schema_hash.txt).

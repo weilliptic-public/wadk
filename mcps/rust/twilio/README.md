@@ -8,25 +8,6 @@ via TwiML, fetch recent messages, and retrieve account information.
 - `get_messages`: List recent messages via `GET /Messages.json` (optional `PageSize`).
 - `get_account_info`: Fetch account metadata via `GET /Accounts/{sid}.json`.
 
-### Prompt example
-
-1. Send SMS (`send_sms`)
-- Purpose: Send text messages to registered phone numbers
-- Returns: Success confirmation with message SID
-
-2. Send Voice Call (`send_voice_note`)
-- Purpose: Make voice calls using TwiML URLs for call content
-- Returns: Success confirmation with call SID
-
-3. Get Messages (`get_messages`)
-- Purpose: Retrieve SMS message history with optional limit
-- Returns: List of message objects with details
-
-4. Get Account Info (`get_account_info`)
-- Purpose: Retrieve Twilio account information and status
-- Returns: Account details including name, status, and SID
-
-
 
 ## Testing 
 
@@ -34,7 +15,6 @@ via TwiML, fetch recent messages, and retrieve account information.
 ```
 deploy -f <path to>/twilio.wasm -p <path to>/twilio.widl -c <path to>/config.yaml
 ```
-
 
 #### `config.yaml`
 ```yaml

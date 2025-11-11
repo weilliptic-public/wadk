@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    "arithmetic",
+    "aurora", 
+    "confluence", 
+    "datadog",
+    "s3",
+    "salesforce",
+    "sap_hana",
+    "servicenow",
+    "snowflake",
+    "twilio",
+]
+resolver = "2"
+
+[workspace.dependencies]
+anyhow = "1.0.98"
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = { version = "1.0.140", features = ["raw_value"] }
+sha3 = "0.10.8"
+bincode = {version = "2.0.1", features = ["serde"]}
+hex = "0.4.3"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+thiserror = "2.0.12"
+humantime = "2.2.0"
+
+
+weil_rs = { path = "../../adk/rust/weil_rs/" }
+weil_macros = { path = "../../adk/rust/weil_rs/weil_macros" }
+weil_contracts = { path = "../../adk/rust/weil_rs/weil_contracts" }
+

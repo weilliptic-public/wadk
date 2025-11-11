@@ -1,0 +1,54 @@
+   Compiling unicase v2.8.1
+    Checking mime v0.3.17
+    Checking base32 v0.5.1
+   Compiling mime_guess v2.0.5
+    Checking weil_rs v0.1.0 (/Users/lasaro/code/dev-vm/wadk/adk/rust/weil_rs)
+warning: unused doc comment
+  --> src/runtime.rs:40:1
+   |
+40 | / /// Raw FFI surface from the host runtime.
+41 | | ///
+42 | | /// > **Do not** use these directly in applets. Prefer the safe wrappers in
+43 | | /// > [`Memory`] and [`Runtime`].
+   | |_________________________________^
+44 |   #[link(wasm_import_module = "env")]
+45 | / extern "C" {
+46 | |     fn write_collection(key: i32, val: i32);
+47 | |     fn delete_collection(key: i32) -> i32;
+48 | |     fn read_collection(key: i32) -> i32;
+...  |
+62 | |     fn parse_human_time(s: i32) -> i32;
+63 | | }
+   | |_- rustdoc does not generate documentation for extern blocks
+   |
+   = help: use `//` for a plain comment
+   = note: `#[warn(unused_doc_comments)]` on by default
+
+warning: method `chunk_size` is never used
+  --> src/collections/memory/chunk.rs:16:12
+   |
+11 | impl Chunk {
+   | ---------- method in this implementation
+...
+16 |     pub fn chunk_size(&self) -> u32 {
+   |            ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/collections/vec.rs:110:17
+    |
+110 |     pub fn iter(&self) -> WeilVecIter<T> {
+    |                 ^^^^^     -------------- the same lifetime is hidden here
+    |                 |
+    |                 the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+110 |     pub fn iter(&self) -> WeilVecIter<'_, T> {
+    |                                       +++
+
+warning: `weil_rs` (lib) generated 3 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.19s

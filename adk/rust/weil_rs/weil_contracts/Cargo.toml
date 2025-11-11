@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-weil_rs = { path = "../" }
-weil_macros = { path = "../weil_macros"}
-serde = { workspace=true }
+weil_macros = { path = "../weil_macros" }
+weil_rs = { path = ".." }
+serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

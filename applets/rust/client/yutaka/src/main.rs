@@ -1,5 +1,5 @@
 use serde::Serialize;
-use wadk_utils::errors::WeilError;
+use weil_rs::errors::WeilError;
 use weil_wallet::{
     contract::ContractId,
     wallet::{PrivateKey, Wallet},

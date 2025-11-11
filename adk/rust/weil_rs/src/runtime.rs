@@ -37,10 +37,10 @@ use futures_lite::future::block_on;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{future::Future, mem::ManuallyDrop, ptr};
 
-/// Raw FFI surface from the host runtime.
-///
-/// > **Do not** use these directly in applets. Prefer the safe wrappers in
-/// > [`Memory`] and [`Runtime`].
+// Raw FFI surface from the host runtime.
+//
+// > **Do not** use these directly in applets. Prefer the safe wrappers in
+// > [`Memory`] and [`Runtime`].
 #[link(wasm_import_module = "env")]
 extern "C" {
     fn write_collection(key: i32, val: i32);

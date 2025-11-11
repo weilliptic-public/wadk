@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-weil_rs = { path = "../../../wadk/rust/weil_rs/" }
-weil_macros = { path = "../../../wadk/rust/weil_rs/weil_macros" }
-weil_contracts = { path = "../../../wadk/rust/weil_rs/weil_contracts" }
+weil_rs = { path = "../../../adk/rust/weil_rs/" }
+weil_macros = { path = "../../../adk/rust/weil_rs/weil_macros" }
+weil_contracts = { path = "../../../adk/rust/weil_rs/weil_contracts" }
+
 anyhow = "1.0.97"
 base64 = "0.22"
 serde = { version = "1.0.219", features = ["derive", "rc"] }

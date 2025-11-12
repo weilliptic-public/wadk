@@ -33,6 +33,6 @@
     "json-as": "^0.9.26",
     "prettier": "^3.3.3",
     "visitor-as": "^0.11.4",
-    "@weilliptic/weil-sdk-asc":"file:../../../contract-sdk/asc/weil-sdk"
+    "@weilliptic/weil-sdk-asc":"file:../../../adk/asc/weil-sdk"
   }
 }

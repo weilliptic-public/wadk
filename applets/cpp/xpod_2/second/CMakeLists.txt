@@ -5,9 +5,9 @@ project(second)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-set(LIBWEIL_DIR "${CMAKE_SOURCE_DIR}/../../../../contract-sdk/cpp/weilsdk/build/lib")
+set(LIBWEIL_DIR "${CMAKE_SOURCE_DIR}/../../../../adk/cpp/weilsdk/build/lib")
 
-include_directories("${CMAKE_SOURCE_DIR}/../../../../contract-sdk/cpp/weilsdk/include")
+include_directories("${CMAKE_SOURCE_DIR}/../../../../adk/cpp/weilsdk/include")
 
 add_executable(second src/main.cpp)
 

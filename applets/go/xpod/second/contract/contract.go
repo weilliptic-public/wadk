@@ -1,6 +1,6 @@
 package contract
 
-import "github.com/weilliptic-inc/contract-sdk/go/weil_go/collections"
+import "github.com/weilliptic-public/wadk/adk/go/weil_go/collections"
 
 // @contract_state
 type SecondContractState struct {

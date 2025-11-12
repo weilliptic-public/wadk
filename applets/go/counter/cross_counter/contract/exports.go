@@ -1,9 +1,9 @@
 package contract
 
 import (
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/errors"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/runtime"
-    "github.com/weilliptic-inc/contract-sdk/go/weil_go/types"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/errors"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/runtime"
+    "github.com/weilliptic-public/wadk/adk/go/weil_go/types"
 )
 
 

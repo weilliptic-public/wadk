@@ -3,9 +3,9 @@ package contract
 import (
 	"encoding/json"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/collections"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/runtime"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/types"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/collections"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/runtime"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
 )
 
 // contract_state

@@ -1,7 +1,7 @@
 package contract
 
 import (
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/runtime"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/runtime"
 )
 
 type Counter struct {

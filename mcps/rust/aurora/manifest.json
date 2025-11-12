@@ -6,7 +6,7 @@
   "context": "aurora_schema_hash.txt",
   "organization": "Weilliptic",
   "author": "Weilliptic",
-  "logo": "https://raw.githubusercontent.com/somya-weilliptic/cool-icons/main/icons/aurora.svg",
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/aurora.svg",
   "description": "Amazon Aurora is a fully managed relational database service from AWS that's compatible with MySQL and PostgreSQL, designed for high performance, scalability, and availability",
   "audit_log": true
 }

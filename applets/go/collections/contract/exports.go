@@ -7,63 +7,42 @@ import (
 )
 
 
-func coreGet() errors.WasmHostInterfaceError {
-    runtime.DebugLog("coreGet1")
-    state, err := runtime.State[CollectionsContractState]()
-    runtime.DebugLog("coreGet2")
-
-    if err != nil {
-        state = NewCollectionsContractState()
-    }
-
+func coreGet() errors.WeilError {
+    state := runtime.State[CollectionsContractState]()
     state.Get()
 
     return nil
 }
 
 func Get() {
-    var resp *types.Result[string, errors.WasmHostInterfaceError]
-    runtime.DebugLog("Get1")
+    var resp *types.Result[interface{}, errors.WeilError]
 
     err := coreGet()
 
-    runtime.DebugLog("Get2")
-
-
     if err != nil {
-		resp = types.NewErrResult[string, errors.WasmHostInterfaceError](&err)
+        resp = types.NewErrResult[interface{}, errors.WeilError](&err)
     } else {
-		resp = types.NewOkResult[string, errors.WasmHostInterfaceError](nil)
+        resp = types.NewOkResult[interface{}, errors.WeilError](nil)
     }
 
     runtime.SetResult(resp)
 }
 
-func coreSet() errors.WasmHostInterfaceError {
-    state, err := runtime.State[CollectionsContractState]()
-
-    if err != nil {
-        state = NewCollectionsContractState()
-    }
-
+func coreSet() *types.Result[runtime.WeilValue[CollectionsContractState, interface{}], errors.WeilError] {
+    state := runtime.State[CollectionsContractState]()
     state.Set()
 
-    runtime.SetState(state)
-
-    return nil
+    return types.NewOkResult[runtime.WeilValue[CollectionsContractState, interface{}], errors.WeilError](runtime.NewWeilValueWithStateAndOkValue[CollectionsContractState, interface{}](state, nil))
 }
 
 func Set() {
-    var resp *types.Result[string, errors.WasmHostInterfaceError]
+    result := coreSet()
 
-    err := coreSet()
+    runtime.SetStateAndResult(result)
+}
 
+    func Tools() {
+	toolDefs := `[]`
 
-    if err != nil {
-		resp = types.NewErrResult[string, errors.WasmHostInterfaceError](&err)
-    } else {
-		resp = types.NewOkResult[string, errors.WasmHostInterfaceError](nil)
-    }
-
-    runtime.SetResult(resp)
+	runtime.SetResult(types.NewOkResult[string, errors.WeilError](&toolDefs))
 }

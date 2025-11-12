@@ -16,13 +16,13 @@ type CollectionsContractState struct {
 	AMap2Set collections.WeilMap[string, jsonmap.Map] `json:"map2sets"`
 }
 
-func NewCollectionsContractState() *CollectionsContractState {
+func NewCollectionsContractState() (*CollectionsContractState, error) {
 	return &CollectionsContractState{
 		AString:  "a string",
 		AInt8:    int8(4),
 		AMap:     *collections.NewWeilMap[string, string](*collections.NewWeilId(0)),
 		AMap2Set: *collections.NewWeilMap[string, jsonmap.Map](*collections.NewWeilId(1)),
-	}
+	}, nil
 }
 
 // query

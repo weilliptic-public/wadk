@@ -2,6 +2,7 @@
 members = [
     "arithmetic",
     "aurora", 
+    "bigquery",
     "confluence", 
     "databricks",
     "datadog",

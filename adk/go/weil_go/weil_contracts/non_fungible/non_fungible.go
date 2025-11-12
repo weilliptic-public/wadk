@@ -8,10 +8,10 @@ import (
 
 	"unicode/utf8"
 
-	"github.com/lasarocamargos/jsonmap"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/collections"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/ledger"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/runtime"
+	"github.com/weilliptic-public/jsonmap"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/collections"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/ledger"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/runtime"
 )
 
 // Token represents the metadata for a non-fungible token.

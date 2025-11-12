@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/internal/constants"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/internal/constants"
 )
 
 // WeilError is the interface that all Weil error types must implement.

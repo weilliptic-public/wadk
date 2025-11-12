@@ -151,42 +151,6 @@ func (obj Tuple4[T, U, V, W]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v)
 }
 
-func (obj *Tuple4[T, U, V, W]) UnmarshalJSON(data []byte) error {
-	var v []interface{}
-
-	err := json.Unmarshal(data, &v)
-
-	if err != nil {
-		return err
-	}
-
-	if len(v) != 4 {
-		return fmt.Errorf("`types.Tuple4` unmarshalling expected 4 entries, instead got %d", len(v))
-	}
-
-	var f0 T
-	var f1 U
-	var f2 V
-	var f3 W
-
-	serializedF0, _ := json.Marshal(&v[0])
-	serializedF1, _ := json.Marshal(&v[1])
-	serializedF2, _ := json.Marshal(&v[2])
-	serializedF3, _ := json.Marshal(&v[3])
-
-	json.Unmarshal(serializedF0, &f0)
-	json.Unmarshal(serializedF1, &f1)
-	json.Unmarshal(serializedF2, &f2)
-	json.Unmarshal(serializedF3, &f3)
-
-	obj.F0 = f0
-	obj.F1 = f1
-	obj.F2 = f2
-	obj.F3 = f3
-
-	return nil
-}
-
 // UnmarshalJSON implements the json.Unmarshaler interface for Tuple4.
 // Expects a JSON array with exactly 4 elements.
 func (obj *Tuple4[T, U, V, W]) UnmarshalJSON(data []byte) error {

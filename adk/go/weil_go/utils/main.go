@@ -4,8 +4,8 @@ package utils
 import (
 	"encoding/json"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/errors"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/types"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/errors"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
 )
 
 // TryIntoResult attempts to convert a Result[string, WeilError] into a Result[T, string]

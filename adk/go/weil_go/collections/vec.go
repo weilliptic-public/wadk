@@ -3,8 +3,8 @@ package collections
 import (
 	"fmt"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/internal/constants"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/runtime"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/internal/constants"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/runtime"
 )
 
 // WeilVec is a vector (dynamic array) collection that can be persisted to the contract's state tree.

@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"unsafe"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/errors"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/internal/constants"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/types"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/errors"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/internal/constants"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
 )
 
 //go:wasmimport env get_state_and_args

@@ -5,10 +5,10 @@ package fungible
 import (
 	"fmt"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/collections"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/errors"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/ledger"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/runtime"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/collections"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/errors"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/ledger"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/runtime"
 )
 
 // FungibleToken represents a fungible token contract with name, symbol, total supply, and allowances.

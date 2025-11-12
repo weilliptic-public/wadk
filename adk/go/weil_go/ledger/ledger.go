@@ -5,8 +5,8 @@ package ledger
 import (
 	"encoding/json"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/errors"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/runtime"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/errors"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/runtime"
 )
 
 /*

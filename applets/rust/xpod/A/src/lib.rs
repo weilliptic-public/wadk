@@ -2,13 +2,13 @@ use serde::{Deserialize, Serialize};
 use weil_macros::{callback, constructor, query, smart_contract, xpod, WeilType};
 use weil_rs::runtime::Runtime;
 
-pub trait A {
+trait A {
     fn new() -> Result<Self, String>
     where
         Self: Sized;
-    fn greetings(&self, name: String, contract_addr: String) -> Result<String, String>;
+    async fn greetings(&self, name: String, contract_addr: String) -> Result<String, String>;
     fn x_greetings(&mut self, name: String, contract_addr: String) -> Result<(), String>;
-    fn x_greetings_callback(&mut self, resp: Result<String, String>);
+    fn x_greetings_callback(&mut self, xpod_id: String, result: Result<String, String>);
 }
 
 #[derive(Serialize, Deserialize, WeilType)]
@@ -30,7 +30,7 @@ impl A for AContractState {
     }
 
     #[query]
-    fn greetings(&self, name: String, contract_addr: String) -> Result<String, String> {
+    async fn greetings(&self, name: String, contract_addr: String) -> Result<String, String> {
         #[derive(Serialize)]
         struct Args {
             name: String,
@@ -66,7 +66,7 @@ impl A for AContractState {
     }
 
     #[callback(x_greetings)]
-    fn x_greetings_callback(&mut self, result: Result<String, String>) {
+    fn x_greetings_callback(&mut self, xpod_id: String, result: Result<String, String>) {
         Runtime::debug_log(&format!("xpod greetings result is {:?}", result));
     }
 }

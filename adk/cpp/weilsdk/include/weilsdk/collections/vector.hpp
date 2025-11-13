@@ -205,7 +205,7 @@ namespace collections {
        * @return A copy of the iterator before incrementing
        */
       iterator operator++(int) {
-        WeilVecIterator temp = *this;
+        iterator temp = *this;
         ++(*this);
         return temp;
       }
@@ -233,13 +233,13 @@ namespace collections {
      * @brief Gets an iterator pointing to the first element
      * @return Iterator pointing to the beginning of the vector
      */
-    iterator begin() const { return WeilVecIterator(this, 0); }
+    iterator begin() const { return iterator(this, 0); }
 
     /**
      * @brief Gets an iterator pointing past the last element
      * @return Iterator pointing to the end of the vector
      */
-    iterator end() const { return WeilVecIterator(this, len); }
+    iterator end() const { return iterator(this, len); }
 
     /**
      * @brief Serializes the vector metadata to JSON

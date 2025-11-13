@@ -12,6 +12,7 @@ members = [
     "servicenow",
     "snowflake",
     "sqs",
+    "stocks",
     "twilio",
 ]
 resolver = "2"
@@ -24,6 +25,7 @@ weil_contracts = { path = "../../adk/rust/weil_rs/weil_contracts" }
 anyhow = "1.0.98"
 base64 = "0.22"
 bincode = {version = "2.0.1", features = ["serde"]}
+chrono = { version = "0.4.41", default-features = false, features = ["alloc", "serde"]}
 getrandom = { version = "0.3", features = ["wasm_js"] }
 hex = "0.4.3"
 humantime = "2.2.0"

@@ -7,6 +7,5 @@
   "organization": "Weilliptic",
   "author": "Weilliptic",
   "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/salesforce.svg",
-  "description": "Salesforce is a leading cloud-based CRM platform that helps businesses manage customer relationships, sales, marketing, and service operations.",
-  "audit_log": true
+  "description": "Salesforce is a leading cloud-based CRM platform that helps businesses manage customer relationships, sales, marketing, and service operations."
 }

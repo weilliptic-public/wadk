@@ -7,6 +7,5 @@
   "author": "Weilliptic",
   "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/confluence.svg",
   "description": "Confluence is a team collaboration and knowledge management tool from Atlassian that helps organizations create, organize, and share content.",
-  "outcall": true,
-  "audit_log": true
+  "outcall": true
 }

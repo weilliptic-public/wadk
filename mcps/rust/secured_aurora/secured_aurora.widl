@@ -4,7 +4,7 @@ record AuroraDBConfig{
     endpoint: string
 }
 
-@secured("Engg::weil")
+@secured("engg::weil")
 interface SecuredAurora{
     config -> AuroraDBConfig;
 

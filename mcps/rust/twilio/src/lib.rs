@@ -1,6 +1,6 @@
-//! # Twilio MCP Server
+//! # Twilio Weilchain Applet
 //!
-//! A Model Context Protocol (MCP) applet that integrates with the
+//! A Model Context Protocol (MCP) server that integrates with the
 //! **Twilio REST API (2010-04-01)** to send SMS messages, place voice calls
 //! via TwiML, fetch recent messages, and retrieve account information.
 //!

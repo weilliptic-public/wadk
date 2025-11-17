@@ -1,4 +1,4 @@
-//! # Confluence MCP Server
+//! # Confluence Weilchain Applet
 //!
 //! This module provides an Model Context Protocol server for interacting with the Confluence Cloud REST v2 API.
 //! It allows you to manage pages, blog posts, comments, labels, and other Confluence resources

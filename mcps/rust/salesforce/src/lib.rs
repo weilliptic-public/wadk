@@ -1,6 +1,6 @@
 //! # Salesforce MCP Server (WeilChain Applet)
 //!
-//! This module implements a **Model Context Server (MCP)** contract exposing
+//! This module implements a **Model Context Server (MCP)** applet exposing
 //! high-level Salesforce CRM operations to on-chain agents. It supports:
 //!
 //! - CRUD via [`SalesforceCRM::create`], [`SalesforceCRM::read`],

@@ -1,0 +1,11 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "twilio.wasm",
+  "widl": "twilio.widl",
+  "config": "config.yaml",
+  "organization": "Weilliptic",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/twilio.svg",
+  "description": "Twilio is a cloud communications platform that lets developers add voice, SMS, video, WhatsApp, and authentication features to their applications using simple APIs.",
+  "outcall": true
+}

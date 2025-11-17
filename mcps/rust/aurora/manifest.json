@@ -3,7 +3,7 @@
   "bin": "aurora.wasm",
   "widl": "aurora.widl",
   "config": "config.yaml",
-  "context": "aurora_schema_hash.txt",
+  "context": "context.txt",
   "organization": "Weilliptic",
   "author": "Weilliptic",
   "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/aurora.svg",

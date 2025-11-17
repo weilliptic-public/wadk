@@ -8,7 +8,7 @@ fi
 
 cargo build --target wasm32-unknown-unknown --release
 
-echo Copying .wasm and .widl to $WASM_ROOT
-cp target/wasm32-unknown-unknown/release/*.wasm $WASM_ROOT 
-find . |grep -E '\.widl' | xargs -I{}   cp {} $WASM_ROOT
+echo Copying .wasm and .widl to $WASM_ROOT/rust
+cp target/wasm32-unknown-unknown/release/*.wasm $WASM_ROOT/rust
+find . |grep -E '\.widl' | xargs -I{}   cp {} $WASM_ROOT/rust
 

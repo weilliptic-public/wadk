@@ -2,12 +2,12 @@
 members = [
    "xpod/A",
    "xpod/B",
-   "nft/asciiart",
+   "non_fungible_token/asciiart",
    "xpod_2/first",
    "xpod_2/second",
    "counter/cross_counter",
    "counter/counter",
-   "ft/yutaka",
+   "fungible_token/yutaka",
 ]
 
 resolver = "2"

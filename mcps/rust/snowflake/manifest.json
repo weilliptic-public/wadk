@@ -3,7 +3,7 @@
   "bin": "snowflake.wasm",
   "widl": "snowflake.widl",
   "config": "snowflake.yaml",
-  "context": "tpcds_sf10tcl_v2.txt",
+  "context": "context.txt",
   "organization": "Weilliptic",
   "author": "Weilliptic",
   "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/snowflake.svg",

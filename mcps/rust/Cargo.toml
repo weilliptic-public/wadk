@@ -9,6 +9,7 @@ members = [
     "s3",
     "salesforce",
     "sap_hana",
+    "secured_aurora",
     "servicenow",
     "snowflake",
     "sqs",

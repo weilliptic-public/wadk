@@ -28,9 +28,8 @@
 //! tool functions for MCP-style function calling.
 
 use serde::{Deserialize, Serialize};
-use wadk_utils::mcp::common::cleanse_input_string;
 use weil_macros::{WeilType, constructor, query, secured, smart_contract};
-use weil_rs::{config::Secrets, db::DB, runtime::Runtime};
+use weil_rs::{config::Secrets, db::DB, runtime::Runtime, utils::cleanse_input_string};
 
 /// Configuration required to connect to an Aurora (PostgreSQL-compatible) database.
 ///

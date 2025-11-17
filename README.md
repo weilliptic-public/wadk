@@ -1,6 +1,6 @@
 # Weilliptic Applet Development Kit
 
-- adk
-- applet_vault
-- mcp_vault
+- adk - the actual Applet Development Kit
+- applets - example Applets
+- mcps - example MPCs
 

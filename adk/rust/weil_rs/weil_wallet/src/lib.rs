@@ -250,8 +250,7 @@ impl WeilContractClient {
                 "contract_address": args.contract_address,
                 "contract_method": args.contract_method,
                 "contract_input_bytes": args.contract_input_bytes,
-            },
-            "txn_ttl": DEFAULT_TRANSACTION_TTL
+            }
         });
 
         let json_payload_btreemap = value_to_btreemap(json_payload);
@@ -307,7 +306,6 @@ impl WeilContractClient {
                     contract_method: args.contract_method,
                     contract_input_bytes: args.contract_input_bytes,
                 },
-                txn_ttl: txn.txn_ttl,
             },
         };
 

@@ -23,7 +23,6 @@ pub(crate) struct Transaction {
     pub txn_header: TransactionHeader,
     pub verifier: Verifier,
     pub user_txn: UserTransaction,
-    pub txn_ttl: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1,4 +1,5 @@
 use crate::errors::InvalidContractIdError;
+use base32::{decode, Alphabet};
 use serde::{de::Visitor, Deserialize, Serialize};
 use std::{str::FromStr, sync::Arc};
 
@@ -15,17 +16,15 @@ impl ContractId {
     }
 
     pub(crate) fn pod_counter(&self) -> Result<i32, anyhow::Error> {
-        let decoded_bytes = hex::decode(self.0.as_ref())?;
-
-        if decoded_bytes.len() != 36 {
-            return Err(anyhow::Error::msg(format!(
-                "invalid contract-id: expected 36 bytes long, got {} bytes",
-                decoded_bytes.len()
-            )));
-        }
+        let Some(decoded_bytes) = decode(Alphabet::Rfc4648Lower { padding: false }, &self.0) else {
+            return Err(anyhow::Error::msg(
+                "unable to decode the applet id".to_string(),
+            ));
+        };
 
         // Extract the first 4 bytes as the u32 pod_id (WeilPodIdCounter)
         let pod_id_bytes: [u8; 4] = decoded_bytes[..4].try_into()?;
+
         let pod_id_counter = i32::from_be_bytes(pod_id_bytes);
 
         Ok(pod_id_counter)

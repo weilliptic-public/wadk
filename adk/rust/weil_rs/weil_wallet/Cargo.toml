@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+base32 = "0.5.1"
 anyhow.workspace = true
 async-compat.workspace = true
 async-stream.workspace = true

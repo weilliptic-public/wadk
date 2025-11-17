@@ -3,7 +3,7 @@
   "bin": "salesforce.wasm",
   "widl": "salesforce.widl",
   "config": "config.yaml",
-  "context": "schema.txt",
+  "context": "context.txt",
   "organization": "Weilliptic",
   "author": "Weilliptic",
   "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/salesforce.svg",

@@ -1,0 +1,10 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "sap_hana.wasm",
+  "widl": "sap_hana.widl",
+  "config": "config.yaml",
+  "organization": "Weilliptic",
+  "author": "Weilliptic",
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/sap_hana.svg",
+  "description": "SAP HANA is an in-memory computing platform that stores data in RAM instead of disk, enabling extremely fast data retrieval and real-time analytics."
+}

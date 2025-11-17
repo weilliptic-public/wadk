@@ -5,6 +5,6 @@
   "config": "config.yaml",
   "organization": "Weilliptic",
   "author": "Weilliptic",
-  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/sap_hana.svg",
-  "description": "SAP HANA is an in-memory computing platform that stores data in RAM instead of disk, enabling extremely fast data retrieval and real-time analytics."
+  "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/sap.svg",
+  "description": "SAP HANA is an in-memory, column-oriented database from SAP that provides real-time analytics and high-speed transaction processing."
 }

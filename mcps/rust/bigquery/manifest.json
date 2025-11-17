@@ -6,6 +6,6 @@
   "organization": "Weilliptic",
   "author": "Weilliptic",
   "logo": "https://raw.githubusercontent.com/weilliptic-public/mcp-logos/main/icons/bigquery.svg",
-  "description": "Google BigQuery is a fully managed, serverless cloud data warehouse designed for fast SQL-based analytics on very large datasets.",
+  "description": "BigQuery is Google Cloud’s fully managed, serverless data warehouse that enables fast SQL queries and large-scale analytics.",
   "outcall": true
 }

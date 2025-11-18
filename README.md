@@ -2,5 +2,5 @@
 
 - adk - the actual Applet Development Kit
 - applets - example Applets
-- mcps - example MPCs
+- mcps - example MCP server
 

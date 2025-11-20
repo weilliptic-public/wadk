@@ -1,11 +1,7 @@
-// Package runtime provides runtime functions and utilities for Weil contracts.
-// It includes functions for interacting with the contract state, making cross-contract calls,
-// accessing blockchain information, and managing collections.
 package runtime
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"runtime"
@@ -13,7 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/weilliptic-public/wadk/adk/go/weil_go/errors"
-	"github.com/weilliptic-public/wadk/adk/go/weil_go/internal/constants"
+	internal "github.com/weilliptic-public/wadk/adk/go/weil_go/internal"
 	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
 )
 
@@ -64,25 +60,21 @@ func read_bulk_collection(key int32) int32
 
 var WasmHostMemorySegment []byte // this is to keep data alive!: TODO - find a different way rather than this
 
-// StateArgsValue represents the state and arguments passed to a contract method.
 type StateArgsValue struct {
 	State string `json:"state"`
 	Args  string `json:"args"`
 }
 
-// StateResultValue represents the state and result value returned from a contract method.
 type StateResultValue struct {
 	State *types.Option[string] `json:"state"`
 	Value string                `json:"value"`
 }
 
-// WeilValue represents a value that may optionally include updated state.
 type WeilValue[T any, U any] struct {
 	State *types.Option[T] `json:"state"`
 	OkVal *U               `json:"ok_val"`
 }
 
-// NewWeilValueWithOkValue creates a new WeilValue with only a result value (no state update).
 func NewWeilValueWithOkValue[T any, U any](val *U) *WeilValue[T, U] {
 	return &WeilValue[T, U]{
 		State: types.NewNoneOption[T](),
@@ -90,7 +82,6 @@ func NewWeilValueWithOkValue[T any, U any](val *U) *WeilValue[T, U] {
 	}
 }
 
-// NewWeilValueWithStateAndOkValue creates a new WeilValue with both a state update and a result value.
 func NewWeilValueWithStateAndOkValue[T any, U any](state *T, val *U) *WeilValue[T, U] {
 	return &WeilValue[T, U]{
 		State: types.NewSomeOption[T](state),
@@ -99,37 +90,35 @@ func NewWeilValueWithStateAndOkValue[T any, U any](state *T, val *U) *WeilValue[
 }
 
 func (v *WeilValue[T, U]) raw() *StateResultValue {
-    // Create a buffer and encoder that doesn't escape HTML
-    var valBuf bytes.Buffer
-    valEncoder := json.NewEncoder(&valBuf)
-    valEncoder.SetEscapeHTML(false)
-    valEncoder.Encode(v.OkVal)
-    // Remove the trailing newline
-    valBytes := bytes.TrimSpace(valBuf.Bytes())
+	// Create a buffer and encoder that doesn't escape HTML
+	var valBuf bytes.Buffer
+	valEncoder := json.NewEncoder(&valBuf)
+	valEncoder.SetEscapeHTML(false)
+	valEncoder.Encode(v.OkVal)
+	// Remove the trailing newline
+	valBytes := bytes.TrimSpace(valBuf.Bytes())
 
-    if v.State.IsSomeResult() {
-        var stateBuf bytes.Buffer
-        stateEncoder := json.NewEncoder(&stateBuf)
-        stateEncoder.SetEscapeHTML(false)
-        stateEncoder.Encode(v.State.TrySomeOption())
-        // Remove the trailing newline
-        stateBytes := bytes.TrimSpace(stateBuf.Bytes())
-        s := string(stateBytes)
+	if v.State.IsSomeResult() {
+		var stateBuf bytes.Buffer
+		stateEncoder := json.NewEncoder(&stateBuf)
+		stateEncoder.SetEscapeHTML(false)
+		stateEncoder.Encode(v.State.TrySomeOption())
+		// Remove the trailing newline
+		stateBytes := bytes.TrimSpace(stateBuf.Bytes())
+		s := string(stateBytes)
 
-        return &StateResultValue{
-            State: types.NewSomeOption(&s),
-            Value: string(valBytes),
-        }
-    } else {
-        return &StateResultValue{
-            State: types.NewNoneOption[string](),
-            Value: string(valBytes),
-        }
-    }
+		return &StateResultValue{
+			State: types.NewSomeOption(&s),
+			Value: string(valBytes),
+		}
+	} else {
+		return &StateResultValue{
+			State: types.NewNoneOption[string](),
+			Value: string(valBytes),
+		}
+	}
 }
 
-// Allocate allocates memory for WASM host interface communication.
-// This is an internal function and should not be called directly by contract code.
 func Allocate(len uint) uintptr {
 	data := make([]byte, len)
 	ptr := uintptr(unsafe.Pointer(&data[0]))
@@ -137,109 +126,28 @@ func Allocate(len uint) uintptr {
 	return ptr
 }
 
-// Deallocate deallocates memory used for WASM host interface communication.
-// This is an internal function and should not be called directly by contract code.
 func Deallocate(ptr uintptr, len uint) {
 	WasmHostMemorySegment = make([]byte, 0) // remove the global reference to the underlying buffer so that it can be collected!
 }
 
-func getWasmPtr[T any](ptr *T) int32 {
-	return int32(uintptr(unsafe.Pointer(ptr)))
-}
-
-// Memory Layout for WASM memory shared between module and host
-// |ERROR ||LENGTH||VALID UTF-8 ENCODED STRING BYTES|
-// |1 BYTE||4 BYTE||LENGTH BYTES ...................|
-
-func read(ptr uintptr) *types.Result[[]byte, errors.WeilError] {
-	// TODO - reimplement it such that instead of extra allocation of buffer
-	// we take the ownership of the existing buffer from it's pointer and len.
-	lenBuffer := make([]byte, constants.WASM_MEMORY_SEGMENT_LENGTH_BYTES_SIZE)
-
-	isError := *(*int8)(unsafe.Pointer(ptr))
-	for i := 0; i < 4; i++ {
-		lenBuffer[i] = *(*byte)(unsafe.Pointer(ptr + 1 + uintptr(i)))
-	}
-
-	length := binary.LittleEndian.Uint32(lenBuffer)
-	buf := make([]byte, length)
-
-	for i := 0; i < int(length); i++ {
-		buf[i] = *(*byte)(unsafe.Pointer(ptr + 1 + 4 + uintptr(i)))
-	}
-
-	switch isError {
-	case -1:
-		var err errors.WeilError = errors.NewInvalidWasmModuleError("WASM Size Limit Reached")
-		return types.NewErrResult[[]byte, errors.WeilError](&err)
-
-	case -2:
-		var err errors.WeilError = errors.NewInvalidWasmModuleError("invalid __new function export in module")
-		return types.NewErrResult[[]byte, errors.WeilError](&err)
-
-	case -3:
-		var err errors.WeilError = errors.NewInvalidWasmModuleError("invalid __free function export in module")
-		return types.NewErrResult[[]byte, errors.WeilError](&err)
-
-	case 0:
-		return types.NewOkResult[[]byte, errors.WeilError](&buf)
-
-	case 1:
-		err := errors.WasmHostInterfaceErrorFromBytes(buf)
-		return types.NewErrResult[[]byte, errors.WeilError](&err)
-
-	default:
-		panic(constants.UNREACHABLE)
-	}
-}
-
-func lengthPrefixedBytesFromString(payload []byte, isError byte) []byte {
-	len := uint32(len(payload))
-	var buffer []byte
-
-	buffer = append(buffer, isError)
-	buffer = binary.LittleEndian.AppendUint32(buffer, len)
-	buffer = append(buffer, payload...)
-
-	return buffer
-}
-
-func lengthPrefixedBytesFromResult[T any](result *types.Result[T, errors.WeilError]) []byte {
-	var serializedVal []byte
-	var isError uint8
-
-	if result.IsOkResult() {
-		val := result.TryOkResult()
-		serializedVal, _ = json.Marshal(val)
-		
-		isError = 0
-	} else {
-		serializedVal = errors.MarshalJSONWasmHostInterfaceError(*result.TryErrResult())
-		isError = 1
-	}
-
-	return lengthPrefixedBytesFromString(serializedVal, isError)
-}
-
 // Below functions are the Go-style wrapper functions over raw runtime functions
 
-// WriteCollectionEntry adds or overwrites an entry in the collection with the given key and value.
+// Adds/Overwrites an entry to the collection
 func WriteCollectionEntry[V any](key []byte, val *V) {
-	lfKey := lengthPrefixedBytesFromString(key, 0)
-	lfVal := lengthPrefixedBytesFromResult(types.NewOkResult[V, errors.WeilError](val))
-	write_collection(getWasmPtr(&lfKey[0]), getWasmPtr(&lfVal[0]))
+	lfKey := internal.LengthPrefixedBytesFromString(key, 0)
+	lfVal := internal.LengthPrefixedBytesFromResult(types.NewOkResult[V, errors.WeilError](val))
+	write_collection(internal.GetWasmPtr(&lfKey[0]), internal.GetWasmPtr(&lfVal[0]))
 
 	runtime.KeepAlive(lfKey)
 	runtime.KeepAlive(lfVal)
 }
 
-// DeleteCollectionEntry deletes and returns an entry from the collection.
-// Returns the deleted value if it existed, or nil if the key was not found.
+// Deletes and returns an entry from the collection.
 func DeleteCollectionEntry[V any](key []byte) (*V, error) {
-	lfKey := lengthPrefixedBytesFromString(key, 0)
-	valPtr := (uintptr)(delete_collection(getWasmPtr(&lfKey[0])))
+	lfKey := internal.LengthPrefixedBytesFromString(key, 0)
+	valPtr := (uintptr)(delete_collection(internal.GetWasmPtr(&lfKey[0])))
 	runtime.KeepAlive(lfKey)
-	result := read(valPtr)
+	result := internal.Read(valPtr)
 
 	if result.IsErrResult() {
 		errResult := result.TryErrResult()
@@ -261,13 +169,11 @@ func DeleteCollectionEntry[V any](key []byte) (*V, error) {
 	return &val, nil
 }
 
-// ReadCollection reads an entry from the collection with the given key.
-// Returns an error if the key is not found.
 func ReadCollection[V any](key []byte) (*V, error) {
-	lfKey := lengthPrefixedBytesFromString(key, 0)
-	valPtr := (uintptr)(read_collection(getWasmPtr(&lfKey[0])))
+	lfKey := internal.LengthPrefixedBytesFromString(key, 0)
+	valPtr := (uintptr)(read_collection(internal.GetWasmPtr(&lfKey[0])))
 	runtime.KeepAlive(lfKey)
-	result := read(valPtr)
+	result := internal.Read(valPtr)
 
 	if result.IsErrResult() {
 		errResult := result.TryErrResult()
@@ -288,13 +194,11 @@ func ReadCollection[V any](key []byte) (*V, error) {
 	return &val, nil
 }
 
-// ReadBulkCollection reads all entries from the collection that have keys with the given prefix.
-// Returns an error if no entries are found with the prefix.
 func ReadBulkCollection[V any](prefix []byte) (*V, error) {
-	lfKey := lengthPrefixedBytesFromString(prefix, 0)
-	valPtr := (uintptr)(read_bulk_collection(getWasmPtr(&lfKey[0])))
+	lfKey := internal.LengthPrefixedBytesFromString(prefix, 0)
+	valPtr := (uintptr)(read_bulk_collection(internal.GetWasmPtr(&lfKey[0])))
 	runtime.KeepAlive(lfKey)
-	result := read(valPtr)
+	result := internal.Read(valPtr)
 
 	if result.IsErrResult() {
 		errResult := result.TryErrResult()
@@ -314,11 +218,9 @@ func ReadBulkCollection[V any](prefix []byte) (*V, error) {
 	return &val, nil
 }
 
-// State retrieves the current contract state.
-// The state is deserialized into the type parameter T.
 func State[T any]() *T {
 	dataPtr := (uintptr)(get_state_and_args())
-	dataJSON := *read(dataPtr).TryOkResult()
+	dataJSON := *internal.Read(dataPtr).TryOkResult()
 
 	var stateArgs StateArgsValue
 
@@ -331,12 +233,9 @@ func State[T any]() *T {
 	return &state
 }
 
-// Args retrieves the arguments passed to the current contract method call.
-// The arguments are deserialized into the type parameter T.
-// Returns an error if deserialization fails.
 func Args[T any]() (*T, error) {
 	dataPtr := (uintptr)(get_state_and_args())
-	dataJSON := *read(dataPtr).TryOkResult()
+	dataJSON := *internal.Read(dataPtr).TryOkResult()
 
 	var stateArgs StateArgsValue
 
@@ -353,12 +252,9 @@ func Args[T any]() (*T, error) {
 	}
 }
 
-// StateAndArgs retrieves both the current contract state and the method arguments.
-// The state is deserialized into type T and arguments into type U.
-// Returns an error if argument deserialization fails (state is always returned).
 func StateAndArgs[T any, U any]() (*T, *U, error) {
 	dataPtr := (uintptr)(get_state_and_args())
-	dataJSON := *read(dataPtr).TryOkResult()
+	dataJSON := *internal.Read(dataPtr).TryOkResult()
 
 	var stateArgs StateArgsValue
 
@@ -377,8 +273,6 @@ func StateAndArgs[T any, U any]() (*T, *U, error) {
 	}
 }
 
-// SetResult sets the result of the current contract method call.
-// This should be called at the end of a contract method to return a value.
 func SetResult[T any](result *types.Result[T, errors.WeilError]) {
 	var final_result *types.Result[WeilValue[interface{}, T], errors.WeilError]
 
@@ -394,8 +288,6 @@ func SetResult[T any](result *types.Result[T, errors.WeilError]) {
 	SetStateAndResult(final_result)
 }
 
-// SetStateAndResult sets both the updated state and result of the current contract method call.
-// This should be called at the end of a contract method to return a value and update state.
 func SetStateAndResult[T any, U any](result *types.Result[WeilValue[T, U], errors.WeilError]) {
 	var final_result *types.Result[StateResultValue, errors.WeilError]
 
@@ -407,55 +299,50 @@ func SetStateAndResult[T any, U any](result *types.Result[WeilValue[T, U], error
 		final_result = types.NewErrResult[StateResultValue, errors.WeilError](err)
 	}
 
-	serializedResult := lengthPrefixedBytesFromResult(final_result)
-	set_state_and_result(getWasmPtr(&serializedResult[0]))
+	serializedResult := internal.LengthPrefixedBytesFromResult(final_result)
+	set_state_and_result(internal.GetWasmPtr(&serializedResult[0]))
 	runtime.KeepAlive(serializedResult)
 }
 
-// ContractId returns the ID of the current contract.
 func ContractId() string {
 	dataPtr := (uintptr)(get_contract_id())
 
-	dataRaw := *read(dataPtr).TryOkResult()
+	dataRaw := *internal.Read(dataPtr).TryOkResult()
 	var data string = string(dataRaw)
 
 	return data
 }
 
-// LedgerContractId returns the ID of the ledger contract.
 func LedgerContractId() string {
 	dataPtr := (uintptr)(get_ledger_contract_id())
 
-	dataRaw := *read(dataPtr).TryOkResult()
+	dataRaw := *internal.Read(dataPtr).TryOkResult()
 	var data string = string(dataRaw)
 
 	return data
 }
 
-// Sender returns the address of the account that initiated the current transaction.
 func Sender() string {
 	dataPtr := (uintptr)(get_sender())
 
-	dataRaw := *read(dataPtr).TryOkResult()
+	dataRaw := *internal.Read(dataPtr).TryOkResult()
 	var data string = string(dataRaw)
 	return data
 }
 
-// Initiator returns the address of the account that instantiated the contract.
 func Initiator() string {
 	dataPtr := (uintptr)(get_txn_instantiator_addr())
 
-	dataRaw := *read(dataPtr).TryOkResult()
+	dataRaw := *internal.Read(dataPtr).TryOkResult()
 	var data string = string(dataRaw)
 
 	return data
 }
 
-// BlockHeight returns the height of the current block.
 func BlockHeight() uint32 {
 	dataPtr := (uintptr)(get_block_height())
 
-	dataRaw := *read(dataPtr).TryOkResult()
+	dataRaw := *internal.Read(dataPtr).TryOkResult()
 	dataStr := string(dataRaw)
 	data, err := strconv.ParseInt(dataStr, 10, 32)
 	if err != nil {
@@ -465,19 +352,15 @@ func BlockHeight() uint32 {
 	return uint32(data)
 }
 
-// BlockTimestamp returns the timestamp of the current block as a string.
 func BlockTimestamp() string {
 	dataPtr := (uintptr)(get_block_timestamp())
 
-	dataRaw := *read(dataPtr).TryOkResult()
+	dataRaw := *internal.Read(dataPtr).TryOkResult()
 	var data string = string(dataRaw)
 
 	return data
 }
 
-// CallContract calls a method on another contract and returns the result.
-// The result is deserialized into type T.
-// Returns an error if the call fails or deserialization fails.
 func CallContract[T any](contractId string, methodName string, methodArgs string) (*T, error) {
 	type CrossContractCallArgs struct {
 		ContractId string `json:"id"`
@@ -491,10 +374,10 @@ func CallContract[T any](contractId string, methodName string, methodArgs string
 		MethodArgs: methodArgs,
 	}
 
-	lfArgs := lengthPrefixedBytesFromResult(types.NewOkResult[CrossContractCallArgs, errors.WeilError](&args))
-	resultPtr := (uintptr)(call_contract(getWasmPtr(&lfArgs[0])))
+	lfArgs := internal.LengthPrefixedBytesFromResult(types.NewOkResult[CrossContractCallArgs, errors.WeilError](&args))
+	resultPtr := (uintptr)(call_contract(internal.GetWasmPtr(&lfArgs[0])))
 	runtime.KeepAlive(lfArgs)
-	parsedResult := read(resultPtr)
+	parsedResult := internal.Read(resultPtr)
 
 	if parsedResult.IsErrResult() {
 		return nil, *parsedResult.TryErrResult()
@@ -511,8 +394,6 @@ func CallContract[T any](contractId string, methodName string, methodArgs string
 	return &result, nil
 }
 
-// CallXpodContract calls a method on an Xpod contract and returns the Xpod ID.
-// Returns an error if the call fails.
 func CallXpodContract(contractId string, methodName string, methodArgs string) (string, error) {
 	type CrossContractCallArgs struct {
 		ContractId string `json:"id"`
@@ -526,10 +407,10 @@ func CallXpodContract(contractId string, methodName string, methodArgs string) (
 		MethodArgs: methodArgs,
 	}
 
-	lfArgs := lengthPrefixedBytesFromResult(types.NewOkResult[CrossContractCallArgs, errors.WeilError](&args))
-	resultPtr := (uintptr)(call_xpod_contract(getWasmPtr(&lfArgs[0])))
+	lfArgs := internal.LengthPrefixedBytesFromResult(types.NewOkResult[CrossContractCallArgs, errors.WeilError](&args))
+	resultPtr := (uintptr)(call_xpod_contract(internal.GetWasmPtr(&lfArgs[0])))
 	runtime.KeepAlive(lfArgs)
-	parsedResult := read(resultPtr)
+	parsedResult := internal.Read(resultPtr)
 
 	if parsedResult.IsErrResult() {
 		return "", *parsedResult.TryErrResult()
@@ -541,10 +422,9 @@ func CallXpodContract(contractId string, methodName string, methodArgs string) (
 	return xpod_id, nil
 }
 
-// DebugLog logs a debug message. This is useful for debugging during development.
 func DebugLog(log string) {
-	lfLog := lengthPrefixedBytesFromString([]byte(log), 0)
-	debug_log(getWasmPtr(&lfLog[0]))
+	lfLog := internal.LengthPrefixedBytesFromString([]byte(log), 0)
+	debug_log(internal.GetWasmPtr(&lfLog[0]))
 
 	runtime.KeepAlive(lfLog)
 }

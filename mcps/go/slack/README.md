@@ -17,7 +17,7 @@ The Slack MCP exposes a simple surface for listing users and channels, fetching 
 ## Deployment
 Build the contract and deploy it with your token:
 ```
-Weilliptic$$$> deploy --widl-file <path>/slack.widl --file-path <path>/slack.wasm --config-file <path>/slack.yaml -w <Pod Id to deploy> -l
+Weilliptic$$$> deploy --widl-file <path>/slack.widl --file-path <path>/slack.wasm --config-file <path>/slack.yaml -w <Pod Id to deploy> 
 ```
 
 ## Prompt Examples

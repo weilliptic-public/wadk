@@ -1,0 +1,3 @@
+interface BaseAgent {
+    query func run_task(task_prompt: string) -> result<string,string>
+}

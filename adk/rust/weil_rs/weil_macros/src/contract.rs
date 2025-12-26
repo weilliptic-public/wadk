@@ -738,8 +738,8 @@ pub fn impl_smart_contract_secured_macro(
 
     let stream = quote! {
         {
-            let identity_addr = weil_rs::runtime::Runtime::contract_id_for_name(#arg_str);
-
+            let identity_addr = weil_rs::runtime::Runtime::contract_id_for_name(#arg_str).map_err(|err| err.to_string())?;
+            
             #[derive(Serialize)]
             struct IdentityArgs {
                 key: String,

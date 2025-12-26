@@ -1,0 +1,4 @@
+interface MultiAgent {
+    query func run_tasks(task_descriptions: list<string>) -> result<string, tuple<string, list<string>>>;
+    mutate func update_resume_task_index(index: u32, previous_task_result: option<string>)
+}

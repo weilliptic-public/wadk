@@ -461,7 +461,8 @@ async fn get_imfs_file_content(file_descriptor: String) -> Result<String, String
     let args = Args { file_descriptor };
 
     // this will get the address of the imfs deployed on this pod
-    let contract_addr = Runtime::contract_id_for_name("imfs");
+    // SAFETY: `imfs` is a systemic applet
+    let contract_addr = Runtime::contract_id_for_name("imfs").unwrap();
 
     let file_content = Runtime::call_contract::<String>(
         contract_addr,                               //address of imfs

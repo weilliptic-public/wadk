@@ -564,7 +564,8 @@ impl AwsS3 for AwsS3ContractState {
         let args = Args { file_descriptor };
 
         // this will get the address of the imfs deployed on this pod
-        let contract_addr = Runtime::contract_id_for_name("imfs");
+        // SAFETY: `imfs` is a systemic applet
+        let contract_addr = Runtime::contract_id_for_name("imfs").unwrap();
 
         let file_content = Runtime::call_contract::<String>(
             contract_addr,                               //address of imfs

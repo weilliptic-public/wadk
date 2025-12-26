@@ -1,0 +1,14 @@
+[package]
+name = "base_agent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+weil_rs = { workspace = true }
+weil_macros = { workspace = true }
+anyhow = "1.0.97"
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = { version = "1.0.140", features = ["raw_value"] }
+
+[lib]
+crate-type = ["cdylib"]

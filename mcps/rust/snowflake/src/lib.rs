@@ -551,7 +551,8 @@ impl Snowflake for SnowflakeContractState {
             content: serde_json::to_string(&result_vec).unwrap(),
         };
 
-        let contract_addr = Runtime::contract_id_for_name("imfs");
+        // SAFETY:  `imfs` is a systemic applet
+        let contract_addr = Runtime::contract_id_for_name("imfs").unwrap();
 
         let file_descriptor = Runtime::call_contract::<String>(
             contract_addr,

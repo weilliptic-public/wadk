@@ -430,13 +430,15 @@ impl Runtime {
     }
 
     /// Resolve an applet name to its contract identifier.
-    pub fn contract_id_for_name(name: &str) -> String {
+    pub fn contract_id_for_name(name: &str) -> Result<String, String> {
         let raw_name = get_length_prefixed_bytes_from_string(name, 0);
         // SAFETY: `raw_name` is a valid length-prefixed buffer; host returns a pointer to the ID string.
         let ptr = unsafe { applet_addr_for_name(raw_name.as_ptr() as _) };
-        let applet_id = read_bytes_from_memory(ptr).unwrap();
+        let Ok(applet_id) = read_bytes_from_memory(ptr) else {
+            return Err(format!("Failed to resolve applet name '{}'", name));
+        };
 
-        applet_id
+        Ok(applet_id)
     }
 
     /// Returns meta details for the provided applet id.
@@ -461,7 +463,8 @@ impl Runtime {
 
     /// Returns `Ledger` contract identifier.
     pub(crate) fn ledger_contract_id() -> String {
-        Runtime::contract_id_for_name("Ledger")
+        // SAFETY: `Ledger` is a systemic applet
+        Runtime::contract_id_for_name("Ledger").unwrap()
     }
 
     /// Returns the current **block height** (deterministic across nodes in a pod).

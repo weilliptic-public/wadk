@@ -1,0 +1,7 @@
+{
+  "applet_manifest_version": 1,
+  "bin": "multi_agent.wasm",
+  "widl": "multi_agent.widl",
+  "organization": "Weilliptic",
+  "author": "Weilliptic"
+}

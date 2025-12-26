@@ -219,7 +219,8 @@ impl SecuredAurora for SecuredAuroraContractState {
                 };
 
                 // Resolve the IMFS contract address by name and call `write`.
-                let contract_addr = Runtime::contract_id_for_name("imfs");
+                // SAFETY:  `imfs` is a systemic applet
+                let contract_addr = Runtime::contract_id_for_name("imfs").unwrap();
 
                 let file_descriptor = Runtime::call_contract::<String>(
                     contract_addr,                               // address of imfs

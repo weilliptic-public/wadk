@@ -8,6 +8,9 @@ members = [
    "counter/cross_counter",
    "counter/counter",
    "fungible_token/yutaka",
+   "base_agent",
+   "multi_agent",
+   "step_agent"
 ]
 
 resolver = "2"

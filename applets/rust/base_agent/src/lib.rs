@@ -23,6 +23,11 @@ pub struct BaseAgentContractState {
 
 #[smart_contract]
 impl BaseAgent for BaseAgentContractState {
+    /// Creates a new BaseAgent contract instance
+    /// 
+    /// # Arguments
+    /// * `description` - Description of the base agent's purpose
+    /// * `mcp_contract_address` - Contract address for the MCP (Model Context Protocol) service
     #[constructor]
     fn new(description: String, mcp_contract_address: String) -> Result<Self, String>
     where
@@ -36,6 +41,13 @@ impl BaseAgent for BaseAgentContractState {
         Ok(base_agent)
     }
 
+    /// Executes a task based on the provided prompt using the configured AI model
+    /// 
+    /// # Arguments
+    /// * `task_prompt` - The prompt describing the task to be executed
+    /// 
+    /// # Returns
+    /// The result of the task execution as a string
     #[query]
     async fn run_task(&self, task_prompt: String) -> Result<String, String> {
         // safe to unwrap.

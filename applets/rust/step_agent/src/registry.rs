@@ -9,6 +9,10 @@ pub struct FlowRegistry {
 }
 
 impl FlowRegistry {
+    /// Creates a new FlowRegistry instance
+    /// 
+    /// # Arguments
+    /// * `contract_id` - The contract ID of the flow registry service
     pub fn new(contract_id: String) -> Self {
         FlowRegistry {
             contract_id,
@@ -17,6 +21,14 @@ impl FlowRegistry {
 }
 
 impl FlowRegistry {
+    /// Retrieves a stored execution context from the registry
+    /// 
+    /// # Arguments
+    /// * `namespace` - The namespace where the context is stored
+    /// * `flow_id` - The unique identifier of the flow
+    /// 
+    /// # Returns
+    /// An optional JSON string representing the execution context
     pub fn get_execution_context(&self, namespace: String, flow_id: String) -> Result<Option<String>> {
 
         #[derive(Debug, Serialize)]
@@ -36,6 +48,12 @@ impl FlowRegistry {
         Ok(resp)
     }
 
+    /// Stores an execution context in the registry
+    /// 
+    /// # Arguments
+    /// * `namespace` - The namespace where the context should be stored
+    /// * `flow_id` - The unique identifier of the flow
+    /// * `ctx` - The JSON string representation of the execution context
     pub fn persist_execution_context(&self, namespace: String, flow_id: String, ctx: String) -> Result<()> {
 
         #[derive(Debug, Serialize)]

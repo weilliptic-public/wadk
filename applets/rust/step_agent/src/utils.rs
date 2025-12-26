@@ -13,6 +13,10 @@ pub enum StateEnum {
 }
 
 impl StateEnum {
+    /// Converts a StateEnum variant into a boxed State trait object
+    /// 
+    /// # Returns
+    /// A boxed State trait object corresponding to the enum variant
     pub fn to_boxed_state(&self) -> Box<dyn State> {
         match self {
             StateEnum::StateA => Box::new(StateA),
@@ -27,6 +31,11 @@ impl StateEnum {
 pub mod handlers_serde {
     use super::*;
 
+    /// Serializes a BTreeMap of State handlers by converting them to StateEnum variants
+    /// 
+    /// # Arguments
+    /// * `handlers` - The BTreeMap of Step to State handlers
+    /// * `serializer` - The serializer to use
     pub fn serialize<S>(
         handlers: &BTreeMap<Step, Box<dyn State>>,
         serializer: S,
@@ -48,6 +57,13 @@ pub mod handlers_serde {
         map.serialize(serializer)
     }
 
+    /// Deserializes StateEnum variants back into a BTreeMap of State handlers
+    /// 
+    /// # Arguments
+    /// * `deserializer` - The deserializer to use
+    /// 
+    /// # Returns
+    /// A BTreeMap of Step to State handlers
     pub fn deserialize<'de, D>(
         deserializer: D,
     ) -> Result<BTreeMap<Step, Box<dyn State>>, D::Error>

@@ -11,6 +11,7 @@ async fn main(){
     // replace with the actual contract id of the deployed StepAgent contract
     let step_agent_contract_id = "aaaaaas2errvd2ht245qxh5cvs7j5jksnyrxmigbdut6fkbz7s7zfzvpvm"
         .parse::<ContractId>().unwrap();
+    // replace with the actual location of your private key file
     let private_key = PrivateKey::from_file("./private_key.wc").unwrap();
     let wallet = Wallet::new(private_key.clone()).unwrap();
     let step_client = StepAgentClient::new(step_agent_contract_id, wallet.clone()).unwrap();

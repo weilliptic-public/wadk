@@ -29,6 +29,11 @@ pub struct MultiAgentContractState {
 
 #[smart_contract]
 impl MultiAgent for MultiAgentContractState {
+    /// Creates a new MultiAgent contract instance
+    /// 
+    /// # Arguments
+    /// * `description` - Description of the multi-agent system's purpose
+    /// * `agent_addresses` - List of contract addresses for individual agents
     #[constructor]
     fn new(description: String, agent_addresses: Vec<String>) -> Result<Self, String>
     where
@@ -44,6 +49,13 @@ impl MultiAgent for MultiAgentContractState {
         Ok(multi_agent)
     }
 
+    /// Executes multiple tasks across different agents
+    /// 
+    /// # Arguments
+    /// * `task_descriptions` - List of task descriptions to be executed
+    /// 
+    /// # Returns
+    /// The aggregated result of all task executions
     #[query]
     async fn run_tasks(&self, task_descriptions: Vec<String>) -> Result<String, String> {
         // safe to unwrap here.
@@ -63,6 +75,11 @@ impl MultiAgent for MultiAgentContractState {
         Ok(resp)
     }
 
+    /// Updates the resume task index to allow continuing from a specific task
+    /// 
+    /// # Arguments
+    /// * `index` - The task index from which to resume execution
+    /// * `previous_task_result` - Optional result from the previous task execution
     #[mutate]
     async fn update_resume_task_index(&mut self, index: u32, previous_task_result: Option<String>) {
         self.resume_task_index = index;

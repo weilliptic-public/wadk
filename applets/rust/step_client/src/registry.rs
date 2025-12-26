@@ -7,12 +7,25 @@ pub struct FlowRegistryClient {
 }
 
 impl FlowRegistryClient {
+    /// Creates a new FlowRegistryClient instance
+    /// 
+    /// # Arguments
+    /// * `contract_id` - The contract ID of the flow registry
+    /// * `wallet` - The wallet to use for signing transactions
     pub fn new(contract_id: ContractId, wallet: Wallet) -> Result<Self, anyhow::Error> {
         Ok(FlowRegistryClient {
             client: WeilClient::new(wallet, None)?.to_contract_client(contract_id),
         })
     }
 
+    /// Retrieves a stored execution context from the flow registry
+    /// 
+    /// # Arguments
+    /// * `namespace` - The namespace where the context is stored
+    /// * `flow_id` - The unique identifier of the flow
+    /// 
+    /// # Returns
+    /// An optional JSON string representing the execution context
     pub async fn get_execution_context(&self, namespace: String, flow_id: String) -> Result<Option<String>, anyhow::Error> {
         #[derive(Serialize)]
         struct Args {
@@ -32,6 +45,12 @@ impl FlowRegistryClient {
         Ok(result)
     }
 
+    /// Stores an execution context in the flow registry
+    /// 
+    /// # Arguments
+    /// * `namespace` - The namespace where the context should be stored
+    /// * `flow_id` - The unique identifier of the flow
+    /// * `ctx` - The JSON string representation of the execution context
     pub async fn persist_execution_context(&self, namespace: String, flow_id: String, ctx: String) -> Result<(), anyhow::Error> {
         #[derive(Serialize)]
         struct Args {
@@ -51,6 +70,11 @@ impl FlowRegistryClient {
         Ok(result)
     }
 
+    /// Deletes a stored execution context from the flow registry
+    /// 
+    /// # Arguments
+    /// * `namespace` - The namespace where the context is stored
+    /// * `flow_id` - The unique identifier of the flow to delete
     pub async fn delete_context(&self, namespace: String, flow_id: String) -> Result<(), anyhow::Error> {
         #[derive(Serialize)]
         struct Args {

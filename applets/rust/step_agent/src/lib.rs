@@ -94,6 +94,10 @@ pub(crate) struct AgentState{
 
 #[smart_contract]
 impl StepAgent for StepAgentContractState {
+    /// Creates a new StepAgent contract instance with registered state handlers
+    /// 
+    /// # Arguments
+    /// * `mcp_contract_addresses` - List of MCP contract addresses for AI model access
     #[constructor]
     fn new(mcp_contract_addresses: Vec<String>) -> Result<Self, String>
     where
@@ -114,6 +118,15 @@ impl StepAgent for StepAgentContractState {
     }
 
 
+    /// Executes a multi-step workflow starting from the current execution context
+    /// 
+    /// # Arguments
+    /// * `namespace` - The namespace for organizing workflows
+    /// * `flow_id` - Unique identifier for this workflow execution
+    /// * `execution_context` - The current execution context containing state and progress
+    /// 
+    /// # Returns
+    /// A tuple of (RunStatus, ExecutionContext) indicating the workflow status and updated context
     #[query]
     async fn run(&self, namespace: String, flow_id: String, execution_context: ExecutionContext) -> (RunStatus, ExecutionContext) {
 
@@ -162,6 +175,14 @@ impl StepAgent for StepAgentContractState {
         }
     }
 
+    /// Resumes a previously paused workflow by loading its execution context from the registry
+    /// 
+    /// # Arguments
+    /// * `namespace` - The namespace where the workflow is stored
+    /// * `flow_id` - The unique identifier of the workflow to resume
+    /// 
+    /// # Returns
+    /// A tuple of (RunStatus, ExecutionContext) indicating the workflow status and current context
     #[query]
     async fn resume(&self, namespace: String, flow_id: String) -> (RunStatus, ExecutionContext) {
         let flow_registry_address = Runtime::contract_id_for_name(FLOW_REGISTRY_NAME).unwrap();
@@ -182,14 +203,24 @@ impl StepAgent for StepAgentContractState {
 pub(crate) struct StateA;
 impl State for StateA {
 
+    /// Returns the step identifier for this state
     fn name(&self) -> Step {
         Step::A
     }
 
+    /// Returns the next step to transition to after this state completes
     fn next_step(&self) -> Option<Step> {
         Some(Step::B)
     }
 
+    /// Executes the work for Step A, processing any prompts and transitioning state
+    /// 
+    /// # Arguments
+    /// * `mcp_addresses` - List of MCP contract addresses for AI model access
+    /// * `ctx` - The current execution context
+    /// 
+    /// # Returns
+    /// A tuple of (ExecutionContext, RunStatus) with updated context and execution status
     fn do_work(&self, mcp_addresses: Vec<String>, mut ctx: ExecutionContext) -> (ExecutionContext, RunStatus) {
 
        if let Some(prompt) = ctx.prompt_plan.prompts.get(&self.name()){
@@ -217,14 +248,24 @@ impl State for StateA {
 
 pub(crate) struct StateB;
 impl State for StateB {
+    /// Returns the step identifier for this state
     fn name(&self) -> Step {
         Step::B
     }
 
+    /// Returns the next step to transition to after this state completes
     fn next_step(&self) -> Option<Step> {
         Some(Step::C)
     }
 
+    /// Executes the work for Step B, processing any prompts and transitioning state
+    /// 
+    /// # Arguments
+    /// * `mcp_addresses` - List of MCP contract addresses for AI model access
+    /// * `ctx` - The current execution context
+    /// 
+    /// # Returns
+    /// A tuple of (ExecutionContext, RunStatus) with updated context and execution status
     fn do_work(&self, mcp_addresses: Vec<String>, mut ctx: ExecutionContext) -> (ExecutionContext, RunStatus) {
 
        if let Some(prompt) = ctx.prompt_plan.prompts.get(&self.name()){
@@ -255,13 +296,23 @@ impl State for StateB {
 pub(crate) struct StateC;
 impl State for StateC {
 
+    /// Returns the step identifier for this state
     fn name(&self) -> Step {
         Step::C
     }
+    /// Returns the next step to transition to after this state completes
     fn next_step(&self) -> Option<Step> {
          Some(Step::D)
     }
 
+    /// Executes the work for Step C, processing any prompts and transitioning state
+    /// 
+    /// # Arguments
+    /// * `mcp_addresses` - List of MCP contract addresses for AI model access
+    /// * `ctx` - The current execution context
+    /// 
+    /// # Returns
+    /// A tuple of (ExecutionContext, RunStatus) with updated context and execution status
     fn do_work(&self, mcp_addresses: Vec<String>, mut ctx: ExecutionContext) -> (ExecutionContext, RunStatus) {
 
        if let Some(prompt) = ctx.prompt_plan.prompts.get(&self.name()){
@@ -291,13 +342,23 @@ impl State for StateC {
 pub(crate) struct StateD;
 impl State for StateD {
 
+    /// Returns the step identifier for this state
     fn name(&self) -> Step {
         Step::D
     }
+    /// Returns the next step to transition to after this state completes
     fn next_step(&self) -> Option<Step> {
        Some(Step::E)
     }
 
+    /// Executes the work for Step D, processing any prompts and transitioning state
+    /// 
+    /// # Arguments
+    /// * `mcp_addresses` - List of MCP contract addresses for AI model access
+    /// * `ctx` - The current execution context
+    /// 
+    /// # Returns
+    /// A tuple of (ExecutionContext, RunStatus) with updated context and execution status
     fn do_work(&self, mcp_addresses: Vec<String>, mut ctx: ExecutionContext) -> (ExecutionContext, RunStatus) {
 
        if let Some(prompt) = ctx.prompt_plan.prompts.get(&self.name()){
@@ -326,13 +387,23 @@ impl State for StateD {
 pub(crate) struct StateE;
 impl State for StateE {
 
+    /// Returns the step identifier for this state
     fn name(&self) -> Step {
         Step::E
     }
+    /// Returns None as this is the terminal step
     fn next_step(&self) -> Option<Step> {
         None
     }
 
+    /// Executes the work for Step E (final step), processing any prompts and marking completion
+    /// 
+    /// # Arguments
+    /// * `mcp_addresses` - List of MCP contract addresses for AI model access
+    /// * `ctx` - The current execution context
+    /// 
+    /// # Returns
+    /// A tuple of (ExecutionContext, RunStatus) with updated context and Done status
     fn do_work(&self, mcp_addresses: Vec<String>, mut ctx: ExecutionContext) -> (ExecutionContext, RunStatus) {
 
        if let Some(prompt) = ctx.prompt_plan.prompts.get(&self.name()){

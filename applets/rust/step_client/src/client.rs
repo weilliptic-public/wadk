@@ -53,6 +53,11 @@ pub struct StepAgentClient {
 const FLOW_REGISTRY_NAME: &str = "flow_registry::weil";
 
 impl StepAgentClient {
+    /// Creates a new StepAgentClient instance
+    /// 
+    /// # Arguments
+    /// * `contract_id` - The contract ID of the step agent
+    /// * `wallet` - The wallet to use for signing transactions
     pub fn new(contract_id: ContractId, wallet: Wallet) -> Result<Self, anyhow::Error> {
 
         // let flow_registry_address = Runtime::contract_id_for_name(FLOW_REGISTRY_NAME).unwrap();
@@ -65,6 +70,15 @@ impl StepAgentClient {
         })
     }
 
+    /// Initiates a new workflow execution with the provided execution context
+    /// 
+    /// # Arguments
+    /// * `namespace` - The namespace for organizing workflows
+    /// * `flow_id` - Unique identifier for this workflow execution
+    /// * `execution_context` - The initial execution context for the workflow
+    /// 
+    /// # Returns
+    /// A tuple of (RunStatus, ExecutionContext) indicating the workflow status and current context
     pub async fn run(&self, namespace: String, flow_id: String, execution_context: ExecutionContext) -> Result<(RunStatus, ExecutionContext), anyhow::Error> {
 
         if let Some(_) = self.flow_registry_client.get_execution_context(namespace.clone(), flow_id.clone()).await? {
@@ -75,6 +89,14 @@ impl StepAgentClient {
         self.run_helper(namespace.clone(), flow_id.clone(), execution_context).await
     }
 
+    /// Resumes a previously paused workflow by loading its execution context
+    /// 
+    /// # Arguments
+    /// * `namespace` - The namespace where the workflow is stored
+    /// * `flow_id` - The unique identifier of the workflow to resume
+    /// 
+    /// # Returns
+    /// A tuple of (RunStatus, ExecutionContext) indicating the workflow status and current context
     pub async fn resume(&self, namespace: String, flow_id: String) -> Result<(RunStatus, ExecutionContext), anyhow::Error> {
         
         let ctx = self.flow_registry_client.get_execution_context(namespace.clone(), flow_id.clone()).await?;
@@ -86,6 +108,15 @@ impl StepAgentClient {
         self.run_helper(namespace.clone(), flow_id.clone(), execution_context).await
     }
 
+    /// Internal helper method to execute the workflow and handle context persistence
+    /// 
+    /// # Arguments
+    /// * `namespace` - The namespace for the workflow
+    /// * `flow_id` - The unique identifier of the workflow
+    /// * `execution_context` - The current execution context
+    /// 
+    /// # Returns
+    /// A tuple of (RunStatus, ExecutionContext) with the execution result
     async fn run_helper(&self, namespace: String, flow_id: String, execution_context: ExecutionContext) -> Result<(RunStatus, ExecutionContext), anyhow::Error> {
      #[derive(Serialize)]
         struct Args {

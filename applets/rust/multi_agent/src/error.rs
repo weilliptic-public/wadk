@@ -8,6 +8,7 @@ pub struct TaskExecutorError {
 }
 
 impl fmt::Display for TaskExecutorError {
+    /// Formats the TaskExecutorError for display
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.serialized_err)
     }

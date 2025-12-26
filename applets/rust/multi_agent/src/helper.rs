@@ -22,12 +22,25 @@ pub struct MultiAgentHelper {
 }
 
 impl MultiAgentHelper {
+    /// Creates a new MultiAgentHelper instance
+    /// 
+    /// # Arguments
+    /// * `contract_id` - The contract ID of the multi-agent helper service
     pub fn new(contract_id: String) -> Self {
         MultiAgentHelper { contract_id }
     }
 }
 
 impl MultiAgentHelper {
+    /// Executes multiple tasks by calling the multi-agent helper contract
+    /// 
+    /// # Arguments
+    /// * `task_prompts` - Slice of task prompt strings to execute
+    /// * `mcp_contract_addresses` - List of MCP contract addresses for each agent
+    /// * `model` - The AI model to use for task execution
+    /// 
+    /// # Returns
+    /// The aggregated result of all task executions
     pub fn run_tasks<'a>(
         &'a self,
         task_prompts: &'a [String],

@@ -5,3 +5,10 @@ deploy -e --widl-file /home/ubuntu/weilliptic/mcp-vault/rust/base_agent/base_age
 
 ## To run a task
 ```execute -n aaaaaaqtlagfzlsu5lbxetywnl33z3pyah4jep3htg6ewb6q55tul2t5v4 -m run_task -i '{"task_prompt":"get 5 album titles"}'```
+
+or,
+
+Switch to the `base_client` project, modify the `private_key` and `contract_id` variables and run
+```
+cargo run
+```

@@ -6,3 +6,10 @@ where agent addresses can be any mcp applet address
 ## To execute a task
 ```execute -n aaaaaaxuuqzwapxx6vdln2i2z5oi74ia2oig4ry6cbqpgzdotvdahvesg4 -m run_tasks -i '{"task_descriptions":["get 5 album titles", "send an email from somya@weilliptic.com to somya@weilliptic.com with the subject as hi and body as the previous result"]}'
 ```
+
+or,
+
+Switch to the `multi_client` project, modify the `private_key` and `contract_id` variables and run
+```
+cargo run
+```

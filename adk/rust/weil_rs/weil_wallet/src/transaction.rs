@@ -11,6 +11,7 @@
 //! Timestamps are recorded in **milliseconds since UNIX epoch**. Addresses are stored as
 //! `Arc<String>` for cheap cloning. Public keys are expected to be **hex-encoded**.
 
+use crate::utils::current_time_millis;
 use libsecp256k1::{PublicKey, PublicKeyFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -125,9 +126,7 @@ pub(crate) struct BaseTransaction {
 impl BaseTransaction {
     /// Create a new base transaction with the default TTL (`DEFAULT_TRANSACTION_TTL`).
     pub fn new(header: TransactionHeader) -> Self {
-        BaseTransaction {
-            header
-        }
+        BaseTransaction { header }
     }
 }
 

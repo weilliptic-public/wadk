@@ -26,7 +26,7 @@ use api::{
     request::{SubmitTxnRequest, Transaction, UserTransaction, Verifier},
     PlatformApi,
 };
-use constants::{DEFAULT_CONCURRENCY, DEFAULT_TRANSACTION_TTL};
+use constants::DEFAULT_CONCURRENCY;
 use contract::ContractId;
 use reqwest::Client;
 use serde::Serialize;

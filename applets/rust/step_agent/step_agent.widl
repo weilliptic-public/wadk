@@ -1,0 +1,42 @@
+//define your steps here
+enum Step{
+    A,
+    B,
+    C,
+    D,
+    E
+}
+
+
+// use the below code as is, without modifying
+enum RunStatus {
+    Continue,
+    Failed,
+    Pending,
+    Done
+}
+
+enum Model{
+    QWEN_235B,
+    GPT_5POINT1,
+    CLAUDE_SONNET,
+    MISTRAL_LARGE
+}
+
+
+record PromptPlan {
+    prompts: dict<string, string> // serialized step -> prompt
+}
+
+record ExecutionContext {
+    step: option<Step>,
+    answers: list<string>,
+    prompt_plan: PromptPlan,
+    model: Model
+}
+
+@pausable
+interface StepAgent {
+    query func run(namespace: string, flow_id: string, execution_context: ExecutionContext) -> tuple<RunStatus, ExecutionContext>;
+    query func resume(namespace: string, flow_id: string) -> tuple<RunStatus, ExecutionContext>
+}

@@ -6,9 +6,9 @@ use weil_rs::runtime::Runtime;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Model {
-    QWEN_235B,
     GPT_5POINT1,
     CLAUDE_SONNET,
+    MISTRAL_LARGE
 }
 
 

@@ -59,7 +59,7 @@ impl BaseAgent for BaseAgentContractState {
             .run_task(
                 task_prompt,
                 self.mcp_contract_address.clone(),
-                Model::QWEN_235B,
+                Model::GPT_5POINT1,
             )
             .map_err(|e| e.to_string())?;
 

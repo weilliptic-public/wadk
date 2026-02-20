@@ -68,7 +68,7 @@ impl MultiAgent for MultiAgentContractState {
             .run_tasks(
                 &task_descriptions[resume_task_index..],
                 self.agent_addresses.clone(),
-                Model::QWEN_235B,
+                Model::GPT_5POINT1,
             )
             .map_err(|err| err.to_string())?;
 

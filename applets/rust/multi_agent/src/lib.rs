@@ -1,12 +1,8 @@
-use helper::Model;
 use serde::{Deserialize, Serialize};
 use weil_macros::{WeilType, constructor, mutate, query, smart_contract};
 use weil_rs::runtime::Runtime;
+use weil_rs::ai::agents::{multi::MultiAgentHelper, Model};
 
-use crate::helper::MultiAgentHelper;
-
-mod error;
-mod helper;
 
 const MULTI_AGENT_HELPER_NAME: &str = "multi_agent_helper::weil";
 
@@ -69,6 +65,7 @@ impl MultiAgent for MultiAgentContractState {
                 &task_descriptions[resume_task_index..],
                 self.agent_addresses.clone(),
                 Model::GPT_5POINT1,
+                Some("<api_key>".to_string())
             )
             .map_err(|err| err.to_string())?;
 

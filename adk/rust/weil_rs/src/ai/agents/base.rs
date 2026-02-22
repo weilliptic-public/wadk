@@ -42,12 +42,14 @@ impl BaseAgentHelper {
         task_prompt: String,
         mcp_contract_address: String,
         model: Model,
+        model_key: Option<String>
     ) -> Result<String> {
         #[derive(Debug, Serialize)]
         struct run_taskArgs {
             task_prompt: String,
             mcp_contract_address: String,
             model: Model,
+            model_key: Option<String>
         }
 
         let serialized_args = Some(
@@ -55,6 +57,7 @@ impl BaseAgentHelper {
                 task_prompt,
                 mcp_contract_address,
                 model,
+                model_key,
             })
             .unwrap(),
         );

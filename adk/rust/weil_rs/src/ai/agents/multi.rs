@@ -56,12 +56,14 @@ impl MultiAgentHelper {
         task_prompts: &'a [String],
         mcp_contract_addresses: Vec<String>,
         model: Model,
+        model_key: Option<String>
     ) -> Result<String, anyhow::Error> {
         #[derive(Debug, Serialize)]
         struct RunTaskArgs<'a> {
             task_prompts: &'a [String],
             mcp_contract_addresses: Vec<String>,
             model: Model,
+            model_key: Option<String>,
         }
 
         let serialized_args = Some(
@@ -69,6 +71,7 @@ impl MultiAgentHelper {
                 task_prompts,
                 mcp_contract_addresses,
                 model,
+                model_key,
             })
             .unwrap(),
         );

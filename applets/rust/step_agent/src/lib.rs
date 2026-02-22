@@ -1,12 +1,13 @@
 
 use serde::{Deserialize, Serialize};
-use weil_macros::{constructor, query, smart_contract, WeilType};
-use weil_rs::ai::agents::{Model, base::BaseAgentHelper, flow_registry::FlowRegistry};
+use weil_macros::{WeilType, constructor, mutate, query, smart_contract};
+use weil_rs::{ai::agents::{Model, base::BaseAgentHelper, flow_registry::FlowRegistry}};
 use std::collections::BTreeMap;
 use weil_rs::runtime::Runtime;
 
 const BASE_AGENT_HELPER_NAME: &str = "base_agent_helper::weil";
 const FLOW_REGISTRY_NAME: &str = "flow_registry::weil";
+const MAX_CONTEXT_SIZE: usize = 1024;
 
 #[typetag::serde(tag = "type")]
 pub(crate) trait State: Send + Sync {
@@ -48,6 +49,8 @@ pub struct ExecutionContext {
     pub answers: Vec<String>,
     pub prompt_plan: PromptPlan,
     pub model: Model,
+    pub model_key: Option<String>,
+    pub context: BTreeMap<String, String>,
 }
 
 impl Default for ExecutionContext {
@@ -59,6 +62,8 @@ impl Default for ExecutionContext {
                 prompts: BTreeMap::new(),
             },
             model: Model::GPT_5POINT1,
+            model_key: Some("<api_key>".to_string()),
+            context: BTreeMap::new(),
         }
     }
 }
@@ -69,6 +74,8 @@ trait StepAgent {
         Self: Sized;
     async fn run(&self, namespace: String, flow_id: String, execution_context: ExecutionContext) -> (RunStatus, ExecutionContext);
     async fn resume(&self, namespace: String, flow_id: String) -> (RunStatus, ExecutionContext);
+    async fn get_context(&self, namespace: String, flow_id: String) -> ExecutionContext;
+    async fn attach_context(&mut self, namespace: String, flow_id: String, key: String, value: String) -> Result<(), String>;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -157,7 +164,57 @@ impl StepAgent for StepAgentContractState {
         let context = serde_json::from_str::<ExecutionContext>(&ctx).unwrap();
 
         self.run(namespace, flow_id, context).await
-    }}
+    }
+
+    #[query]
+    async fn get_context(&self, namespace: String, flow_id: String) -> ExecutionContext {
+        let flow_registry_address = Runtime::contract_id_for_name(FLOW_REGISTRY_NAME).unwrap();
+        let flow_registry = FlowRegistry::new(flow_registry_address);
+
+        let serialized_ctx = flow_registry
+            .get_execution_context(namespace.clone(), flow_id.clone())
+            .unwrap();
+        // we MUST get a context to proceed
+        let ctx = serialized_ctx.unwrap();
+
+        let context = serde_json::from_str::<ExecutionContext>(&ctx).unwrap();
+
+        context
+    }
+
+    #[mutate]
+    async fn attach_context(&mut self, namespace: String, flow_id: String, key: String, value: String) -> Result<(), String> {
+        let flow_registry_address = Runtime::contract_id_for_name(FLOW_REGISTRY_NAME).unwrap();
+        let flow_registry = FlowRegistry::new(flow_registry_address);
+
+        let serialized_ctx = flow_registry
+            .get_execution_context(namespace.clone(), flow_id.clone())
+            .map_err(|e| e.to_string());
+        // we MUST get a context to proceed
+        let ctx = serialized_ctx.unwrap();
+
+        if ctx.is_none() {
+            return Err("No execution context found".to_string());
+        }
+        let ctx = ctx.unwrap();
+
+        let mut exec_context = serde_json::from_str::<ExecutionContext>(&ctx).unwrap();
+
+        // get the size of the context map
+        let context_size = exec_context.context.len();
+        if context_size >= MAX_CONTEXT_SIZE {
+            return Err("Context size limit reached".to_string());
+        }
+   
+        exec_context.context.insert(key, value);
+
+        let updated_serialized_ctx = serde_json::to_string(&exec_context).unwrap();
+
+        flow_registry.persist_execution_context(namespace, flow_id, updated_serialized_ctx).unwrap();
+
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateA;
@@ -182,6 +239,7 @@ impl State for StateA {
                 prompt.into(),
                 mcp_addresses[0].clone(), //or any corresponding mcp for this task
                 ctx.model.clone(),
+                ctx.model_key.clone()
             ).map_err(|e| e.to_string()) {
                 Ok(r) => r,
                 Err(_) => return (None, RunStatus::Failed),
@@ -219,6 +277,7 @@ impl State for StateB {
                 prompt.into(),
                 mcp_addresses[0].clone(), //or any corresponding mcp for this task
                 ctx.model.clone(),
+                ctx.model_key.clone()
             ).map_err(|e| e.to_string()) {
                 Ok(r) => r,
                 Err(_) => return (None, RunStatus::Failed),
@@ -249,22 +308,25 @@ impl State for StateC {
         mcp_addresses: Vec<String>,
         ctx: &mut ExecutionContext,
     ) -> (Option<Step>, RunStatus) {
-       if let Some(prompt) = ctx.prompt_plan.prompts.get(self.name()){
-            let base_agent_helper_address = Runtime::contract_id_for_name(BASE_AGENT_HELPER_NAME).unwrap();
-            let base_agent_helper = BaseAgentHelper::new(base_agent_helper_address);
 
-            let res = match base_agent_helper.run_task(
-                prompt.into(),
-                mcp_addresses[0].clone(), //or any corresponding mcp for this task
-                ctx.model.clone(),
-            ).map_err(|e| e.to_string()) {
-                Ok(r) => r,
-                Err(_) => return (None, RunStatus::Failed),
-            };
-
-            ctx.answers.push(res);
-       };
-
+        let context=  &ctx.context;
+        if let Some(source) = context.get("datasource") {
+            match source.as_str() {
+                "aurora" => {
+                    // do something specific for aurora
+                    println!("found datasource: aurora, doing aurora-specific work");
+                },
+                "snowflake" => {
+                    // do something specific for snowflake
+                    println!("found datasource: snowflake, doing snowflake-specific work");
+                },
+                _ => {
+                    println!("found datasource: {}, but no specific handler for it", source);
+                }
+            }
+        } else {
+            println!("no datasource in context");
+        }
         println!("ran step C");
         ctx.step = Some(Step::D);
 
@@ -294,6 +356,7 @@ impl State for StateD {
                 prompt.into(),
                 mcp_addresses[0].clone(), //or any corresponding mcp for this task
                 ctx.model.clone(),
+                ctx.model_key.clone()
             ).map_err(|e| e.to_string()) {
                 Ok(r) => r,
                 Err(_) => return (None, RunStatus::Failed),
@@ -331,6 +394,7 @@ impl State for StateE {
                 prompt.into(),
                 mcp_addresses[0].clone(), //or any corresponding mcp for this task
                 ctx.model.clone(),
+                ctx.model_key.clone()
             ).map_err(|e| e.to_string()) {
                 Ok(r) => r,
                 Err(_) => return (None, RunStatus::Failed),

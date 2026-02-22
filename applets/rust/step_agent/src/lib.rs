@@ -1,3 +1,4 @@
+//! Step agent smart contract: runs a state-machine flow with named steps (A–E) and resumable execution.
 
 use serde::{Deserialize, Serialize};
 use weil_macros::{WeilType, constructor, mutate, query, smart_contract};
@@ -9,10 +10,12 @@ const BASE_AGENT_HELPER_NAME: &str = "base_agent_helper::weil";
 const FLOW_REGISTRY_NAME: &str = "flow_registry::weil";
 const MAX_CONTEXT_SIZE: usize = 1024;
 
+/// Handler for a single step in the flow; performs work and returns the next step and status.
 #[typetag::serde(tag = "type")]
 pub(crate) trait State: Send + Sync {
+    /// Unique name of this step (e.g. `"A"`, `"B"`).
     fn name(&self) -> &'static str;
-    /// Takes ownership of ctx, returns updated ctx + status.
+    /// Runs this step: may mutate `ctx` and returns the next step (if any) and run status.
     fn do_work(
         &self,
         mcp_addresses: Vec<String>,
@@ -20,7 +23,7 @@ pub(crate) trait State: Send + Sync {
     ) -> (Option<Step>, RunStatus);
 }
 
-
+/// Named steps in the step-agent flow (A → B → C → D → E).
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Hash, WeilType)]
 pub enum Step {
     A,
@@ -30,6 +33,7 @@ pub enum Step {
     E,
 }
 
+/// Outcome of running a step or the full flow.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RunStatus {
     Continue,
@@ -38,11 +42,13 @@ pub enum RunStatus {
     Done,
 }
 
+/// Map of step names to prompts used when running each step.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PromptPlan {
     pub prompts: BTreeMap<String, String>,
 }
 
+/// Mutable context carried through the flow: current step, answers, prompts, model, and key-value context.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExecutionContext {
     pub step: Option<Step>,
@@ -54,6 +60,7 @@ pub struct ExecutionContext {
 }
 
 impl Default for ExecutionContext {
+    /// Builds a default execution context with no step, empty answers/prompts, and default model.
     fn default() -> Self {
         Self {
             step: None,
@@ -68,6 +75,7 @@ impl Default for ExecutionContext {
     }
 }
 
+/// Contract interface for the step agent: run a flow, resume, get/attach context.
 trait StepAgent {
     fn new(mcp_contract_addresses: Vec<String>) -> Result<Self, String>
     where
@@ -78,9 +86,9 @@ trait StepAgent {
     async fn attach_context(&mut self, namespace: String, flow_id: String, key: String, value: String) -> Result<(), String>;
 }
 
+/// Persistent state for the step-agent contract: MCP addresses and step handlers.
 #[derive(Serialize, Deserialize)]
 pub struct StepAgentContractState {
-    // define your contract state here!
     mcp_contract_addresses: Vec<String>,
     handlers: BTreeMap<Step, Box<dyn State>>,
 }
@@ -89,6 +97,13 @@ impl weil_rs::traits::WeilType for StepAgentContractState {}
 
 #[smart_contract]
 impl StepAgent for StepAgentContractState {
+    /// Creates a new step agent with the given MCP addresses and registers handlers for steps A–E.
+    ///
+    /// # Arguments
+    /// * `mcp_contract_addresses` - Contract IDs of MCPs used by step handlers.
+    ///
+    /// # Returns
+    /// `Ok(Self)` on success, or `Err(String)` if construction fails.
     #[constructor]
     fn new(mcp_contract_addresses: Vec<String>) -> Result<Self, String>
     where
@@ -108,7 +123,18 @@ impl StepAgent for StepAgentContractState {
         })
     }
 
-
+    /// Runs the flow to completion (or until Pending/Failed) using the provided execution context.
+    ///
+    /// Dispatches each step to the corresponding handler; handlers may return `Continue`,
+    /// `Pending`, `Done`, or `Failed`. Context is updated in place.
+    ///
+    /// # Arguments
+    /// * `namespace` - Flow namespace (e.g. for flow registry).
+    /// * `flow_id` - Flow identifier.
+    /// * `execution_context` - Initial context (step, prompt_plan, model, etc.).
+    ///
+    /// # Returns
+    /// `(RunStatus, ExecutionContext)` — final status and possibly updated context.
     #[query]
     async fn run(
         &self,
@@ -150,6 +176,14 @@ impl StepAgent for StepAgentContractState {
         }
     }
 
+    /// Resumes a previously started flow by loading its execution context from the flow registry.
+    ///
+    /// # Arguments
+    /// * `namespace` - Flow namespace.
+    /// * `flow_id` - Flow identifier.
+    ///
+    /// # Returns
+    /// `(RunStatus, ExecutionContext)` from running the loaded context (panics if context is missing).
     #[query]
     async fn resume(&self, namespace: String, flow_id: String) -> (RunStatus, ExecutionContext) {
         let flow_registry_address = Runtime::contract_id_for_name(FLOW_REGISTRY_NAME).unwrap();
@@ -166,6 +200,14 @@ impl StepAgent for StepAgentContractState {
         self.run(namespace, flow_id, context).await
     }
 
+    /// Fetches the stored execution context for the given namespace and flow_id from the flow registry.
+    ///
+    /// # Arguments
+    /// * `namespace` - Flow namespace.
+    /// * `flow_id` - Flow identifier.
+    ///
+    /// # Returns
+    /// The deserialized `ExecutionContext` (panics if missing or invalid).
     #[query]
     async fn get_context(&self, namespace: String, flow_id: String) -> ExecutionContext {
         let flow_registry_address = Runtime::contract_id_for_name(FLOW_REGISTRY_NAME).unwrap();
@@ -182,6 +224,18 @@ impl StepAgent for StepAgentContractState {
         context
     }
 
+    /// Attaches a key-value pair to the execution context for the given flow, then persists it.
+    ///
+    /// Fails if no context exists or if the context map has reached `MAX_CONTEXT_SIZE`.
+    ///
+    /// # Arguments
+    /// * `namespace` - Flow namespace.
+    /// * `flow_id` - Flow identifier.
+    /// * `key` - Context key to set.
+    /// * `value` - Value to set.
+    ///
+    /// # Errors
+    /// Returns `Err(String)` if context is missing or context size limit is reached.
     #[mutate]
     async fn attach_context(&mut self, namespace: String, flow_id: String, key: String, value: String) -> Result<(), String> {
         let flow_registry_address = Runtime::contract_id_for_name(FLOW_REGISTRY_NAME).unwrap();
@@ -216,6 +270,7 @@ impl StepAgent for StepAgentContractState {
     }
 }
 
+/// Step A handler: runs the "A" prompt (if present) via base agent, then continues to step B.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateA;
 
@@ -225,6 +280,7 @@ impl State for StateA {
         "A"
     }
 
+    /// Runs prompt "A" via base agent helper, appends answer to context; returns next step B and Continue.
     fn do_work(
         &self,
         mcp_addresses: Vec<String>,
@@ -255,6 +311,7 @@ impl State for StateA {
     }
 }
 
+/// Step B handler: runs the "B" prompt via base agent, then returns Pending with next step C.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateB;
 
@@ -264,6 +321,7 @@ impl State for StateB {
         "B"
     }
 
+    /// Runs prompt "B" via base agent, sets next step C, returns Pending so execution can be resumed later.
     fn do_work(
         &self,
         mcp_addresses: Vec<String>,
@@ -294,6 +352,7 @@ impl State for StateB {
     }
 }
 
+/// Step C handler: branches on context "datasource" (e.g. aurora/snowflake), then advances to step D.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateC;
 
@@ -303,6 +362,7 @@ impl State for StateC {
         "C"
     }
 
+    /// Reads "datasource" from context and performs datasource-specific work; sets next step D and returns Pending.
     fn do_work(
         &self,
         mcp_addresses: Vec<String>,
@@ -334,6 +394,7 @@ impl State for StateC {
     }
 }
 
+/// Step D handler: runs the "D" prompt via base agent, then advances to step E with Pending.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateD;
 
@@ -343,6 +404,7 @@ impl State for StateD {
         "D"
     }
 
+    /// Runs prompt "D" via base agent, sets next step E, returns Pending.
     fn do_work(
         &self,
         mcp_addresses: Vec<String>,
@@ -372,6 +434,7 @@ impl State for StateD {
     }
 }
 
+/// Step E handler: runs the "E" prompt via base agent, then marks the flow Done (terminal step).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateE;
 
@@ -381,6 +444,7 @@ impl State for StateE {
         "E"
     }
 
+    /// Runs prompt "E" via base agent, clears step (None), returns Done to end the flow.
     fn do_work(
         &self,
         mcp_addresses: Vec<String>,

@@ -9,7 +9,6 @@ edition = "2021"
 anyhow = "1.0.97"
 libsecp256k1 = "0.7.1"
 hex = "0.4.3"
-wadk-utils = { path = "../../../wadk-utils" }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["raw_value"] }
 crossbeam-skiplist = "0.1.3"

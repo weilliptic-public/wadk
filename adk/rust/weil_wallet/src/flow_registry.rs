@@ -1,6 +1,5 @@
 use crate::{contract::ContractId, wallet::Wallet, WeilClient, WeilContractClient};
 use serde::Serialize;
-use wadk_utils::errors::WeilError;
 
 pub struct FlowRegistryClient {
     client: WeilContractClient,

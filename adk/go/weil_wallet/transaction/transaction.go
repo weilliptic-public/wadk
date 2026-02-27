@@ -3,6 +3,7 @@ package transaction
 import (
 	"encoding/hex"
 	"encoding/json"
+	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/tidwall/btree"
@@ -10,25 +11,27 @@ import (
 )
 
 type TransactionHeader struct {
-	Nonce          uint                  `json:"nonce"`
+	Nonce          int                   `json:"nonce"`
 	PublicKey      string                `json:"public_key"`
 	FromAddr       string                `json:"from_addr"`
 	ToAddr         string                `json:"to_addr"`
 	Signature      *types.Option[string] `json:"signature"`
 	WeilpodCounter int                   `json:"weilpod_counter"`
+	CreationTime   int                   `json:"creation_time"`
 }
 
-func NewTransactionHeader(nonce uint, publicKey string, fromAddr string, toAddr string, weilpodCounter int) *TransactionHeader {
+func NewTransactionHeader(nonce int, publicKey string, fromAddr string, toAddr string, weilpodCounter int) *TransactionHeader {
 	return &TransactionHeader{
 		Nonce:          nonce,
 		PublicKey:      publicKey,
 		FromAddr:       fromAddr,
 		ToAddr:         toAddr,
 		WeilpodCounter: weilpodCounter,
+		CreationTime:   int(time.Now().UnixMilli()),
 	}
 }
 
-func NewTransactionHeaderWithSignature(nonce uint, publicKey string, fromAddr string, toAddr string, signature string, weilpodCounter int) *TransactionHeader {
+func NewTransactionHeaderWithSignature(nonce int, publicKey string, fromAddr string, toAddr string, signature string, weilpodCounter int) *TransactionHeader {
 	return &TransactionHeader{
 		Nonce:          nonce,
 		PublicKey:      publicKey,
@@ -36,6 +39,7 @@ func NewTransactionHeaderWithSignature(nonce uint, publicKey string, fromAddr st
 		ToAddr:         toAddr,
 		Signature:      types.NewSomeOption(&signature),
 		WeilpodCounter: weilpodCounter,
+		CreationTime:   int(time.Now().UnixMilli()),
 	}
 }
 
@@ -64,10 +68,10 @@ type TransactionResult struct {
 }
 
 type BaseTransaction struct {
-	Header TransactionHeader `json:"header"`
+	Header *TransactionHeader `json:"header"`
 }
 
-func NewBaseTransaction(header TransactionHeader) *BaseTransaction {
+func NewBaseTransaction(header *TransactionHeader) *BaseTransaction {
 	return &BaseTransaction{
 		Header: header,
 	}

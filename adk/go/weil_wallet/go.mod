@@ -11,4 +11,4 @@ require (
 
 require github.com/zhangyunhao116/fastrand v0.3.0 // indirect
 
-replace github.com/weilliptic-inc/contract-sdk/go/weil_go => /root/code/contract-sdk/go/weil_go
+replace github.com/weilliptic-inc/contract-sdk/go/weil_go => /Users/bhavyabhatt/Desktop/bhavya/projects/contract-sdk/go/weil_go

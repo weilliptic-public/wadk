@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/internal/constants"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/nonce"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/transaction"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/wallet"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/internal/constants"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/nonce"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/wallet"
 )
 
 const auditAppletSvcName = "auditor"

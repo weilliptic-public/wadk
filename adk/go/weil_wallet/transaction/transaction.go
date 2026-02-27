@@ -7,7 +7,7 @@ import (
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/tidwall/btree"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/types"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
 )
 
 type TransactionHeader struct {

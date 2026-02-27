@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/types"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/api"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/contract"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/transaction"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/utils"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/api"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/contract"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/utils"
 )
 
 type WeilContractClient struct {

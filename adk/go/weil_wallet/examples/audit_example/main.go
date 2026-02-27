@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/client"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/wallet"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/client"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/wallet"
 )
 
 func main() {

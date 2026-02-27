@@ -1,8 +1,8 @@
 package api
 
 import (
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/types"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/transaction"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
 )
 
 type Verifier struct {

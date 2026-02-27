@@ -4,15 +4,11 @@ package ledger
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/weilliptic-public/wadk/adk/go/weil_go/errors"
 	"github.com/weilliptic-public/wadk/adk/go/weil_go/runtime"
 )
-
-/*
-TODO
-func BalancesFor(addr string) *errors.Result[WeilTriePrefixMap[uint64]]
-*/
 
 // BalanceFor retrieves the balance of a specific token symbol for the given address.
 // Returns the balance as a uint64, or an error if the query fails.
@@ -22,10 +18,10 @@ func BalanceFor(addr string, symbol string) (*uint64, error) {
 		Symbol string `json:"symbol"`
 	}
 
-	args, _ := json.Marshal(BalanceForArgs{
-		Addr:   addr,
-		Symbol: symbol,
-	})
+	args, err := json.Marshal(BalanceForArgs{Addr: addr, Symbol: symbol})
+	if err != nil {
+		panic(fmt.Sprintf("BalanceFor: failed to serialize args: %v", err))
+	}
 
 	ledgerId := runtime.LedgerContractId()
 
@@ -47,16 +43,19 @@ func Transfer(symbol string, fromAddr string, toAddr string, amount uint64) erro
 		Amount   uint64 `json:"amount"`
 	}
 
-	args, _ := json.Marshal(TransferArgs{
+	args, err := json.Marshal(TransferArgs{
 		Symbol:   symbol,
 		FromAddr: fromAddr,
 		ToAddr:   toAddr,
 		Amount:   amount,
 	})
+	if err != nil {
+		panic(fmt.Sprintf("Transfer: failed to serialize args: %v", err))
+	}
 
 	ledgerId := runtime.LedgerContractId()
 
-	_, err := runtime.CallContract[uint64](ledgerId, "transfer", string(args))
+	_, err = runtime.CallContract[uint64](ledgerId, "transfer", string(args))
 	if err != nil {
 		return errors.NewFunctionReturnedWithError("transfer", err)
 	}
@@ -73,15 +72,18 @@ func Mint(symbol string, toAddr string, amount uint64) error {
 		Amount uint64 `json:"amount"`
 	}
 
-	args, _ := json.Marshal(MintArgs{
+	args, err := json.Marshal(MintArgs{
 		Symbol: symbol,
 		ToAddr: toAddr,
 		Amount: amount,
 	})
+	if err != nil {
+		panic(fmt.Sprintf("Mint: failed to serialize args: %v", err))
+	}
 
 	ledgerId := runtime.LedgerContractId()
 
-	_, err := runtime.CallContract[uint64](ledgerId, "mint", string(args))
+	_, err = runtime.CallContract[uint64](ledgerId, "mint", string(args))
 	if err != nil {
 		return errors.NewFunctionReturnedWithError("mint", err)
 	}

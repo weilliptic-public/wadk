@@ -58,7 +58,9 @@ func read_collection(key int32) int32
 //go:wasmimport env read_bulk_collection
 func read_bulk_collection(key int32) int32
 
-var WasmHostMemorySegment []byte // this is to keep data alive!: TODO - find a different way rather than this
+// WasmHostMemorySegment holds a reference to the last allocated memory segment to
+// prevent the GC from collecting it before the WASM host has finished reading it.
+var WasmHostMemorySegment []byte
 
 type StateArgsValue struct {
 	State string `json:"state"`
@@ -164,7 +166,9 @@ func DeleteCollectionEntry[V any](key []byte) (*V, error) {
 
 	okResult := *result.TryOkResult()
 	var val V
-	_ = json.Unmarshal(okResult, &val)
+	if err := json.Unmarshal(okResult, &val); err != nil {
+		return nil, fmt.Errorf("DeleteCollectionEntry: failed to deserialize value: %w", err)
+	}
 
 	return &val, nil
 }
@@ -189,7 +193,9 @@ func ReadCollection[V any](key []byte) (*V, error) {
 	okResult := *result.TryOkResult()
 
 	var val V
-	_ = json.Unmarshal(okResult, &val)
+	if err := json.Unmarshal(okResult, &val); err != nil {
+		return nil, fmt.Errorf("ReadCollection: failed to deserialize value: %w", err)
+	}
 
 	return &val, nil
 }
@@ -213,7 +219,9 @@ func ReadBulkCollection[V any](prefix []byte) (*V, error) {
 
 	okResult := *result.TryOkResult()
 	var val V
-	_ = json.Unmarshal(okResult, &val)
+	if err := json.Unmarshal(okResult, &val); err != nil {
+		return nil, fmt.Errorf("ReadBulkCollection: failed to deserialize value: %w", err)
+	}
 
 	return &val, nil
 }
@@ -223,12 +231,14 @@ func State[T any]() *T {
 	dataJSON := *internal.Read(dataPtr).TryOkResult()
 
 	var stateArgs StateArgsValue
-
-	_ = json.Unmarshal(dataJSON, &stateArgs)
+	if err := json.Unmarshal(dataJSON, &stateArgs); err != nil {
+		panic(fmt.Sprintf("State: failed to deserialize state+args envelope: %v", err))
+	}
 
 	var state T
-
-	_ = json.Unmarshal([]byte(stateArgs.State), &state)
+	if err := json.Unmarshal([]byte(stateArgs.State), &state); err != nil {
+		panic(fmt.Sprintf("State: failed to deserialize state: %v", err))
+	}
 
 	return &state
 }
@@ -238,18 +248,15 @@ func Args[T any]() (*T, error) {
 	dataJSON := *internal.Read(dataPtr).TryOkResult()
 
 	var stateArgs StateArgsValue
-
-	_ = json.Unmarshal(dataJSON, &stateArgs)
+	if err := json.Unmarshal(dataJSON, &stateArgs); err != nil {
+		panic(fmt.Sprintf("Args: failed to deserialize state+args envelope: %v", err))
+	}
 
 	var args T
-
-	err := json.Unmarshal([]byte(stateArgs.Args), &args)
-
-	if err != nil {
+	if err := json.Unmarshal([]byte(stateArgs.Args), &args); err != nil {
 		return nil, err
-	} else {
-		return &args, nil
 	}
+	return &args, nil
 }
 
 func StateAndArgs[T any, U any]() (*T, *U, error) {
@@ -257,20 +264,20 @@ func StateAndArgs[T any, U any]() (*T, *U, error) {
 	dataJSON := *internal.Read(dataPtr).TryOkResult()
 
 	var stateArgs StateArgsValue
-
-	_ = json.Unmarshal(dataJSON, &stateArgs)
+	if err := json.Unmarshal(dataJSON, &stateArgs); err != nil {
+		panic(fmt.Sprintf("StateAndArgs: failed to deserialize state+args envelope: %v", err))
+	}
 
 	var state T
-	var args U
-
-	_ = json.Unmarshal([]byte(stateArgs.State), &state)
-	err := json.Unmarshal([]byte(stateArgs.Args), &args)
-
-	if err != nil {
-		return &state, nil, err
-	} else {
-		return &state, &args, nil
+	if err := json.Unmarshal([]byte(stateArgs.State), &state); err != nil {
+		panic(fmt.Sprintf("StateAndArgs: failed to deserialize state: %v", err))
 	}
+
+	var args U
+	if err := json.Unmarshal([]byte(stateArgs.Args), &args); err != nil {
+		return &state, nil, err
+	}
+	return &state, &args, nil
 }
 
 func SetResult[T any](result *types.Result[T, errors.WeilError]) {

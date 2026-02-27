@@ -19,7 +19,7 @@ type WeilSet[V comparable] struct {
 // NewWeilSet creates a new WeilSet with the given state identifier.
 func NewWeilSet[V comparable](stateId WeilId) *WeilSet[V] {
 	return &WeilSet[V]{
-		InnerMap: WeilMap[V, __unit__]{stateId},
+		InnerMap: WeilMap[V, __unit__]{StateId: stateId},
 	}
 }
 
@@ -30,7 +30,10 @@ func (m *WeilSet[V]) BaseStatePath() string {
 
 // StateTreeKey generates a state tree key for the given value suffix.
 func (m *WeilSet[V]) StateTreeKey(suffix *V) string {
-	serializedSuffix, _ := json.Marshal(suffix)
+	serializedSuffix, err := json.Marshal(suffix)
+	if err != nil {
+		panic(fmt.Sprintf("WeilSet.StateTreeKey: failed to serialize key: %v", err))
+	}
 	return fmt.Sprintf("%s_%s", m.BaseStatePath(), string(serializedSuffix))
 }
 

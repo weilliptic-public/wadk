@@ -48,14 +48,19 @@ func MarshalJSONWasmHostInterfaceError(err WeilError) []byte {
 		panic(constants.UNREACHABLE)
 	}
 
-	serializedErr, _ := json.Marshal(tmp)
+	serializedErr, marshalErr := json.Marshal(tmp)
+	if marshalErr != nil {
+		panic(fmt.Sprintf("failed to marshal WeilError: %v", marshalErr))
+	}
 
 	return serializedErr
 }
 
 func WasmHostInterfaceErrorFromBytes(buffer []byte) WeilError {
 	var tmp map[string]interface{}
-	_ = json.Unmarshal(buffer, &tmp)
+	if err := json.Unmarshal(buffer, &tmp); err != nil {
+		panic(fmt.Sprintf("failed to unmarshal WeilError from bytes: %v", err))
+	}
 
 	errorNames := []string{
 		"MethodArgumentDeserializationError",
@@ -88,107 +93,74 @@ func WasmHostInterfaceErrorFromBytes(buffer []byte) WeilError {
 		panic(constants.UNREACHABLE)
 	}
 
-	serializedEntry, _ := json.Marshal(tmp[criticalErrorName])
+	serializedEntry, err := json.Marshal(tmp[criticalErrorName])
+	if err != nil {
+		panic(fmt.Sprintf("failed to marshal error entry for %q: %v", criticalErrorName, err))
+	}
+
+	mustUnmarshal := func(data []byte, v any) {
+		if err := json.Unmarshal(data, v); err != nil {
+			panic(fmt.Sprintf("failed to unmarshal error entry for %q: %v", criticalErrorName, err))
+		}
+	}
 
 	switch criticalErrorName {
 	case "MethodArgumentDeserializationError":
 		var inner MethodError
-		_ = json.Unmarshal(serializedEntry, &inner)
-
-		return &MethodArgumentDeserializationError{
-			inner: &inner,
-		}
+		mustUnmarshal(serializedEntry, &inner)
+		return &MethodArgumentDeserializationError{inner: &inner}
 	case "FunctionReturnedWithError":
 		var inner MethodError
-		_ = json.Unmarshal(serializedEntry, &inner)
-
-		return &FunctionReturnedWithError{
-			inner: &inner,
-		}
+		mustUnmarshal(serializedEntry, &inner)
+		return &FunctionReturnedWithError{inner: &inner}
 	case "TrapOccuredWhileWasmModuleExecution":
 		var inner MethodError
-		_ = json.Unmarshal(serializedEntry, &inner)
-
-		return &TrapOccuredWhileWasmModuleExecutionError{
-			inner: &inner,
-		}
+		mustUnmarshal(serializedEntry, &inner)
+		return &TrapOccuredWhileWasmModuleExecutionError{inner: &inner}
 	case "KeyNotFoundInCollection":
 		var key string
-		_ = json.Unmarshal(serializedEntry, &key)
-
-		return &KeyNotFoundInCollectionError{
-			key: key,
-		}
+		mustUnmarshal(serializedEntry, &key)
+		return &KeyNotFoundInCollectionError{key: key}
 	case "NoValueReturnedFromDeletingCollectionItem":
 		var key string
-		_ = json.Unmarshal(serializedEntry, &key)
-
-		return &NoValueReturnedFromDeletingCollectionItemError{
-			key: key,
-		}
+		mustUnmarshal(serializedEntry, &key)
+		return &NoValueReturnedFromDeletingCollectionItemError{key: key}
 	case "EntriesNotFoundInCollectionForKeysWithPrefix":
 		var key string
-		_ = json.Unmarshal(serializedEntry, &key)
-
-		return &EntriesNotFoundInCollectionForKeysWithPrefixError{
-			key: key,
-		}
+		mustUnmarshal(serializedEntry, &key)
+		return &EntriesNotFoundInCollectionForKeysWithPrefixError{key: key}
 	case "ContractMethodExecutionError":
 		var inner CrossContractCallError
-		_ = json.Unmarshal(serializedEntry, &inner)
-
-		return &ContractMethodExecutionError{
-			inner: &inner,
-		}
+		mustUnmarshal(serializedEntry, &inner)
+		return &ContractMethodExecutionError{inner: &inner}
 	case "InvalidCrossContractCallError":
 		var inner CrossContractCallError
-		_ = json.Unmarshal(serializedEntry, &inner)
-
-		return &InvalidCrossContractCallError{
-			inner: &inner,
-		}
+		mustUnmarshal(serializedEntry, &inner)
+		return &InvalidCrossContractCallError{inner: &inner}
 	case "CrossContractCallResultDeserializationError":
 		var inner CrossContractCallError
-		_ = json.Unmarshal(serializedEntry, &inner)
-
-		return &CrossContractCallResultDeserializationError{
-			inner: &inner,
-		}
+		mustUnmarshal(serializedEntry, &inner)
+		return &CrossContractCallResultDeserializationError{inner: &inner}
 	case "LLMClusterError":
 		var msg string
-		_ = json.Unmarshal(serializedEntry, &msg)
-
-		return &LLMClusterError{
-			msg: msg,
-		}
+		mustUnmarshal(serializedEntry, &msg)
+		return &LLMClusterError{msg: msg}
 	case "StreamingResponseDeserializationError":
 		var msg string
-		_ = json.Unmarshal(serializedEntry, &msg)
-
-		return &StreamingResponseDeserializationError{
-			msg: msg,
-		}
+		mustUnmarshal(serializedEntry, &msg)
+		return &StreamingResponseDeserializationError{msg: msg}
 	case "OutcallError":
 		var msg string
-		_ = json.Unmarshal(serializedEntry, &msg)
-
-		return &OutcallError{
-			msg: msg,
-		}
+		mustUnmarshal(serializedEntry, &msg)
+		return &OutcallError{msg: msg}
 	case "InvalidDataReceivedError":
 		var msg string
-		_ = json.Unmarshal(serializedEntry, &msg)
-
-		return &InvalidDataReceivedError{
-			msg: msg,
-		}
+		mustUnmarshal(serializedEntry, &msg)
+		return &InvalidDataReceivedError{msg: msg}
 	case "InvalidWasmModuleError":
 		var msg string
-		_ = json.Unmarshal(serializedEntry, &msg)
-
-		return &InvalidWasmModuleError{
-			msg: msg,
-		}
+		mustUnmarshal(serializedEntry, &msg)
+		return &InvalidWasmModuleError{msg: msg}
 	default:
 		panic(constants.UNREACHABLE)
 	}
@@ -252,7 +224,7 @@ type TrapOccuredWhileWasmModuleExecutionError struct {
 }
 
 func (e *TrapOccuredWhileWasmModuleExecutionError) ErrorName() string {
-	return "TrapOccurredWhileWasmModuleExecution"
+	return "TrapOccuredWhileWasmModuleExecution"
 }
 
 func (e *TrapOccuredWhileWasmModuleExecutionError) Error() string {
@@ -304,7 +276,7 @@ func (e *ContractMethodExecutionError) ErrorName() string {
 }
 
 func (e *ContractMethodExecutionError) Error() string {
-	return fmt.Sprintf("error occured while executing contract call with id `%s` to method `%s`: %s", e.inner.ContractId, e.inner.MethodName, e.inner.ErrMsg)
+	return fmt.Sprintf("error occurred while executing contract call with id `%s` to method `%s`: %s", e.inner.ContractId, e.inner.MethodName, e.inner.ErrMsg)
 }
 
 type InvalidCrossContractCallError struct {
@@ -350,7 +322,7 @@ func (e *LLMClusterError) ErrorName() string {
 }
 
 func (e *LLMClusterError) Error() string {
-	return fmt.Sprintf("LLM cluster error occured: %s", e.msg)
+	return fmt.Sprintf("LLM cluster error occurred: %s", e.msg)
 }
 
 type StreamingResponseDeserializationError struct {
@@ -392,7 +364,7 @@ func (e *OutcallError) ErrorName() string {
 }
 
 func (e *OutcallError) Error() string {
-	return fmt.Sprintf("error occured while executing an outcall: %s", e.msg)
+	return fmt.Sprintf("error occurred while executing an outcall: %s", e.msg)
 }
 
 type InvalidWasmModuleError struct {

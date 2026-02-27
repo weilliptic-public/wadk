@@ -17,7 +17,7 @@ type Option[T any] struct {
 // Panics if val is nil; use NewNoneOption to represent the absence of a value.
 func NewSomeOption[T any](val *T) *Option[T] {
 	if val == nil {
-		panic("nil value not allowed, use `NewNoneOption` to depict the absense of value")
+		panic("nil value not allowed, use `NewNoneOption` to depict the absence of value")
 	}
 
 	return &Option[T]{

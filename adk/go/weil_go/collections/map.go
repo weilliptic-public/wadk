@@ -27,7 +27,10 @@ func (m *WeilMap[K, V]) BaseStatePath() string {
 
 // StateTreeKey generates a state tree key for the given key suffix.
 func (m *WeilMap[K, V]) StateTreeKey(suffix *K) string {
-	serializedSuffix, _ := json.Marshal(suffix)
+	serializedSuffix, err := json.Marshal(suffix)
+	if err != nil {
+		panic(fmt.Sprintf("WeilMap.StateTreeKey: failed to serialize key: %v", err))
+	}
 	return fmt.Sprintf("%s_%s", m.BaseStatePath(), string(serializedSuffix))
 }
 

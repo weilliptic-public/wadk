@@ -2,6 +2,8 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
+
 	"github.com/weilliptic-public/wadk/adk/go/weil_go/errors"
 	internal "github.com/weilliptic-public/wadk/adk/go/weil_go/internal"
 	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
@@ -76,11 +78,12 @@ func (rb *RequestBuilder) Body(body string) *RequestBuilder {
 
 func (rb *RequestBuilder) JSON(data any) *RequestBuilder {
 	b, err := json.Marshal(data)
-	if err == nil {
-		s := string(b)
-		rb.body = &s
-		rb.headers["Content-Type"] = "application/json"
+	if err != nil {
+		panic(fmt.Sprintf("RequestBuilder.JSON: failed to marshal body: %v", err))
 	}
+	s := string(b)
+	rb.body = &s
+	rb.headers["Content-Type"] = "application/json"
 	return rb
 }
 
@@ -150,14 +153,17 @@ func (rb *RequestBuilder) Send() *types.Result[HttpResponse, errors.WeilError] {
 	okResult := respResult.TryOkResult()
 	var httpResponse HttpResponse
 
-	_ = json.Unmarshal(*okResult, &httpResponse)
+	if err := json.Unmarshal(*okResult, &httpResponse); err != nil {
+		var weilErr errors.WeilError = errors.NewOutcallError(fmt.Sprintf("failed to deserialize HTTP response: %v", err))
+		return types.NewErrResult[HttpResponse, errors.WeilError](&weilErr)
+	}
 
 	return types.NewOkResult[HttpResponse, errors.WeilError](&httpResponse)
 }
 
 type HttpResponse struct {
-	status uint16
-	Body   string
+	Status uint16 `json:"status"`
+	Body   string `json:"body"`
 }
 
 func (r *HttpResponse) Text() string {
@@ -166,8 +172,4 @@ func (r *HttpResponse) Text() string {
 
 func (r *HttpResponse) JSON(v any) error {
 	return json.Unmarshal([]byte(r.Body), v)
-}
-
-func (r *HttpResponse) Status() uint16 {
-	return r.status
 }

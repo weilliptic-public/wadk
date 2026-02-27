@@ -53,7 +53,7 @@ func NewWallet(absPath string) (*Wallet, error) {
 	return &Wallet{Account: account}, nil
 }
 
-func (w *Wallet) GetPubcliKey() secp.PublicKey {
+func (w *Wallet) GetPublicKey() secp.PublicKey {
 	return w.Account.PublicKey
 }
 

@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+const (
+	contractIDDecodedLen = 36 // decoded base32 contract ID is always 36 bytes
+	podCounterLen        = 4  // pod counter occupies the first 4 bytes
+)
+
 // input byteArray should be of length 4
 func byteArrayToInt(byteArray []byte) (int32, error) {
 	var num int32
@@ -29,11 +34,11 @@ func PodCounter(contractId string) (int, error) {
 		return 0, err
 	}
 
-	if len(decoded) != 36 {
-		return 0, fmt.Errorf("invalid contract-id: Expected 36 bytes long , got %v bytes", len(decoded))
+	if len(decoded) != contractIDDecodedLen {
+		return 0, fmt.Errorf("invalid contract-id: expected %d bytes, got %d", contractIDDecodedLen, len(decoded))
 	}
 
-	podIdBytes := decoded[:4]
+	podIdBytes := decoded[:podCounterLen]
 	podIdCounter, err := byteArrayToInt(podIdBytes)
 
 	if err != nil {

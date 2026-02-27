@@ -91,7 +91,10 @@ func (obj *Result[T, E]) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf(`enum-type unmarshalling expects key from variant names: ["Ok", "Err"]`)
 	}
 
-	entry, _ := json.Marshal(tmp[criticalEnumVariant])
+	entry, err := json.Marshal(tmp[criticalEnumVariant])
+	if err != nil {
+		return fmt.Errorf("Result.UnmarshalJSON: failed to re-marshal %q variant: %w", criticalEnumVariant, err)
+	}
 
 	switch criticalEnumVariant {
 	case "Ok":

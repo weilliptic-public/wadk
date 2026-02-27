@@ -33,7 +33,7 @@ type NonceFailureResponse struct {
 }
 
 func (w *WeilContractClient) Execute(methodName string, methodArgs string, shouldHideArgs bool, isNonBlocking bool) (*transaction.TransactionResult, error) {
-	publicKey := w.client.wallet.GetPubcliKey()
+	publicKey := w.client.wallet.GetPublicKey()
 	fromAddr := utils.GetAddressFromPublicKey(publicKey)
 	toAddr := fromAddr
 	contractId := w.contractId

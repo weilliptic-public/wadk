@@ -92,8 +92,8 @@ func SubmitTransaction(httpClient *http.Client, payload SubmitTxnRequest, isNonB
 		return &transaction.TransactionResult{}, nil
 	}
 
-	if json.Unmarshal(respBody, &txnResult) != nil {
-		return nil, err
+	if err := json.Unmarshal(respBody, &txnResult); err != nil {
+		return nil, fmt.Errorf("failed to deserialize transaction result: %w", err)
 	}
 
 	return &txnResult, nil

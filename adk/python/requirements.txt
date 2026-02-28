@@ -98,8 +98,6 @@ uuid_utils==0.14.1
 uvicorn==0.41.0
 watchfiles==1.1.1
 websockets==16.0
--e git+https://github.com/weilliptic-inc/contract-sdk.git@dfb5d4ccb8ebfa7afc681d00f948a28bcbdd4a43#egg=weil_ai&subdirectory=python/weil_ai
--e git+https://github.com/weilliptic-inc/contract-sdk.git@dfb5d4ccb8ebfa7afc681d00f948a28bcbdd4a43#egg=weil_wallet&subdirectory=python/weil_wallet
 xxhash==3.6.0
 zipp==3.23.0
 zstandard==0.25.0

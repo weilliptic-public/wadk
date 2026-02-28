@@ -2,10 +2,10 @@
 
 Python packages for building on WeilChain. The SDK is split into two installable packages:
 
-| Package | Description |
-|---|---|
+| Package                       | Description                                      |
+| ----------------------------- | ------------------------------------------------ |
 | [`weil_wallet`](#weil_wallet) | Core wallet, signing, and transaction primitives |
-| [`weil_ai`](#weil_ai) | AI agent integration and MCP server utilities |
+| [`weil_ai`](#weil_ai)         | AI agent integration and MCP server utilities    |
 
 ---
 
@@ -20,12 +20,6 @@ cd python/weil_wallet
 pip3 install .
 ```
 
-With optional LangChain agent support:
-
-```bash
-pip3 install ".[agents]"
-```
-
 ### Install `weil_ai`
 
 `weil_ai` depends on `weil_wallet`, so install `weil_wallet` first.
@@ -38,25 +32,14 @@ cd ../weil_ai
 pip3 install .
 ```
 
-With optional MCP server support (FastMCP, Starlette, Uvicorn):
-
-```bash
-pip3 install ".[server]"
-```
-
 ### Virtual environment setup (recommended)
 
-```bash
+````bash
 python3 -m venv .venv
 source .venv/bin/activate
 
 pip3 install ./weil_wallet
 pip3 install ./weil_ai
-
-# or with all extras:
-pip3 install "./weil_wallet[agents]"
-pip3 install "./weil_ai[server]"
-```
 
 ---
 
@@ -78,7 +61,7 @@ wallet = Wallet(pk)
 # Or from a hex string directly
 pk = PrivateKey.from_hex("a1b2c3...")
 wallet = Wallet(pk)
-```
+````
 
 ### Mnemonic wallets (BIP39 / BIP32)
 
@@ -134,13 +117,13 @@ asyncio.run(main())
 
 **`execute` parameters:**
 
-| Parameter | Type | Description |
-|---|---|---|
-| `contract_id` | `ContractId` | Target applet address |
-| `method_name` | `str` | Exported method to call |
-| `method_args` | `str` | JSON-encoded arguments |
-| `should_hide_args` | `bool` | Hide args on-chain (fire-and-forget when `True`) |
-| `is_non_blocking` | `bool` | Return immediately without waiting for result |
+| Parameter          | Type         | Description                                   |
+| ------------------ | ------------ | --------------------------------------------- |
+| `contract_id`      | `ContractId` | Target applet address                         |
+| `method_name`      | `str`        | Exported method to call                       |
+| `method_args`      | `str`        | JSON-encoded arguments                        |
+| `should_hide_args` | `bool`       | Hide args on-chain                            |
+| `is_non_blocking`  | `bool`       | Return immediately without waiting for result |
 
 ### Streaming responses
 
@@ -174,20 +157,20 @@ async with WeilClient(wallet) as client:
 
 ### API reference
 
-| Symbol | Description |
-|---|---|
-| `PrivateKey` | Load a hex-encoded private key from a file or string |
-| `Wallet` | secp256k1 signing wallet; produces 64-byte compact signatures |
-| `WeilClient` | Async client; manages HTTP connection and concurrency (default: 64) |
-| `WeilContractClient` | Per-contract client returned by `client.to_contract_client()` |
-| `ContractId` | Base32 RFC 4648 contract address with shard-routing support |
-| `MnemonicWallet` | BIP39/BIP32 hierarchical wallet |
-| `WalletAccount` | Single derived account (private key, public key, address) |
-| `create_wallet` | Generate or restore a `MnemonicWallet` |
-| `load_wallet` | Reload a wallet saved with `store_wallet()` |
-| `TransactionResult` | Result returned after a blocking `execute()` call |
-| `TransactionStatus` | Enum of transaction status codes |
-| `ByteStream` | Async iterator over streamed response chunks |
+| Symbol               | Description                                                         |
+| -------------------- | ------------------------------------------------------------------- |
+| `PrivateKey`         | Load a hex-encoded private key from a file or string                |
+| `Wallet`             | secp256k1 signing wallet; produces 64-byte compact signatures       |
+| `WeilClient`         | Async client; manages HTTP connection and concurrency (default: 64) |
+| `WeilContractClient` | Per-contract client returned by `client.to_contract_client()`       |
+| `ContractId`         | Base32 RFC 4648 contract address with shard-routing support         |
+| `MnemonicWallet`     | BIP39/BIP32 hierarchical wallet                                     |
+| `WalletAccount`      | Single derived account (private key, public key, address)           |
+| `create_wallet`      | Generate or restore a `MnemonicWallet`                              |
+| `load_wallet`        | Reload a wallet saved with `store_wallet()`                         |
+| `TransactionResult`  | Result returned after a blocking `execute()` call                   |
+| `TransactionStatus`  | Enum of transaction status codes                                    |
+| `ByteStream`         | Async iterator over streamed response chunks                        |
 
 ---
 
@@ -328,28 +311,28 @@ async def call_tool(name: str, arguments: dict):
 
 ### API reference
 
-| Symbol | Description |
-|---|---|
-| `WeilAgent` | Proxy wrapper that adds `get_auth_headers()` and `audit()` to any agent |
-| `weil_agent` / `agent` | Decorator factory for agent factory functions |
-| `build_auth_headers` | Build the four signed HTTP auth headers from a `Wallet` |
-| `verify_weil_signature` | Verify the four auth headers (server-side) |
-| `weil_middleware` | Starlette middleware class that verifies headers and sets the wallet ContextVar |
-| `current_wallet_addr` | Read the verified wallet address for the current request |
-| `secured` | Decorator factory that enforces on-chain access control for MCP tools |
+| Symbol                  | Description                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| `WeilAgent`             | Proxy wrapper that adds `get_auth_headers()` and `audit()` to any agent         |
+| `weil_agent` / `agent`  | Decorator factory for agent factory functions                                   |
+| `build_auth_headers`    | Build the four signed HTTP auth headers from a `Wallet`                         |
+| `verify_weil_signature` | Verify the four auth headers (server-side)                                      |
+| `weil_middleware`       | Starlette middleware class that verifies headers and sets the wallet ContextVar |
+| `current_wallet_addr`   | Read the verified wallet address for the current request                        |
+| `secured`               | Decorator factory that enforces on-chain access control for MCP tools           |
 
 ---
 
 ## Examples
 
-| File | Description |
-|---|---|
-| `examples/example.py` | Basic wallet setup and contract execution |
-| `examples/example_derived.py` | Mnemonic wallet derivation and account usage |
-| `examples/langchain.py` | LangChain agent wrapped with `@weil_ai.agent` |
-| `examples/claude_mcp.py` | Stdio MCP server with on-chain audit logging |
-| `examples/mcp_server.py` | HTTP MCP server with `weil_middleware` and `@secured` |
-| `examples/mcp_client.py` | MCP client using signed auth headers |
-| `examples/audit_example.py` | Direct audit log submission |
-| `examples/agent_trace.py` | Agent tracing example |
-| `examples/verify_me.py` | Standalone signature verification |
+| File                          | Description                                           |
+| ----------------------------- | ----------------------------------------------------- |
+| `examples/example.py`         | Basic wallet setup and contract execution             |
+| `examples/example_derived.py` | Mnemonic wallet derivation and account usage          |
+| `examples/langchain.py`       | LangChain agent wrapped with `@weil_ai.agent`         |
+| `examples/claude_mcp.py`      | Stdio MCP server with on-chain audit logging          |
+| `examples/mcp_server.py`      | HTTP MCP server with `weil_middleware` and `@secured` |
+| `examples/mcp_client.py`      | MCP client using signed auth headers                  |
+| `examples/audit_example.py`   | Direct audit log submission                           |
+| `examples/agent_trace.py`     | Agent tracing example                                 |
+| `examples/verify_me.py`       | Standalone signature verification                     |

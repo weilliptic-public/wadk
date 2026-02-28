@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod collections;
 pub mod config;
 pub mod crm;

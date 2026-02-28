@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use weil_macros::{WeilType, constructor, mutate, query, secured, smart_contract};
 use weil_rs::runtime::Runtime;
-
-mod helper;
-use helper::{BaseAgentHelper, Model};
+use weil_rs::ai::agents::{base::BaseAgentHelper, Model};
 
 const BASE_AGENT_HELPER_NAME: &str = "base_agent_helper::weil";
 
@@ -59,7 +57,8 @@ impl BaseAgent for BaseAgentContractState {
             .run_task(
                 task_prompt,
                 self.mcp_contract_address.clone(),
-                Model::QWEN_235B,
+                Model::GPT_5POINT1,
+                Some("<api_key>".to_string()),
             )
             .map_err(|e| e.to_string())?;
 

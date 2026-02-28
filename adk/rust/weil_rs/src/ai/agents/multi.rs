@@ -1,57 +1,69 @@
+//! Multi-agent helper for running multiple tasks via a task executor contract.
+
+use super::errors::TaskExecutorError;
+use super::models::Model;
+use crate::runtime::Runtime;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use weil_rs::runtime::Runtime;
 
-use crate::error::TaskExecutorError;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Model {
-    QWEN_235B,
-    GPT_5POINT1,
-    CLAUDE_SONNET,
-}
-
+/// Result of a multi-task execution from the contract.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum TaskExecutorResult {
+    /// All tasks completed successfully; contains the final result string.
     Ok(String),
+    /// A task failed; contains (error_message, resume_task_index, previous_task_result).
     Err((String, u32, Option<String>)),
 }
 
+/// Helper for interacting with a multi-agent (task executor) contract.
 pub struct MultiAgentHelper {
     contract_id: String,
 }
 
 impl MultiAgentHelper {
-    /// Creates a new MultiAgentHelper instance
-    /// 
+    /// Creates a new [`MultiAgentHelper`] bound to the given task executor contract.
+    ///
     /// # Arguments
-    /// * `contract_id` - The contract ID of the multi-agent helper service
+    ///
+    /// * `contract_id` - The contract ID of the multi-agent / task executor to invoke.
     pub fn new(contract_id: String) -> Self {
         MultiAgentHelper { contract_id }
     }
 }
 
 impl MultiAgentHelper {
-    /// Executes multiple tasks by calling the multi-agent helper contract
-    /// 
+    /// Runs multiple tasks in sequence by calling the contract's `run_tasks` entrypoint.
+    ///
+    /// If a task fails, the error includes the index at which to resume and the remaining
+    /// task descriptions.
+    ///
     /// # Arguments
-    /// * `task_prompts` - Slice of task prompt strings to execute
-    /// * `mcp_contract_addresses` - List of MCP contract addresses for each agent
-    /// * `model` - The AI model to use for task execution
-    /// 
+    ///
+    /// * `task_prompts` - Slice of natural language prompts, one per task.
+    /// * `mcp_contract_addresses` - Addresses of MCP contracts to use for tooling.
+    /// * `model` - The model to use for task execution.
+    ///
     /// # Returns
-    /// The aggregated result of all task executions
+    ///
+    /// The final task result as a string when all tasks succeed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TaskExecutorError`] containing resume index and remaining tasks if a task
+    /// fails; or an error if the contract call itself fails.
     pub fn run_tasks<'a>(
         &'a self,
         task_prompts: &'a [String],
         mcp_contract_addresses: Vec<String>,
         model: Model,
+        model_key: Option<String>
     ) -> Result<String, anyhow::Error> {
         #[derive(Debug, Serialize)]
         struct RunTaskArgs<'a> {
             task_prompts: &'a [String],
             mcp_contract_addresses: Vec<String>,
             model: Model,
+            model_key: Option<String>,
         }
 
         let serialized_args = Some(
@@ -59,6 +71,7 @@ impl MultiAgentHelper {
                 task_prompts,
                 mcp_contract_addresses,
                 model,
+                model_key,
             })
             .unwrap(),
         );

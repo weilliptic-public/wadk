@@ -10,8 +10,9 @@ members = [
    "fungible_token/yutaka",
    "base_agent",
    "multi_agent",
-   "base_client"
-, "multi_client"]
+   "base_client", 
+   "multi_client",
+   "step_agent"]
 
 resolver = "2"
 
@@ -31,4 +32,5 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 hex = "0.4.3"
 humantime = "2.2.0"
 thiserror = "2.0.12"
+typetag = "0.2"
 tokio = { version = "1.40.0", features = ["full"] }

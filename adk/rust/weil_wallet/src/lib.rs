@@ -165,7 +165,34 @@ impl WeilClient {
         Ok(resp)
     }
 
+    /// Audits a log message using the platform's audit contract.
+    ///
+    /// This method sends the given log message to the auditor applet, which is typically
+    /// used for verifiable off-chain or on-chain audit trails. The log message is passed
+    /// as an argument to the `"audit"` contract method via a transaction. The transaction
+    /// is sent in non-blocking mode and does not conceal arguments from auditing infrastructure.
+    ///
+    /// # Arguments
+    ///
+    /// * `log` - The string to be audited.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the audit log was successfully submitted.
+    /// * `Err(anyhow::Error)` if the submission or contract call failed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use weil_wallet::WeilClient;
+    /// # async fn example(client: WeilClient) -> anyhow::Result<()> {
+    /// client.audit("User action: something important".to_string()).await?;
+    /// println!("Audit log submitted.");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn audit(&self, log: String) -> anyhow::Result<()> {
+        // Resolve the auditor applet contract id
         let contract_id = self.get_audit_contract_id().await?;
         let method_name = "audit";
 
@@ -174,8 +201,10 @@ impl WeilClient {
             log: String,
         }
 
+        // Prepare arguments to send as JSON
         let method_args = serde_json::to_string(&AuditArgs { log }).unwrap();
 
+        // Send transaction to the audit applet (non-blocking, arguments visible)
         let _ = self
             .execute(
                 contract_id,

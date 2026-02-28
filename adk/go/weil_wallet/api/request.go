@@ -1,8 +1,8 @@
 package api
 
 import (
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/types"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/transaction"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
 )
 
 type Verifier struct {
@@ -14,6 +14,7 @@ type UserTransaction struct {
 	ContractAddress    string                `json:"contract_address"`
 	ContractMethod     string                `json:"contract_method"`
 	ContractInputBytes *types.Option[string] `json:"contract_input_bytes"`
+	ShouldHideArgs     bool                  `json:"should_hide_args"`
 }
 
 type Transaction struct {

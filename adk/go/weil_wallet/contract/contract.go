@@ -2,12 +2,13 @@ package contract
 
 import (
 	"bytes"
+	"encoding/base32"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
-//  input byteArray should be of length 4
+// input byteArray should be of length 4
 func byteArrayToInt(byteArray []byte) (int32, error) {
 	var num int32
 	buf := bytes.NewReader(byteArray)
@@ -20,18 +21,19 @@ func byteArrayToInt(byteArray []byte) (int32, error) {
 	return num, nil
 }
 
-//  Gets the Pod Counter from the id <string>
+// Gets the Pod Counter from the id <string>
 func PodCounter(contractId string) (int, error) {
-	decodedBytes, err := hex.DecodeString(contractId)
+	decoded, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(contractId))
+
 	if err != nil {
 		return 0, err
 	}
 
-	if len(decodedBytes) != 36 {
-		return 0, fmt.Errorf("invalid contract-id: Expected 36 bytes long , got %v bytes", len(decodedBytes))
+	if len(decoded) != 36 {
+		return 0, fmt.Errorf("invalid contract-id: Expected 36 bytes long , got %v bytes", len(decoded))
 	}
 
-	podIdBytes := decodedBytes[:4]
+	podIdBytes := decoded[:4]
 	podIdCounter, err := byteArrayToInt(podIdBytes)
 
 	if err != nil {

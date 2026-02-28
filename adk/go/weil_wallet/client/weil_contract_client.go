@@ -1,18 +1,15 @@
 package client
 
 import (
-	"bytes"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"net/http"
+	"time"
 
-	"github.com/weilliptic-inc/contract-sdk/go/weil_go/types"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/api"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/contract"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/internal/constants"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/transaction"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/utils"
+	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/api"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/contract"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/utils"
 )
 
 type WeilContractClient struct {
@@ -25,6 +22,7 @@ type ExecuteArgs struct {
 	ContractAddress    string
 	ContractMethod     string
 	ContractInputBytes *types.Option[string]
+	ShouldHideArgs     bool
 }
 
 type NonceFailureResponse struct {
@@ -34,7 +32,7 @@ type NonceFailureResponse struct {
 	Status        string `json:"status"`
 }
 
-func (w *WeilContractClient) Execute(methodName string, methodArgs string) (*transaction.TransactionResult, error) {
+func (w *WeilContractClient) Execute(methodName string, methodArgs string, shouldHideArgs bool, isNonBlocking bool) (*transaction.TransactionResult, error) {
 	publicKey := w.client.wallet.GetPubcliKey()
 	fromAddr := utils.GetAddressFromPublicKey(publicKey)
 	toAddr := fromAddr
@@ -45,65 +43,28 @@ func (w *WeilContractClient) Execute(methodName string, methodArgs string) (*tra
 		return nil, err
 	}
 
-	nonceKey := fmt.Sprintf("%v%s%s", weilpodCounter, "$", fromAddr)
 	publicKeyHex := hex.EncodeToString(publicKey.SerializeUncompressed())
 
-	args := ExecuteArgs{
+	args := &ExecuteArgs{
 		ContractAddress:    w.contractId,
 		ContractMethod:     methodName,
 		ContractInputBytes: types.NewSomeOption(&methodArgs),
+		ShouldHideArgs:     shouldHideArgs,
 	}
 
-	retryIndex := 0
+	nonce := int(time.Now().UnixMilli())
+	txnHeader := transaction.NewTransactionHeader(nonce, publicKeyHex, fromAddr, toAddr, weilpodCounter)
 
-	for retryIndex < constants.MAX_RETRIES {
-		response, err := w.ExecuteInner(args, nonceKey, publicKeyHex, fromAddr, toAddr, weilpodCounter)
-		if err != nil {
-			return nil, err
-		}
-
-		decoderTxnResult := json.NewDecoder(bytes.NewReader([]byte(*response)))
-		decoderTxnResult.DisallowUnknownFields()
-
-		var txnResult transaction.TransactionResult
-
-		err = decoderTxnResult.Decode(&txnResult)
-		if err == nil {
-			return &txnResult, nil
-		}
-
-		decoderNonceFailure := json.NewDecoder(bytes.NewReader([]byte(*response)))
-		decoderNonceFailure.DisallowUnknownFields()
-
-		var nonceFailureResponse NonceFailureResponse
-
-		if decoderNonceFailure.Decode(&nonceFailureResponse) == nil {
-			w.client.nonceTracker.SetNonce(nonceKey, uint64(nonceFailureResponse.ExpectedNonce))
-			retryIndex += 1
-
-			continue
-		}
-
-		return nil, fmt.Errorf("sentinel server returned invalid response : %s", response)
-	}
-
-	return nil, fmt.Errorf("failed to submit transaction to the sentinel node ... max retries reached")
-}
-
-func (w WeilContractClient) ExecuteInner(args ExecuteArgs, nonceKey string, publicKey string, fromAddr string, toAddr string, weilpodCounter int) (*string, error) {
-	nonce := w.client.nonceTracker.GetNonce(nonceKey)
-	txnHeader := transaction.NewTransactionHeader(nonce, publicKey, fromAddr, toAddr, weilpodCounter)
-
-	signature, err := w.SignExecuteArgs(txnHeader, &args)
+	signature, err := w.SignExecuteArgs(txnHeader, args)
 
 	if err != nil {
 		return nil, err
 	}
 
 	txnHeader.SetSignature(*signature)
-	baseTxn := transaction.NewBaseTransaction(*txnHeader)
+	baseTxn := transaction.NewBaseTransaction(txnHeader)
 
-	response, err := w.SubmitSignedArgs(*signature, baseTxn, args)
+	response, err := w.SubmitSignedArgs(*signature, baseTxn, args, isNonBlocking)
 
 	if err != nil {
 		return nil, err
@@ -122,6 +83,7 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 			"contract_address":     args.ContractAddress,
 			"contract_method":      args.ContractMethod,
 			"contract_input_bytes": args.ContractInputBytes,
+			"should_hide_args":     args.ShouldHideArgs,
 		},
 	}
 
@@ -141,7 +103,7 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 	return signature, nil
 }
 
-func (w WeilContractClient) SubmitSignedArgs(signature string, txn *transaction.BaseTransaction, args ExecuteArgs) (*string, error) {
+func (w WeilContractClient) SubmitSignedArgs(signature string, txn *transaction.BaseTransaction, args *ExecuteArgs, isNonBlocking bool) (*transaction.TransactionResult, error) {
 
 	typeStr := "SmartContractExecutor"
 	payload := api.SubmitTxnRequest{
@@ -163,11 +125,12 @@ func (w WeilContractClient) SubmitSignedArgs(signature string, txn *transaction.
 				ContractAddress:    args.ContractAddress,
 				ContractMethod:     args.ContractMethod,
 				ContractInputBytes: args.ContractInputBytes,
+				ShouldHideArgs:     args.ShouldHideArgs,
 			},
 		},
 	}
 
-	response, err := api.SubmitTransaction(w.httpClient, payload)
+	response, err := api.SubmitTransaction(w.httpClient, payload, isNonBlocking)
 
 	if err != nil {
 		return nil, err

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
-	"github.com/weilliptic-inc/contract-sdk/go/weil_wallet/utils"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/utils"
 )
 
 type Account struct {

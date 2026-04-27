@@ -738,8 +738,24 @@ pub fn impl_smart_contract_secured_macro(
 
     let stream = quote! {
         {
-            let identity_addr = weil_rs::runtime::Runtime::contract_id_for_name(#arg_str).map_err(|err| err.to_string())?;
-            
+            let items = #arg_str.split(".").collect::<Vec<&str>>();
+            /*
+            basically the last item in the above array will be the root group
+            we need to get the sub groups and make the subgroup prexix by concatenating with "_"
+            like if arg_str is devops.engg.weil
+            our root group will be weil and subgroup will be devops_engg
+            if there is no subdomain and arg_str is just weil then subgroup will be empty string and root group will be weil
+            */
+            let group = items.last().unwrap();
+            let sub_group = if items.len() > 1 {
+                items[..items.len() - 1].join("_")
+            } else {
+                "".to_string()
+            };
+
+            let identity_contract_name = format!("identity::{}", group);
+            let identity_addr = weil_rs::runtime::Runtime::contract_id_for_name(&identity_contract_name).map_err(|err| err.to_string())?;
+
             #[derive(Serialize)]
             struct IdentityArgs {
                 key: String,
@@ -761,7 +777,11 @@ pub fn impl_smart_contract_secured_macro(
                 return Err("key manager address not found".to_string());
             };
 
-            let addr = weil_rs::runtime::Runtime::sender();
+            let addr = weil_rs::runtime::Runtime::origin();
+            let qualified_addr = match sub_group.as_str() {
+                "" => addr,
+                _ => format!("{}_{}", sub_group, addr),
+            };
 
             #[derive(Serialize)]
             struct Args {
@@ -770,7 +790,7 @@ pub fn impl_smart_contract_secured_macro(
             }
 
             let args = Args {
-                key: addr,
+                key: qualified_addr,
                 purpose: weil_contracts::key_management::KeyPurpose::Execution,
             };
 

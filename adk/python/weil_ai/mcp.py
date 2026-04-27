@@ -123,7 +123,7 @@ def secured(svc_name: str) -> Callable:
     Usage::
 
         @server.tool()
-        @secured("engg::weil")
+        @secured("engg.weil")
         async def my_tool(query: str) -> str:
             ...
     """

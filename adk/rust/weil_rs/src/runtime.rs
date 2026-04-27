@@ -60,6 +60,7 @@ extern "C" {
     fn applet_addr_for_name(name: i32) -> i32;
     fn get_applet_details(applet_id: i32) -> i32;
     fn parse_human_time(s: i32) -> i32;
+    fn get_pod_id_from_address(wallet_addr: i32) -> i32;
 }
 
 /// Wrapper for returning an optional state and a success value from a contract call.
@@ -562,6 +563,16 @@ impl Runtime {
         let ex = LocalExecutor::new();
         let task = ex.spawn(async { task.await });
         block_on(ex.run(task))
+    }
+
+    /// Get the weilpod corresponding to a given wallet address.
+    pub fn get_pod_id_from_addr(wallet_addr: String) -> Result<String, WeilError> {
+        let raw_wallet_addr = get_length_prefixed_bytes_from_string(&wallet_addr, 0);
+        let ptr = unsafe { get_pod_id_from_address(raw_wallet_addr.as_ptr() as _) };
+        match read_bytes_from_memory(ptr){
+            Ok(addr) => Ok(addr),
+            Err(err) => Err(WeilError::InvalidWasmModuleError(format!("Failed to get pod id from address for wallet_addr '{}': {}", wallet_addr, err)))
+        }
     }
 
     /// Helper to set only a result value (no state) from a contract method.

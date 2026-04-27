@@ -141,7 +141,7 @@ impl SecuredAurora for SecuredAuroraContractState {
 
     /// See [`Aurora::run_query`].
     #[query]
-    #[secured("Engg::weil")]
+    #[secured("engg.weil")]
     async fn run_query(&self, query_str: String, db_name: String) -> Result<Vec<String>, String> {
         let config = self.secrets.config();
 
@@ -168,7 +168,7 @@ impl SecuredAurora for SecuredAuroraContractState {
 
     /// See [`Aurora::execute`].
     #[query]
-    #[secured("Engg::weil")]
+    #[secured("engg.weil")]
     async fn execute(&self, db_name: String, statement: String) -> Result<u64, String> {
         let config = self.secrets.config();
 
@@ -191,7 +191,7 @@ impl SecuredAurora for SecuredAuroraContractState {
 
     /// See [`Aurora::run_query_and_export`].
     #[query]
-    #[secured("Engg::weil")]
+    #[secured("engg.weil")]
     async fn run_query_and_export(
         &self,
         query_str: String,

@@ -7,7 +7,7 @@ mcp = FastMCP("my-server")
 
 
 @mcp.tool()
-@secured("engg::weil")
+@secured("engg.weil")
 async def search(query: str) -> str:
     resp = {"query": query, "result": "Bhavya Bhatt"}
     return json.dumps(resp)

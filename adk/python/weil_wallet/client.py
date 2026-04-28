@@ -68,6 +68,18 @@ class WeilClient:
         wallet = Wallet.from_account_export_file(path)
         return cls(wallet, concurrency, sentinel_host=sentinel_host, verify=verify)
 
+    @classmethod
+    def from_wallet_file(
+        cls,
+        path: str,
+        concurrency: Optional[int] = None,
+        *,
+        sentinel_host: Optional[str] = "https://sentinel.unweil.me",
+        verify: bool = True,
+    ) -> "WeilClient":
+        wallet = Wallet.from_wallet_file(path)
+        return cls(wallet, concurrency, sentinel_host=sentinel_host, verify=verify)
+
     async def add_account_from_export_file(self, path: str) -> None:
         async with self._wallet_lock:
             self._wallet.add_account_from_export_file(path)

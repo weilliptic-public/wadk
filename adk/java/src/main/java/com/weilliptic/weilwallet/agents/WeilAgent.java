@@ -13,7 +13,7 @@ import java.nio.file.Paths;
 /**
  * Wraps an agent with a Weil identity (wallet) and audit capability.
  * Call {@link #audit(String)} to record a log entry on-chain.
- * Use {@link #setWalletPath(String)} to set or change the wallet (account export file).
+ * Use {@link #setWalletPath(String)} to set or change the wallet (wallet.wc file).
  */
 public class WeilAgent<T> {
 
@@ -58,13 +58,13 @@ public class WeilAgent<T> {
 
     public void setWalletPath(Path path) {
         if (!Files.isRegularFile(path)) {
-            throw new IllegalArgumentException("Account export file not found: " + path);
+            throw new IllegalArgumentException("Wallet file not found: " + path);
         }
         try {
-            this.wallet = Wallet.fromAccountExportFile(path);
+            this.wallet = Wallet.fromWalletFile(path);
             this.client = null;
         } catch (IOException e) {
-            throw new RuntimeException("Failed to load account export from " + path, e);
+            throw new RuntimeException("Failed to load wallet from " + path, e);
         }
     }
 
@@ -107,20 +107,20 @@ public class WeilAgent<T> {
     }
 
     /**
-     * Default locations to look for account.wc (cwd, then parent, then examples/).
+     * Default locations to look for wallet.wc (cwd, then parent, then examples/).
      */
     public static Path findDefaultAccountExportPath() {
         Path cwd = Paths.get("").toAbsolutePath();
         Path[] candidates = {
-            cwd.resolve("account.wc"),
-            cwd.getParent() != null ? cwd.getParent().resolve("account.wc") : null,
-            cwd.resolve("examples").resolve("account.wc")
+            cwd.resolve("wallet.wc"),
+            cwd.getParent() != null ? cwd.getParent().resolve("wallet.wc") : null,
+            cwd.resolve("examples").resolve("wallet.wc")
         };
         for (Path p : candidates) {
             if (p != null && Files.isRegularFile(p)) {
                 return p;
             }
         }
-        throw new IllegalStateException("account.wc not found. Place it in cwd, project root, or examples/.");
+        throw new IllegalStateException("wallet.wc not found. Place it in cwd, project root, or examples/.");
     }
 }

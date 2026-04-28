@@ -55,6 +55,11 @@ public class WeilClient implements AutoCloseable {
         return new WeilClient(w);
     }
 
+    public static WeilClient fromWalletFile(String path) throws IOException {
+        Wallet w = Wallet.fromWalletFile(java.nio.file.Paths.get(path));
+        return new WeilClient(w);
+    }
+
     public void addAccountFromExportFile(String path) throws IOException {
         synchronized (walletLock) {
             wallet.addAccountFromExportFile(java.nio.file.Paths.get(path));

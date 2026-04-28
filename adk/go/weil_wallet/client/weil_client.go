@@ -55,6 +55,14 @@ func NewWeilClientFromAccountExportFile(path string) (*WeilClient, error) {
 	return NewWeilClient(w), nil
 }
 
+func NewWeilClientFromWalletFile(path string) (*WeilClient, error) {
+	w, err := wallet.NewWalletFromWalletFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return NewWeilClient(w), nil
+}
+
 func (w *WeilClient) AddAccountFromExportFile(path string) error {
 	w.walletMu.Lock()
 	defer w.walletMu.Unlock()

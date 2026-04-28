@@ -79,6 +79,54 @@ struct AccountExportEntry {
     account_address: String,
 }
 
+// ── Wallet file format (wallet.wc) ────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct WalletFile {
+    #[allow(dead_code)]
+    version: u32,
+    #[serde(rename = "type")]
+    file_type: String,
+    xprv: String,
+    #[allow(dead_code)]
+    home_region: Option<String>,
+    #[serde(default = "default_wallet_selected_account")]
+    selected_account: WalletSelectedAccount,
+    #[serde(default)]
+    derived_accounts: Vec<WalletDerivedAccountEntry>,
+    #[serde(default)]
+    external_accounts: Vec<WalletExternalAccountEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WalletSelectedAccount {
+    #[serde(rename = "type")]
+    account_type: String,
+    index: u32,
+}
+
+fn default_wallet_selected_account() -> WalletSelectedAccount {
+    WalletSelectedAccount {
+        account_type: "derived".to_string(),
+        index: 0,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WalletDerivedAccountEntry {
+    index: u32,
+    public_key: String,
+    account_address: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WalletExternalAccountEntry {
+    #[allow(dead_code)]
+    index: u32,
+    secret_key: String,
+    account_address: String,
+}
+
 // ── SelectedAccount ───────────────────────────────────────────────────────────
 
 /// Identifies which account in the wallet is currently active.
@@ -229,6 +277,80 @@ impl Wallet {
             derived_accounts: Vec::new(),
             added_accounts: vec![account],
             current_account_index: SelectedAccount::External(0),
+        })
+    }
+
+    /// Load a [`Wallet`] from a `wallet.wc` file.
+    ///
+    /// This matches the multi-account wallet export format used by the Weil browser/CLI.
+    /// Derived account secret keys are re-derived from the stored `xprv`. External
+    /// account secret keys are read directly from the file.
+    ///
+    /// The active account is set from the `selected_account` field (defaults to
+    /// the first derived account when absent).
+    pub fn from_wallet_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let mut fs = File::open(&path)?;
+        let mut buf = String::new();
+        fs.read_to_string(&mut buf)?;
+
+        let wf: WalletFile = serde_json::from_str(&buf)?;
+        if wf.file_type != "wallet" {
+            anyhow::bail!("expected file type 'wallet', got '{}'", wf.file_type);
+        }
+        if wf.derived_accounts.is_empty() && wf.external_accounts.is_empty() {
+            anyhow::bail!("wallet file contains no accounts");
+        }
+
+        let master = parse_xprv_with_path_fallback(&wf.xprv, &wf.derived_accounts)?;
+
+        let mut derived_accounts: Vec<Account> = Vec::new();
+        for entry in &wf.derived_accounts {
+            let sk = derive_child_secret(&master, entry.index as usize)?;
+            derived_accounts.push(Account::from_secret_bytes_and_address(
+                &sk.serialize(),
+                entry.account_address.clone(),
+            )?);
+        }
+
+        let mut added_accounts: Vec<Account> = Vec::new();
+        for entry in &wf.external_accounts {
+            let bytes = hex::decode(&entry.secret_key)?;
+            added_accounts.push(Account::from_secret_bytes_and_address(
+                &bytes,
+                entry.account_address.clone(),
+            )?);
+        }
+
+        let current_account_index = match wf.selected_account.account_type.as_str() {
+            "external" => {
+                let idx = wf.selected_account.index as usize;
+                if idx >= added_accounts.len() {
+                    anyhow::bail!(
+                        "selected external account index {} out of bounds (have {})",
+                        idx,
+                        added_accounts.len()
+                    );
+                }
+                SelectedAccount::External(idx)
+            }
+            _ => {
+                let idx = wf.selected_account.index as usize;
+                if idx >= derived_accounts.len() {
+                    anyhow::bail!(
+                        "selected derived account index {} out of bounds (have {})",
+                        idx,
+                        derived_accounts.len()
+                    );
+                }
+                SelectedAccount::Derived(idx)
+            }
+        };
+
+        Ok(Self {
+            master_secret_key: Some(master),
+            derived_accounts,
+            added_accounts,
+            current_account_index,
         })
     }
 
@@ -453,6 +575,17 @@ fn derive_child_account(
     Ok(Account { secret_key, public_key, account_address: address })
 }
 
+/// Derive the libsecp256k1 `SecretKey` for child `index` from `master`.
+fn derive_child_secret(master: &ExtendedPrivateKey<SigningKey>, index: usize) -> anyhow::Result<SecretKey> {
+    let child_num = ChildNumber::new(index as u32, false)
+        .map_err(|e| anyhow::anyhow!("invalid child number {}: {}", index, e))?;
+    let child_xprv = master
+        .derive_child(child_num)
+        .map_err(|e| anyhow::anyhow!("derive_child({}) failed: {}", index, e))?;
+    SecretKey::parse_slice(&child_xprv.to_bytes())
+        .map_err(|e| anyhow::anyhow!("parse derived secret key: {}", e))
+}
+
 fn account_from_export_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Account> {
     let mut fs = File::open(&path)?;
     let mut buf = String::new();
@@ -468,4 +601,46 @@ fn account_from_export_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Account> 
 
     let key = PrivateKey(export.account.secret_key);
     Account::from_private_key_and_address(&key, export.account.account_address)
+}
+
+/// Parse the `xprv` string from a wallet file, applying the BIP44 path
+/// `m/44'/9345'/0'/0` when the stored key is a root key rather than an
+/// already-derived account-level key.
+///
+/// Detection: derive child 0 and compare the resulting compressed public key
+/// against the first derived account's stored `public_key`. If they match the
+/// xprv is already at the account level; otherwise traverse the full path first.
+fn parse_xprv_with_path_fallback(
+    xprv_str: &str,
+    derived_accounts: &[WalletDerivedAccountEntry],
+) -> anyhow::Result<ExtendedPrivateKey<SigningKey>> {
+    let parsed = ExtendedPrivateKey::from_str(xprv_str)
+        .map_err(|e| anyhow::anyhow!("could not parse xprv: {}", e))?;
+
+    if let Some(first) = derived_accounts.first() {
+        let sk_direct = derive_child_secret(&parsed, first.index as usize)?;
+        let pk_direct = PublicKey::from_secret_key(&sk_direct);
+        let pk_direct_hex = hex::encode(pk_direct.serialize_compressed());
+
+        if pk_direct_hex == first.public_key {
+            return Ok(parsed);
+        }
+
+        // Root xprv — traverse m/44'/9345'/0'/0 first.
+        let path: [ChildNumber; 4] = [
+            ChildNumber::new(44, true).unwrap(),
+            ChildNumber::new(9345, true).unwrap(),
+            ChildNumber::new(0, true).unwrap(),
+            ChildNumber::new(0, false).unwrap(),
+        ];
+        let mut key = parsed;
+        for child in &path {
+            key = key
+                .derive_child(*child)
+                .map_err(|e| anyhow::anyhow!("BIP44 path derivation failed: {}", e))?;
+        }
+        Ok(key)
+    } else {
+        Ok(parsed)
+    }
 }

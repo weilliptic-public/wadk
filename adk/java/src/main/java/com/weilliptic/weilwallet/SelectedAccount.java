@@ -4,7 +4,7 @@ package com.weilliptic.weilwallet;
  * Identifies which account in the wallet is currently active.
  */
 public final class SelectedAccount {
-    public enum Type { EXTERNAL }
+    public enum Type { DERIVED, EXTERNAL }
 
     private final Type type;
     private final int index;
@@ -16,6 +16,10 @@ public final class SelectedAccount {
 
     public static SelectedAccount external(int index) {
         return new SelectedAccount(Type.EXTERNAL, index);
+    }
+
+    public static SelectedAccount derived(int index) {
+        return new SelectedAccount(Type.DERIVED, index);
     }
 
     public Type getType() {

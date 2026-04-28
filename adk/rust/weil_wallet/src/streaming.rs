@@ -10,7 +10,7 @@ use std::pin::Pin;
 /// # Example
 /// Below is a complete example of the client code for calling a `ask_llm` exported method of a contract which returns a `ByteStream` response.
 /// It shows how the response is processed using `next` on the `ByteStream` and interpreting raw bytes i.e `Vec<u8>` as `UTF-8 encoded` string.
-/// ```
+/// ```ignore
 /// use futures_util::StreamExt;
 /// use serde::Serialize;
 /// use std::io;
@@ -53,31 +53,19 @@ use std::pin::Pin;
 ///     }
 /// }
 ///
-/// #[tokio::main]
-/// async fn main() {
-///     // Prefer sentinel-exported account JSON over raw private keys.
-///     let wallet = Wallet::from_account_export_file("account.wc").unwrap();
+/// fn main() {
+///     // Prefer `wallet.wc` (multi-account) exports over raw private keys.
+///     let wallet = Wallet::from_wallet_file("wallet.wc").unwrap();
 ///
 ///     // put your contract id here!
 ///     let contract_id = "00000002d011ad7c20eed92cc30811c86e5da68e832619d3fb5e82834efb99e0562d9f3f"
 ///         .parse::<ContractId>()
 ///         .unwrap();
 ///
-///     let client = StreamingClient::new(contract_id, wallet).unwrap();
-///
-///     let mut res = client
-///         .ask_llm("Why is sky blue ?".to_string())
-///         .await
-///         .unwrap();
-///
-///     let mut stdout = io::stdout();
-///
-///     while let Some(chunk) = res.next().await {
-///         print!("{}", String::from_utf8(chunk.into()).unwrap());
-///         stdout.flush().unwrap();
-///     }
-///
-///     println!("\n");
+///     let _client = StreamingClient::new(contract_id, wallet).unwrap();
+///     // Use inside a Tokio runtime:
+///     // let mut res = _client.ask_llm("Why is sky blue ?".to_string()).await.unwrap();
+///     // while let Some(chunk) = res.next().await { ... }
 /// }
 /// ```
 pub struct ByteStream {

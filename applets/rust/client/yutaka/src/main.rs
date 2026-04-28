@@ -243,7 +243,7 @@ impl YutakaClient {
 #[tokio::main]
 async fn main() {
 
-    let wallet = Wallet::from_account_export_file("account.wc").unwrap();
+    let wallet = Wallet::from_wallet_file("wallet.wc").unwrap();
 
     // put your contract id here!
     let contract_id = "00000002ef5e2433d9ffd69f0413622bae0fb3a3db12720a837e88874717d24a478d16ee"

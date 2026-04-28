@@ -98,6 +98,15 @@ impl WeilClient {
         Self::new(wallet, concurrency)
     }
 
+    /// Construct a [`WeilClient`] from a multi-account `wallet.wc` file.
+    pub fn from_wallet_file<P: AsRef<std::path::Path>>(
+        path: P,
+        concurrency: Option<usize>,
+    ) -> Result<Self, anyhow::Error> {
+        let wallet = Wallet::from_wallet_file(path)?;
+        Self::new(wallet, concurrency)
+    }
+
     /// Add a new account to the wallet from an account export JSON file.
     ///
     /// The new account is appended; the active account does not change.

@@ -9,6 +9,8 @@ use syn::{
     Signature, Token, Type, TypePath,
 };
 
+static IDENTITY_PREFIX: &str = "identity::";
+
 pub enum QueryOpaqueKind {
     Stream,
     Plottable,
@@ -753,7 +755,7 @@ pub fn impl_smart_contract_secured_macro(
                 "".to_string()
             };
 
-            let identity_contract_name = format!("identity::{}", group);
+            let identity_contract_name = format!(IDENTITY_PREFIX, group);
             let identity_addr = weil_rs::runtime::Runtime::contract_id_for_name(&identity_contract_name).map_err(|err| err.to_string())?;
 
             #[derive(Serialize)]

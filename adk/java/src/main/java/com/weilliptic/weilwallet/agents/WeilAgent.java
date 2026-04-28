@@ -13,7 +13,7 @@ import java.nio.file.Paths;
 /**
  * Wraps an agent with a Weil identity (wallet) and audit capability.
  * Call {@link #audit(String)} to record a log entry on-chain.
- * Use {@link #setWalletPath(String)} to set or change the wallet (private key file).
+ * Use {@link #setWalletPath(String)} to set or change the wallet (account export file).
  */
 public class WeilAgent<T> {
 
@@ -26,25 +26,25 @@ public class WeilAgent<T> {
         this(agent, (String) null, (Wallet) null, null);
     }
 
-    public WeilAgent(T agent, String privateKeyPath) {
-        this(agent, privateKeyPath, null, null);
+    public WeilAgent(T agent, String accountExportPath) {
+        this(agent, accountExportPath, null, null);
     }
 
     public WeilAgent(T agent, Wallet wallet) {
         this(agent, null, wallet, null);
     }
 
-    public WeilAgent(T agent, String privateKeyPath, String sentinelHost) {
-        this(agent, privateKeyPath, null, sentinelHost);
+    public WeilAgent(T agent, String accountExportPath, String sentinelHost) {
+        this(agent, accountExportPath, null, sentinelHost);
     }
 
-    public WeilAgent(T agent, String privateKeyPath, Wallet wallet, String sentinelHost) {
+    public WeilAgent(T agent, String accountExportPath, Wallet wallet, String sentinelHost) {
         this.agent = agent;
         this.sentinelHost = sentinelHost != null ? sentinelHost : System.getenv("SENTINEL_HOST");
         if (wallet != null) {
             this.wallet = wallet;
-        } else if (privateKeyPath != null && !privateKeyPath.isEmpty()) {
-            setWalletPath(privateKeyPath);
+        } else if (accountExportPath != null && !accountExportPath.isEmpty()) {
+            setWalletPath(accountExportPath);
         }
     }
 
@@ -58,13 +58,13 @@ public class WeilAgent<T> {
 
     public void setWalletPath(Path path) {
         if (!Files.isRegularFile(path)) {
-            throw new IllegalArgumentException("Private key file not found: " + path);
+            throw new IllegalArgumentException("Account export file not found: " + path);
         }
         try {
-            this.wallet = new Wallet(PrivateKey.fromFile(path));
+            this.wallet = Wallet.fromAccountExportFile(path);
             this.client = null;
         } catch (IOException e) {
-            throw new RuntimeException("Failed to load private key from " + path, e);
+            throw new RuntimeException("Failed to load account export from " + path, e);
         }
     }
 
@@ -76,7 +76,7 @@ public class WeilAgent<T> {
     private Wallet ensureWallet() {
         if (wallet == null) {
             throw new IllegalStateException(
-                "No wallet set. Call setWalletPath(path) or create the agent with privateKeyPath or wallet.");
+                "No wallet set. Call setWalletPath(path) or create the agent with accountExportPath or wallet.");
         }
         return wallet;
     }
@@ -107,20 +107,20 @@ public class WeilAgent<T> {
     }
 
     /**
-     * Default locations to look for private_key.wc (cwd, then parent, then examples/).
+     * Default locations to look for account.wc (cwd, then parent, then examples/).
      */
-    public static Path findDefaultPrivateKeyPath() {
+    public static Path findDefaultAccountExportPath() {
         Path cwd = Paths.get("").toAbsolutePath();
         Path[] candidates = {
-            cwd.resolve("private_key.wc"),
-            cwd.getParent() != null ? cwd.getParent().resolve("private_key.wc") : null,
-            cwd.resolve("examples").resolve("private_key.wc")
+            cwd.resolve("account.wc"),
+            cwd.getParent() != null ? cwd.getParent().resolve("account.wc") : null,
+            cwd.resolve("examples").resolve("account.wc")
         };
         for (Path p : candidates) {
             if (p != null && Files.isRegularFile(p)) {
                 return p;
             }
         }
-        throw new IllegalStateException("private_key.wc not found. Place it in cwd, project root, or examples/.");
+        throw new IllegalStateException("account.wc not found. Place it in cwd, project root, or examples/.");
     }
 }

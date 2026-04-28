@@ -10,9 +10,11 @@
 //! - Keys are held in memory as plain bytes/strings; avoid logging them.
 //! - Signing uses **secp256k1** with ECDSA over the SHA-256 digest of the input.
 
-use crate::utils::hash_sha256;
+use crate::utils::{get_address_from_public_key, hash_sha256};
+use bip32::{secp256k1::ecdsa::SigningKey, ChildNumber, ExtendedPrivateKey, Prefix};
 use libsecp256k1::{Message, PublicKey, SecretKey};
-use std::{fs::File, io::Read, path::Path, sync::Arc};
+use serde::{Deserialize, Serialize};
+use std::{fs::File, io::Read, path::Path, str::FromStr};
 
 /// Represents the private key associated with your account.
 ///
@@ -51,6 +53,11 @@ impl PrivateKey {
         }
 
         Ok(PrivateKey(buf_trimmed.to_string()))
+    }
+
+    /// Return the inner hex string.
+    pub fn hex(&self) -> &str {
+        &self.0
     }
 }
 

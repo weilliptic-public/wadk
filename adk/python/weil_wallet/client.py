@@ -14,7 +14,7 @@ from .contract import ContractId
 from .streaming import ByteStream
 from .transaction import BaseTransaction, TransactionHeader, TransactionResult
 from .utils import current_time_millis, get_address_from_public_key
-from .wallet import Wallet
+from .wallet import SelectedAccount, Wallet
 
 AUDIT_APPLET_SVC_NAME = "auditor"
 
@@ -42,6 +42,7 @@ class WeilClient:
             verify: Whether to verify TLS certificates (set False for self-signed certs).
         """
         self._wallet = wallet
+        self._wallet_lock = asyncio.Lock()
         self._concurrency = (
             concurrency if concurrency is not None else DEFAULT_CONCURRENCY
         )
@@ -54,6 +55,26 @@ class WeilClient:
         )
         self._audit_contract_id: Optional[ContractId] = None
         self._audit_contract_id_lock = asyncio.Lock()
+
+    @classmethod
+    def from_account_export_file(
+        cls,
+        path: str,
+        concurrency: Optional[int] = None,
+        *,
+        sentinel_host: Optional[str] = "https://sentinel.unweil.me",
+        verify: bool = True,
+    ) -> "WeilClient":
+        wallet = Wallet.from_account_export_file(path)
+        return cls(wallet, concurrency, sentinel_host=sentinel_host, verify=verify)
+
+    async def add_account_from_export_file(self, path: str) -> None:
+        async with self._wallet_lock:
+            self._wallet.add_account_from_export_file(path)
+
+    async def set_account(self, selected: SelectedAccount) -> None:
+        async with self._wallet_lock:
+            self._wallet.set_index(selected)
 
     def to_contract_client(self, contract_id: ContractId) -> "WeilContractClient":
         """Create a WeilContractClient bound to a specific ContractId."""
@@ -88,10 +109,8 @@ class WeilClient:
 
     def wallet_addr(self) -> str:
         """Return the hex-encoded wallet address derived from the signing public key."""
-        public_key = self._wallet.get_public_key()
-        from_addr = get_address_from_public_key(public_key)
-
-        return from_addr
+        # Prefer sentinel-minted account address from export file.
+        return self._wallet.get_address()
 
     async def execute(
         self,
@@ -238,13 +257,39 @@ class WeilContractClient:
         """Return the wallet address of the underlying client."""
         return self._client.wallet_addr()
 
-    def _sign_and_construct_txn(
+    async def _sign_and_construct_txn(
         self, method_name: str, method_args: str, should_hide_args: bool
     ) -> tuple[BaseTransaction, str, dict]:
         """Build and sign the base transaction and execute args."""
-        public_key = self._client._wallet.get_public_key()
-        from_addr = get_address_from_public_key(public_key)
-        to_addr = from_addr
+        async with self._client._wallet_lock:
+            public_key = self._client._wallet.get_public_key()
+            from_addr = self._client._wallet.get_address()
+            to_addr = from_addr
+            weilpod_counter = self._contract_id.pod_counter()
+            # Rust uses full (uncompressed) for on-wire; parsed_public_key expects Full
+            public_key_hex = public_key.format(compressed=False).hex()
+
+            args = {
+                "contract_address": self._contract_id,
+                "contract_method": method_name,
+                "contract_input_bytes": method_args,
+                "should_hide_args": should_hide_args,
+            }
+
+            nonce = int(current_time_millis())
+            header = TransactionHeader(
+                nonce=nonce,
+                public_key=public_key_hex,
+                from_addr=from_addr,
+                to_addr=to_addr,
+                weilpod_counter=weilpod_counter,
+            )
+
+            signature = self._sign_execute_args(header, args)
+            header.set_signature(signature)
+
+            base_txn = BaseTransaction(header=header)
+            return base_txn, signature, args
         weilpod_counter = self._contract_id.pod_counter()
         # Rust uses full (uncompressed) for on-wire; parsed_public_key expects Full
         public_key_hex = public_key.format(compressed=False).hex()
@@ -298,6 +343,7 @@ class WeilContractClient:
         # (server may canonicalize the same way when verifying)
         canonical = dict(sorted(payload.items()))
         json_str = json.dumps(canonical, separators=(",", ":"), sort_keys=True)
+        # Caller holds _wallet_lock.
         return self._client._wallet.sign(json_str.encode("utf-8"))
 
     async def execute(
@@ -308,7 +354,7 @@ class WeilContractClient:
         is_non_blocking: bool = False,
     ) -> TransactionResult:
         """Execute an exported method (non-streaming)."""
-        base_txn, signature, args = self._sign_and_construct_txn(
+        base_txn, signature, args = await self._sign_and_construct_txn(
             method_name, method_args, should_hide_args
         )
         payload = WeilClient._build_submit_payload(signature, base_txn, args)
@@ -324,7 +370,7 @@ class WeilContractClient:
         method_args: str,
     ) -> ByteStream:
         """Execute an exported method and return a streaming response."""
-        base_txn, signature, args = self._sign_and_construct_txn(
+        base_txn, signature, args = await self._sign_and_construct_txn(
             method_name, method_args, False
         )
         payload = WeilClient._build_submit_payload(signature, base_txn, args)

@@ -1,13 +1,18 @@
 """Wallet primitives for WeilChain.
 
+This module supports multi-account wallets backed by secp256k1 keys.
+
 - PrivateKey: load a hex-encoded private key from disk or string.
-- Wallet: signing account from a private key; exposes secp256k1 public key and sign().
+- Account: a secp256k1 keypair with an associated (sentinel-minted) address.
+- Wallet: holds multiple accounts and supports switching via SelectedAccount.
 
 Signing uses secp256k1 ECDSA over the SHA-256 digest of the input.
 """
 
 from pathlib import Path
-from typing import Union
+from dataclasses import dataclass
+import json
+from typing import Literal, Union
 
 from coincurve import PrivateKey as Secp256k1PrivateKey, PublicKey as Secp256k1PublicKey
 
@@ -52,23 +57,53 @@ class PrivateKey:
 
 
 class Wallet:
-    """secp256k1-backed wallet for the WeilChain platform."""
+    """Multi-account secp256k1 wallet for the WeilChain platform."""
 
-    __slots__ = ("_secret_key", "_public_key")
+    __slots__ = ("_external_accounts", "_current")
 
-    def __init__(self, private_key: PrivateKey) -> None:
-        secret_key_bytes = bytes.fromhex(private_key._hex)
-        self._secret_key = Secp256k1PrivateKey(secret_key_bytes)
-        self._public_key = self._secret_key.public_key
+    def __init__(self, private_key: PrivateKey, account_address: str | None = None) -> None:
+        account = Account.from_private_key_and_address(private_key, account_address)
+        self._external_accounts: list[Account] = [account]
+        self._current = SelectedAccount("external", 0)
 
     @property
     def secret_key(self) -> Secp256k1PrivateKey:
-        """Return the account's secp256k1 secret key. Handle with care."""
-        return self._secret_key
+        """Return the currently selected account's secp256k1 secret key."""
+        return self._current_account().secret_key
 
     def get_public_key(self) -> Secp256k1PublicKey:
-        """Return the account's secp256k1 public key."""
-        return self._public_key
+        """Return the currently selected account's secp256k1 public key."""
+        return self._current_account().public_key
+
+    def get_address(self) -> str:
+        """Return the currently selected account's sentinel-minted address."""
+        return self._current_account().account_address
+
+    @classmethod
+    def from_account_export_file(cls, path: Union[str, Path]) -> "Wallet":
+        account = account_from_export_file(path)
+        w = cls.__new__(cls)
+        w._external_accounts = [account]
+        w._current = SelectedAccount("external", 0)
+        return w
+
+    def add_account_from_export_file(self, path: Union[str, Path]) -> None:
+        """Append an additional account export; does not change selection."""
+        self._external_accounts.append(account_from_export_file(path))
+
+    def set_index(self, selected: "SelectedAccount") -> None:
+        """Switch active account. Raises if out of bounds."""
+        if selected.account_type != "external":
+            raise ValueError(f"unsupported account type: {selected.account_type}")
+        if selected.index < 0 or selected.index >= len(self._external_accounts):
+            raise ValueError(
+                f"external account index {selected.index} out of bounds "
+                f"(have {len(self._external_accounts)} external account(s))"
+            )
+        self._current = selected
+
+    def external_account_count(self) -> int:
+        return len(self._external_accounts)
 
     def sign(self, buf: bytes) -> str:
         """Sign buf with ECDSA secp256k1.
@@ -78,9 +113,55 @@ class Wallet:
         """
         digest = hash_sha256(buf)
         # coincurve returns DER; Rust uses compact 64-byte (r||s)
-        der_signature = self._secret_key.sign(digest, hasher=None)
+        der_signature = self._current_account().secret_key.sign(digest, hasher=None)
         compact = _der_signature_to_compact(der_signature)
         return compact.hex()
+
+    def _current_account(self) -> "Account":
+        if self._current.account_type != "external":
+            raise ValueError(f"unsupported account type: {self._current.account_type}")
+        return self._external_accounts[self._current.index]
+
+
+@dataclass(frozen=True)
+class SelectedAccount:
+    account_type: Literal["external"]
+    index: int
+
+
+@dataclass
+class Account:
+    secret_key: Secp256k1PrivateKey
+    public_key: Secp256k1PublicKey
+    account_address: str
+
+    @classmethod
+    def from_private_key_and_address(
+        cls, key: PrivateKey, account_address: str | None
+    ) -> "Account":
+        secret_key_bytes = bytes.fromhex(key._hex)
+        secret = Secp256k1PrivateKey(secret_key_bytes)
+        pub = secret.public_key
+        if not account_address:
+            # Fallback for backwards compatibility, but sentinel-minted addresses
+            # should be provided via export files.
+            account_address = ""
+        return cls(secret_key=secret, public_key=pub, account_address=account_address)
+
+
+def account_from_export_file(path: Union[str, Path]) -> Account:
+    path = Path(path)
+    raw = path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if data.get("type") != "account":
+        raise ValueError(f"expected export type 'account', got '{data.get('type')}'")
+    account = data.get("account") or {}
+    key_hex = account.get("secret_key", "")
+    addr = account.get("account_address", "")
+    if not addr:
+        raise ValueError("account export missing account_address")
+    pk = PrivateKey(key_hex)
+    return Account.from_private_key_and_address(pk, addr)
 
 
 def _der_signature_to_compact(der: bytes) -> bytes:

@@ -9,7 +9,6 @@ import (
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/api"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/contract"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
-	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/utils"
 )
 
 type WeilContractClient struct {
@@ -33,8 +32,8 @@ type NonceFailureResponse struct {
 }
 
 func (w *WeilContractClient) Execute(methodName string, methodArgs string, shouldHideArgs bool, isNonBlocking bool) (*transaction.TransactionResult, error) {
-	publicKey := w.client.wallet.GetPubcliKey()
-	fromAddr := utils.GetAddressFromPublicKey(publicKey)
+	publicKey := w.client.activePublicKey()
+	fromAddr := w.client.activeAddress()
 	toAddr := fromAddr
 	contractId := w.contractId
 	weilpodCounter, err := contract.PodCounter(contractId)
@@ -94,7 +93,7 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 		return nil, err
 	}
 
-	signature, err := w.client.wallet.Sign(jsonPayloadJson)
+	signature, err := w.client.sign(jsonPayloadJson)
 
 	if err != nil {
 		return nil, err

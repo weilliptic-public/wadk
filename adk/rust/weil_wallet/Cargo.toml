@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 weil_rs = { path = "../weil_rs" }
 base32 = "0.5.1"
+bip32 = "0.5.3"
 anyhow.workspace = true
 async-compat.workspace = true
 async-stream.workspace = true

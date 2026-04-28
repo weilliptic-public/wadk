@@ -27,6 +27,7 @@ public class WeilClient implements AutoCloseable {
     private static final String AUDIT_APPLET_SVC_NAME = "auditor";
 
     private final Wallet wallet;
+    private final Object walletLock = new Object();
     private final String sentinelHost;
     private final HttpClient httpClient;
     private final Semaphore semaphore;
@@ -47,6 +48,23 @@ public class WeilClient implements AutoCloseable {
         int conc = concurrency != null ? concurrency : Constants.DEFAULT_CONCURRENCY;
         this.semaphore = new Semaphore(conc);
         this.auditContractId = null;
+    }
+
+    public static WeilClient fromAccountExportFile(String path) throws IOException {
+        Wallet w = Wallet.fromAccountExportFile(java.nio.file.Paths.get(path));
+        return new WeilClient(w);
+    }
+
+    public void addAccountFromExportFile(String path) throws IOException {
+        synchronized (walletLock) {
+            wallet.addAccountFromExportFile(java.nio.file.Paths.get(path));
+        }
+    }
+
+    public void setAccount(SelectedAccount selected) {
+        synchronized (walletLock) {
+            wallet.setIndex(selected);
+        }
     }
 
     /**
@@ -97,9 +115,14 @@ public class WeilClient implements AutoCloseable {
         throws IOException, InterruptedException {
         semaphore.acquire();
         try {
-            String fromAddr = Utils.getAddressFromPublicKey(wallet.getECKey());
-            String toAddr = fromAddr;
-            String publicKeyHex = Utils.bytesToHex(wallet.getPublicKeyUncompressed());
+            String fromAddr;
+            String toAddr;
+            String publicKeyHex;
+            synchronized (walletLock) {
+                fromAddr = wallet.getAddress();
+                toAddr = fromAddr;
+                publicKeyHex = Utils.bytesToHex(wallet.getPublicKeyUncompressed());
+            }
             int weilpodCounter = contractId.podCounter();
             long nonce = Utils.currentTimeMillis();
 
@@ -126,7 +149,10 @@ public class WeilClient implements AutoCloseable {
             payload.put("user_txn", userTxn);
 
             String canonicalJson = JSON.writeValueAsString(payload);
-            String signature = wallet.sign(canonicalJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String signature;
+            synchronized (walletLock) {
+                signature = wallet.sign(canonicalJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
             header.setSignature(signature);
 
             header.setCreationTime(Utils.currentTimeMillis());

@@ -55,8 +55,8 @@ use std::pin::Pin;
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let private_key = PrivateKey::from_file("/root/.weilliptic/private_key.wc").unwrap();
-///     let wallet = Wallet::new(private_key).unwrap();
+///     // Prefer sentinel-exported account JSON over raw private keys.
+///     let wallet = Wallet::from_account_export_file("account.wc").unwrap();
 ///
 ///     // put your contract id here!
 ///     let contract_id = "00000002d011ad7c20eed92cc30811c86e5da68e832619d3fb5e82834efb99e0562d9f3f"

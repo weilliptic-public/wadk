@@ -13,6 +13,7 @@ import (
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/nonce"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/wallet"
+	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 const auditAppletSvcName = "auditor"
@@ -20,6 +21,7 @@ const auditAppletSvcName = "auditor"
 type WeilClient struct {
 	httpClient       http.Client
 	wallet           *wallet.Wallet
+	walletMu         sync.Mutex
 	nonceTracker     *nonce.NonceTracker
 	auditContractId  string
 	auditContractMu  sync.Mutex
@@ -43,6 +45,44 @@ func NewWeilClient(wallet *wallet.Wallet) *WeilClient {
 		nonceTracker:    nonce.DefaultNonceTracker(),
 		auditContractId: "",
 	}
+}
+
+func NewWeilClientFromAccountExportFile(path string) (*WeilClient, error) {
+	w, err := wallet.NewWalletFromAccountExportFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return NewWeilClient(w), nil
+}
+
+func (w *WeilClient) AddAccountFromExportFile(path string) error {
+	w.walletMu.Lock()
+	defer w.walletMu.Unlock()
+	return w.wallet.AddAccountFromExportFile(path)
+}
+
+func (w *WeilClient) SetAccount(sel wallet.SelectedAccount) error {
+	w.walletMu.Lock()
+	defer w.walletMu.Unlock()
+	return w.wallet.SetIndex(sel)
+}
+
+func (w *WeilClient) activePublicKey() secp.PublicKey {
+	w.walletMu.Lock()
+	defer w.walletMu.Unlock()
+	return w.wallet.GetPubcliKey()
+}
+
+func (w *WeilClient) activeAddress() string {
+	w.walletMu.Lock()
+	defer w.walletMu.Unlock()
+	return w.wallet.GetAddress()
+}
+
+func (w *WeilClient) sign(buf []byte) (*string, error) {
+	w.walletMu.Lock()
+	defer w.walletMu.Unlock()
+	return w.wallet.Sign(buf)
 }
 
 // getAppletAddressResponse matches the Sentinel response: {"Ok": "contract_id"} or {"Err": "..."}

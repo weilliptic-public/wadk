@@ -1,7 +1,7 @@
 // Run from the weil_wallet module root:
 //   go run ./examples/audit_example
 //
-// Place private_key.wc in go/weil_wallet/private_key.wc
+// Place a multi-account wallet export JSON in go/weil_wallet/wallet.wc
 
 package main
 
@@ -15,15 +15,15 @@ import (
 )
 
 func main() {
-	// Assume private_key.wc is in the go/weil_wallet folder
-	keyPath := filepath.Join("./", "private_key.wc")
+	// Assume wallet.wc is in the go/weil_wallet folder
+	keyPath := filepath.Join("./", "wallet.wc")
 
-	w, err := wallet.NewWallet(keyPath)
+	w, err := wallet.NewWalletFromWalletFile(keyPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "wallet:", err)
 		os.Exit(1)
 	}
-	fmt.Println("Wallet initialized from private_key.wc")
+	fmt.Println("Wallet initialized from wallet.wc")
 
 	cli := client.NewWeilClient(w)
 	fmt.Println("Executing audit log")

@@ -123,7 +123,7 @@ def secured(svc_name: str) -> Callable:
     Usage::
 
         @server.tool()
-        @secured("engg::weil")
+        @secured("engg.weil")
         async def my_tool(query: str) -> str:
             ...
     """
@@ -134,6 +134,9 @@ def secured(svc_name: str) -> Callable:
             import mcp.types as mcp_types
 
             def _permission_denied(wallet_addr: str) -> list:
+                # Build an MCP error content block so the client receives a
+                # structured, human-readable denial message instead of an
+                # unhandled exception.
                 msg = str(WalletNotPermittedError(wallet_addr, svc_name))
                 return [mcp_types.TextContent(type="text", text=msg, isError=True)]
 
@@ -141,22 +144,34 @@ def secured(svc_name: str) -> Callable:
                 base_url=SENTINEL_HOST,
                 timeout=60.0,
             )
+            # Resolve the human-friendly service name (e.g. "engg.weil") to the
+            # on-chain ContractId that owns the access-control list.
             applet_id = await WeilClient.get_applet_id_for_name(http_client, svc_name)
+            # Wallet address was verified by weil_middleware() and stored in the
+            # ContextVar for this asyncio task; retrieve it here.
             wallet_addr = current_wallet_addr()
 
+            # For a read-only ``key_has_purpose`` call the sender and recipient
+            # are both the caller's wallet address.
             from_addr = wallet_addr
             to_addr = from_addr
             weilpod_counter = applet_id.pod_counter()
             method_name = "key_has_purpose"
+            # Ask the contract whether this wallet holds the "Execution" purpose,
+            # i.e. is it authorised to invoke tools on this service.
             method_args = json.dumps({"key": wallet_addr, "purpose": "Execution"})
 
             final_args = {
                 "contract_address": applet_id,
                 "contract_method": method_name,
                 "contract_input_bytes": method_args,
+                # Hide args from the transaction log to avoid leaking wallet
+                # addresses into public chain storage.
                 "should_hide_args": True,
             }
 
+            # Use current time (ms) as a monotonically increasing nonce to
+            # prevent transaction replay at the chain level.
             nonce = int(current_time_millis())
             header = TransactionHeader(
                 nonce=nonce,
@@ -169,6 +184,8 @@ def secured(svc_name: str) -> Callable:
             base_txn = BaseTransaction(header=header)
             payload = WeilClient._build_submit_payload("", base_txn, final_args)
 
+            # Submit the permission-check transaction synchronously (blocking=True)
+            # so the access decision is available before the tool runs.
             resp = await PlatformApi.submit_transaction(
                 payload,
                 http_client,
@@ -177,16 +194,21 @@ def secured(svc_name: str) -> Callable:
 
             txn_result = json.loads(resp.txn_result)
 
+            # The chain returns {"Ok": "true"/"false"} on success or a different
+            # top-level key on failure (e.g. {"Err": "..."}). Anything other than
+            # an explicit "Ok" key is treated as a denial.
             if "Ok" not in txn_result:
                 return _permission_denied(wallet_addr)
 
             flag = txn_result["Ok"]
 
+            # Normalise the string booleans returned by the smart contract.
             if flag == "false":
                 flag = False
             elif flag == "true":
                 flag = True
             else:
+                # Unexpected value — deny access rather than allow by default.
                 return _permission_denied(wallet_addr)
 
             if not flag:

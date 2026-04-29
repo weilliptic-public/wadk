@@ -563,7 +563,7 @@ impl Runtime {
         let task = ex.spawn(async { task.await });
         block_on(ex.run(task))
     }
-
+    
     /// Helper to set only a result value (no state) from a contract method.
     ///
     /// Converts `Ok(val)` into `Ok(WeilValue::<(), T>)` and passes to the host.

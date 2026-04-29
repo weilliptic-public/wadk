@@ -14,7 +14,7 @@ from .contract import ContractId
 from .streaming import ByteStream
 from .transaction import BaseTransaction, TransactionHeader, TransactionResult
 from .utils import current_time_millis, get_address_from_public_key
-from .wallet import Wallet
+from .wallet import SelectedAccount, Wallet
 
 AUDIT_APPLET_SVC_NAME = "auditor"
 
@@ -42,6 +42,7 @@ class WeilClient:
             verify: Whether to verify TLS certificates (set False for self-signed certs).
         """
         self._wallet = wallet
+        self._wallet_lock = asyncio.Lock()
         self._concurrency = (
             concurrency if concurrency is not None else DEFAULT_CONCURRENCY
         )
@@ -54,6 +55,75 @@ class WeilClient:
         )
         self._audit_contract_id: Optional[ContractId] = None
         self._audit_contract_id_lock = asyncio.Lock()
+
+    @classmethod
+    def from_account_export_file(
+        cls,
+        path: str,
+        concurrency: Optional[int] = None,
+        *,
+        sentinel_host: Optional[str] = "https://sentinel.unweil.me",
+        verify: bool = True,
+    ) -> "WeilClient":
+        """Construct a WeilClient from a single-account export file (``account.wc``).
+
+        Args:
+            path:          Path to the account export JSON file.
+            concurrency:   Max concurrent in-flight requests. Defaults to DEFAULT_CONCURRENCY.
+            sentinel_host: Base URL of the Sentinel node.
+            verify:        Whether to verify TLS certificates.
+        """
+        wallet = Wallet.from_account_export_file(path)
+        return cls(wallet, concurrency, sentinel_host=sentinel_host, verify=verify)
+
+    @classmethod
+    def from_wallet_file(
+        cls,
+        path: str,
+        concurrency: Optional[int] = None,
+        *,
+        sentinel_host: Optional[str] = "https://sentinel.unweil.me",
+        verify: bool = True,
+    ) -> "WeilClient":
+        """Construct a WeilClient from a multi-account wallet file (``wallet.wc``).
+
+        Derived accounts are re-derived from the stored xprv; external accounts
+        are read directly from the file.
+
+        Args:
+            path:          Path to the wallet file.
+            concurrency:   Max concurrent in-flight requests. Defaults to DEFAULT_CONCURRENCY.
+            sentinel_host: Base URL of the Sentinel node.
+            verify:        Whether to verify TLS certificates.
+        """
+        wallet = Wallet.from_wallet_file(path)
+        return cls(wallet, concurrency, sentinel_host=sentinel_host, verify=verify)
+
+    async def add_account_from_export_file(self, path: str) -> None:
+        """Append an additional account from a sentinel account export file.
+
+        The new account is added to the external account list. The active
+        account does not change.
+
+        Args:
+            path: Path to the account export JSON file.
+        """
+        async with self._wallet_lock:
+            self._wallet.add_account_from_export_file(path)
+
+    async def set_account(self, selected: SelectedAccount) -> None:
+        """Switch the active signing account.
+
+        Args:
+            selected: Identifies the account to activate. Use
+                ``SelectedAccount("derived", index)`` or
+                ``SelectedAccount("external", index)``.
+
+        Raises:
+            ValueError: If the index is out of bounds for the account list.
+        """
+        async with self._wallet_lock:
+            self._wallet.set_index(selected)
 
     def to_contract_client(self, contract_id: ContractId) -> "WeilContractClient":
         """Create a WeilContractClient bound to a specific ContractId."""
@@ -88,10 +158,8 @@ class WeilClient:
 
     def wallet_addr(self) -> str:
         """Return the hex-encoded wallet address derived from the signing public key."""
-        public_key = self._wallet.get_public_key()
-        from_addr = get_address_from_public_key(public_key)
-
-        return from_addr
+        # Prefer sentinel-minted account address from export file.
+        return self._wallet.get_address()
 
     async def execute(
         self,
@@ -238,13 +306,52 @@ class WeilContractClient:
         """Return the wallet address of the underlying client."""
         return self._client.wallet_addr()
 
-    def _sign_and_construct_txn(
+    async def _sign_and_construct_txn(
         self, method_name: str, method_args: str, should_hide_args: bool
     ) -> tuple[BaseTransaction, str, dict]:
-        """Build and sign the base transaction and execute args."""
-        public_key = self._client._wallet.get_public_key()
-        from_addr = get_address_from_public_key(public_key)
-        to_addr = from_addr
+        """Build, sign, and return (base_txn, hex_signature, args_dict).
+
+        Acquires the wallet lock, derives the public key and address from the
+        active account, builds a TransactionHeader with a timestamp-based nonce,
+        then signs the canonical JSON payload with the wallet's secp256k1 key.
+
+        Args:
+            method_name:      Exported applet method to invoke.
+            method_args:      JSON-encoded argument payload.
+            should_hide_args: When True the arguments are encrypted server-side.
+
+        Returns:
+            A 3-tuple of (BaseTransaction, hex signature string, args dict).
+        """
+        async with self._client._wallet_lock:
+            public_key = self._client._wallet.get_public_key()
+            from_addr = self._client._wallet.get_address()
+            to_addr = from_addr
+            weilpod_counter = self._contract_id.pod_counter()
+            # Rust uses full (uncompressed) for on-wire; parsed_public_key expects Full
+            public_key_hex = public_key.format(compressed=False).hex()
+
+            args = {
+                "contract_address": self._contract_id,
+                "contract_method": method_name,
+                "contract_input_bytes": method_args,
+                "should_hide_args": should_hide_args,
+            }
+
+            nonce = int(current_time_millis())
+            header = TransactionHeader(
+                nonce=nonce,
+                public_key=public_key_hex,
+                from_addr=from_addr,
+                to_addr=to_addr,
+                weilpod_counter=weilpod_counter,
+            )
+
+            signature = self._sign_execute_args(header, args)
+            header.set_signature(signature)
+
+            base_txn = BaseTransaction(header=header)
+            return base_txn, signature, args
         weilpod_counter = self._contract_id.pod_counter()
         # Rust uses full (uncompressed) for on-wire; parsed_public_key expects Full
         public_key_hex = public_key.format(compressed=False).hex()
@@ -298,6 +405,7 @@ class WeilContractClient:
         # (server may canonicalize the same way when verifying)
         canonical = dict(sorted(payload.items()))
         json_str = json.dumps(canonical, separators=(",", ":"), sort_keys=True)
+        # Caller holds _wallet_lock.
         return self._client._wallet.sign(json_str.encode("utf-8"))
 
     async def execute(
@@ -307,8 +415,22 @@ class WeilContractClient:
         should_hide_args: bool = True,
         is_non_blocking: bool = False,
     ) -> TransactionResult:
-        """Execute an exported method (non-streaming)."""
-        base_txn, signature, args = self._sign_and_construct_txn(
+        """Execute an exported applet method and return the transaction result.
+
+        Builds and signs the transaction, then submits it to the platform API.
+        Concurrency is bounded by the parent client's semaphore.
+
+        Args:
+            method_name:      The exported method to invoke.
+            method_args:      JSON-encoded argument payload.
+            should_hide_args: When True the arguments are encrypted before submission.
+            is_non_blocking:  When True the platform responds immediately without
+                              waiting for transaction finalization.
+
+        Returns:
+            TransactionResult with status, block height, and application result.
+        """
+        base_txn, signature, args = await self._sign_and_construct_txn(
             method_name, method_args, should_hide_args
         )
         payload = WeilClient._build_submit_payload(signature, base_txn, args)
@@ -323,8 +445,19 @@ class WeilContractClient:
         method_name: str,
         method_args: str,
     ) -> ByteStream:
-        """Execute an exported method and return a streaming response."""
-        base_txn, signature, args = self._sign_and_construct_txn(
+        """Execute an exported applet method and return an async streaming response.
+
+        Suitable for methods that produce incremental output (e.g. LLM inference).
+        Iterate the returned ByteStream with ``async for chunk in stream``.
+
+        Args:
+            method_name: The exported method to invoke.
+            method_args: JSON-encoded argument payload.
+
+        Returns:
+            ByteStream that yields ``bytes`` chunks as they arrive.
+        """
+        base_txn, signature, args = await self._sign_and_construct_txn(
             method_name, method_args, False
         )
         payload = WeilClient._build_submit_payload(signature, base_txn, args)

@@ -9,15 +9,19 @@ import (
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/api"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/contract"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
-	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/utils"
 )
 
+// WeilContractClient is a per-contract view over a WeilClient.
+// It pins a specific contractId so callers only need to supply method name
+// and arguments when invoking applet methods.
 type WeilContractClient struct {
 	httpClient *http.Client
 	contractId string
 	client     *WeilClient
 }
 
+// ExecuteArgs holds the canonicalized fields that are signed and submitted
+// as part of a SmartContractExecutor transaction.
 type ExecuteArgs struct {
 	ContractAddress    string
 	ContractMethod     string
@@ -25,6 +29,8 @@ type ExecuteArgs struct {
 	ShouldHideArgs     bool
 }
 
+// NonceFailureResponse is returned by the platform when a transaction is
+// rejected due to a nonce mismatch, allowing the caller to resync.
 type NonceFailureResponse struct {
 	ExpectedNonce uint32 `json:"expected_nonce"`
 	ReceivedNonce uint32 `json:"received_nonce"`
@@ -32,9 +38,18 @@ type NonceFailureResponse struct {
 	Status        string `json:"status"`
 }
 
+// Execute calls the named method on the bound contract and returns the
+// transaction result. It builds and signs the transaction header, then
+// submits it via the platform API.
+//
+//   - methodName: the exported applet method to invoke.
+//   - methodArgs: JSON-encoded argument payload.
+//   - shouldHideArgs: when true the arguments are encrypted before submission.
+//   - isNonBlocking: when true the platform responds immediately without
+//     waiting for the transaction to be finalized.
 func (w *WeilContractClient) Execute(methodName string, methodArgs string, shouldHideArgs bool, isNonBlocking bool) (*transaction.TransactionResult, error) {
-	publicKey := w.client.wallet.GetPubcliKey()
-	fromAddr := utils.GetAddressFromPublicKey(publicKey)
+	publicKey := w.client.activePublicKey()
+	fromAddr := w.client.activeAddress()
 	toAddr := fromAddr
 	contractId := w.contractId
 	weilpodCounter, err := contract.PodCounter(contractId)
@@ -73,6 +88,9 @@ func (w *WeilContractClient) Execute(methodName string, methodArgs string, shoul
 	return response, nil
 }
 
+// SignExecuteArgs canonicalizes the transaction payload into a sorted BTreeMap,
+// serializes it to JSON, and signs the bytes with the client wallet's secp256k1 key.
+// Returns the hex-encoded compact (64-byte) ECDSA signature.
 func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHeader, args *ExecuteArgs) (*string, error) {
 	jsonPayload := map[string]interface{}{
 		"nonce":     txnHeader.Nonce,
@@ -94,7 +112,7 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 		return nil, err
 	}
 
-	signature, err := w.client.wallet.Sign(jsonPayloadJson)
+	signature, err := w.client.sign(jsonPayloadJson)
 
 	if err != nil {
 		return nil, err
@@ -103,6 +121,9 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 	return signature, nil
 }
 
+// SubmitSignedArgs constructs a SubmitTxnRequest from the signed transaction
+// and args, then submits it to the platform API. This is the common submission
+// path used by Execute after signing.
 func (w WeilContractClient) SubmitSignedArgs(signature string, txn *transaction.BaseTransaction, args *ExecuteArgs, isNonBlocking bool) (*transaction.TransactionResult, error) {
 
 	typeStr := "SmartContractExecutor"

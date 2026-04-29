@@ -36,7 +36,7 @@ use streaming::ByteStream;
 use tokio::sync::{Mutex, Semaphore};
 use transaction::{value_to_btreemap, BaseTransaction, TransactionHeader, TransactionResult};
 use utils::{current_time_millis, get_address_from_public_key};
-use wallet::Wallet;
+use wallet::{SelectedAccount, Wallet};
 
 const AUDIT_APPLET_SVC_NAME: &str = "auditor";
 
@@ -58,7 +58,7 @@ pub mod wallet;
 #[derive(Clone)]
 pub struct WeilClient {
     http_client: Client,
-    wallet: Arc<Wallet>,
+    wallet: Arc<std::sync::Mutex<Wallet>>,
     semaphore: Arc<Semaphore>,
     audit_contract_id: Arc<Mutex<Option<ContractId>>>,
 }
@@ -79,13 +79,59 @@ impl WeilClient {
             http_client: Client::builder()
                 .danger_accept_invalid_certs(true)
                 .build()?,
-            wallet: Arc::new(wallet),
+            wallet: Arc::new(std::sync::Mutex::new(wallet)),
             semaphore: Arc::new(Semaphore::new(match concurrency {
                 Some(concurrency) => concurrency,
                 None => DEFAULT_CONCURRENCY, // default value
             })),
             audit_contract_id: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Construct a [`WeilClient`] from a single-account export JSON file.
+    /// No sentinel connection required for wallet construction.
+    pub fn from_account_export_file<P: AsRef<std::path::Path>>(
+        path: P,
+        concurrency: Option<usize>,
+    ) -> Result<Self, anyhow::Error> {
+        let wallet = Wallet::from_account_export_file(path)?;
+        Self::new(wallet, concurrency)
+    }
+
+    /// Construct a [`WeilClient`] from a multi-account `wallet.wc` file.
+    pub fn from_wallet_file<P: AsRef<std::path::Path>>(
+        path: P,
+        concurrency: Option<usize>,
+    ) -> Result<Self, anyhow::Error> {
+        let wallet = Wallet::from_wallet_file(path)?;
+        Self::new(wallet, concurrency)
+    }
+
+    /// Add a new account to the wallet from an account export JSON file.
+    ///
+    /// The new account is appended; the active account does not change.
+    pub async fn add_account_from_export_file<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+    ) -> anyhow::Result<()> {
+        let mut wallet = self.wallet.lock().unwrap();
+        wallet.add_account_from_export_file(path)
+    }
+
+    /// Switch the active account used for signing.
+    ///
+    /// Returns an error if the index is out of bounds.
+    pub async fn set_account(&self, selected: &SelectedAccount) -> anyhow::Result<()> {
+        let mut wallet = self.wallet.lock().unwrap();
+        wallet.set_index(selected)
+    }
+
+    pub async fn derived_account_count(&self) -> usize {
+        self.wallet.lock().unwrap().derived_account_count()
+    }
+
+    pub async fn external_account_count(&self) -> usize {
+        self.wallet.lock().unwrap().external_account_count()
     }
 
     /// Resolve and cache the audit applet contract address from the Sentinel API.
@@ -254,11 +300,7 @@ impl WeilContractClient {
         let (base_txn, signature, args) = self.sign_and_construct_txn(
             method_name,
             method_args,
-            if let Some(should_hide_args) = should_hide_args {
-                should_hide_args
-            } else {
-                true
-            },
+            should_hide_args.unwrap_or(true),
         )?;
 
         let resp = self
@@ -266,11 +308,7 @@ impl WeilContractClient {
                 signature,
                 &base_txn,
                 args,
-                if let Some(is_non_blocking) = is_non_blocking {
-                    is_non_blocking
-                } else {
-                    false
-                },
+                is_non_blocking.unwrap_or(false),
                 |payload: SubmitTxnRequest, http_client: Client, is_non_blocking: bool| {
                     PlatformApi::submit_transaction(payload, http_client, is_non_blocking)
                 },
@@ -292,11 +330,7 @@ impl WeilContractClient {
         let (base_txn, signature, args) = self.sign_and_construct_txn(
             method_name,
             method_args,
-            if let Some(should_hide_args) = should_hide_args {
-                should_hide_args
-            } else {
-                true
-            },
+            should_hide_args.unwrap_or(true),
         )?;
 
         let resp = self
@@ -326,7 +360,7 @@ impl WeilContractClient {
         method_args: String,
         should_hide_args: bool,
     ) -> Result<(BaseTransaction, String, ExecuteArgs), anyhow::Error> {
-        let public_key = self.client.wallet.get_public_key();
+        let public_key = self.client.wallet.lock().unwrap().get_public_key();
         let from_addr = get_address_from_public_key(&public_key);
         let to_addr = from_addr.clone();
         let contract_id = self.contract_id.clone();
@@ -377,7 +411,12 @@ impl WeilContractClient {
 
         let json_payload_btreemap = value_to_btreemap(json_payload);
         let json_payload = serde_json::to_string(&json_payload_btreemap)?;
-        let signature = self.client.wallet.sign(json_payload.as_bytes())?;
+        let signature = self
+            .client
+            .wallet
+            .lock()
+            .unwrap()
+            .sign(json_payload.as_bytes())?;
 
         Ok(signature)
     }

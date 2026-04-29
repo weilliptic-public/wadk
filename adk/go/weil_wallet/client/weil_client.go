@@ -1,3 +1,12 @@
+// Package client provides a high-level HTTP client for interacting with
+// WeilChain smart-contract applets. It handles wallet-based signing, nonce
+// management, audit-log submission, and concurrency control.
+//
+// Typical usage:
+//
+//	w, err := wallet.NewWalletFromWalletFile("wallet.wc")
+//	cli := client.NewWeilClient(w)
+//	result, err := cli.Execute(contractId, "methodName", `{"key":"value"}`, false, false)
 package client
 
 import (
@@ -18,6 +27,12 @@ import (
 
 const auditAppletSvcName = "auditor"
 
+// WeilClient is the main high-level client for WeilChain applet execution.
+//
+// It wraps an HTTP client (with TLS verification disabled for dev environments),
+// a Wallet for signing transactions, and a NonceTracker for ordering. Methods on
+// WeilClient are safe to call from multiple goroutines; internal state is protected
+// by mutexes.
 type WeilClient struct {
 	httpClient       http.Client
 	wallet           *wallet.Wallet
@@ -27,6 +42,11 @@ type WeilClient struct {
 	auditContractMu  sync.Mutex
 }
 
+// NewWeilClient creates a WeilClient from an already-constructed Wallet.
+//
+// The underlying HTTP transport disables TLS certificate verification, which is
+// convenient for development environments running self-signed certificates.
+// The default request timeout is 5 seconds.
 func NewWeilClient(wallet *wallet.Wallet) *WeilClient {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -47,6 +67,9 @@ func NewWeilClient(wallet *wallet.Wallet) *WeilClient {
 	}
 }
 
+// NewWeilClientFromAccountExportFile constructs a WeilClient by loading a
+// single-account export file (account.wc). This is a convenience wrapper around
+// wallet.NewWalletFromAccountExportFile followed by NewWeilClient.
 func NewWeilClientFromAccountExportFile(path string) (*WeilClient, error) {
 	w, err := wallet.NewWalletFromAccountExportFile(path)
 	if err != nil {
@@ -55,6 +78,9 @@ func NewWeilClientFromAccountExportFile(path string) (*WeilClient, error) {
 	return NewWeilClient(w), nil
 }
 
+// NewWeilClientFromWalletFile constructs a WeilClient by loading a multi-account
+// wallet file (wallet.wc). Derived accounts are re-derived from the stored xprv;
+// external accounts are read directly from the file.
 func NewWeilClientFromWalletFile(path string) (*WeilClient, error) {
 	w, err := wallet.NewWalletFromWalletFile(path)
 	if err != nil {
@@ -63,12 +89,17 @@ func NewWeilClientFromWalletFile(path string) (*WeilClient, error) {
 	return NewWeilClient(w), nil
 }
 
+// AddAccountFromExportFile appends an additional account from a sentinel account
+// export file. The active account does not change. Safe for concurrent use.
 func (w *WeilClient) AddAccountFromExportFile(path string) error {
 	w.walletMu.Lock()
 	defer w.walletMu.Unlock()
 	return w.wallet.AddAccountFromExportFile(path)
 }
 
+// SetAccount switches the active signing account. sel identifies either a
+// derived or external account by type and index. Returns an error if the index
+// is out of bounds for the requested account list.
 func (w *WeilClient) SetAccount(sel wallet.SelectedAccount) error {
 	w.walletMu.Lock()
 	defer w.walletMu.Unlock()
@@ -136,6 +167,8 @@ func (w *WeilClient) getAuditContractId() (string, error) {
 	return w.auditContractId, nil
 }
 
+// ToContractClient returns a WeilContractClient bound to the given contractId.
+// All Execute calls on the returned client will target that specific contract.
 func (w *WeilClient) ToContractClient(contractId string) *WeilContractClient {
 	return &WeilContractClient{
 		httpClient: &w.httpClient,
@@ -144,6 +177,14 @@ func (w *WeilClient) ToContractClient(contractId string) *WeilContractClient {
 	}
 }
 
+// Execute calls a method on the specified contract and returns the transaction result.
+//
+//   - contractId: the target applet's on-chain address.
+//   - methodName: the exported method to invoke.
+//   - methodArgs: JSON-encoded argument payload.
+//   - shouldHideArgs: when true the arguments are encrypted before submission.
+//   - isNonBlocking: when true the platform responds immediately without waiting
+//     for the transaction to be finalized.
 func (w *WeilClient) Execute(contractId string, methodName string, methodArgs string, shouldHideArgs bool, isNonBlocking bool) (*transaction.TransactionResult, error) {
 	txnResult, err := w.ToContractClient(contractId).Execute(methodName, methodArgs, shouldHideArgs, isNonBlocking)
 
@@ -154,6 +195,12 @@ func (w *WeilClient) Execute(contractId string, methodName string, methodArgs st
 	return txnResult, nil
 }
 
+// Audit submits a log message to the auditor applet, creating a verifiable
+// on-chain audit trail entry. The audit applet contract address is resolved
+// from the Sentinel API on the first call and cached for subsequent calls.
+//
+// The log is submitted as a non-blocking transaction so the call returns
+// quickly without waiting for finalization.
 func (w *WeilClient) Audit(log string) error {
 	contractId, err := w.getAuditContractId()
 	if err != nil {

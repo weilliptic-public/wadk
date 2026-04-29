@@ -22,22 +22,55 @@ public class WeilAgent<T> {
     private WeilClient client;
     private String sentinelHost;
 
+    /**
+     * Create a WeilAgent with no wallet pre-configured.
+     * Call {@link #setWalletPath(String)} before invoking {@link #audit(String)}.
+     *
+     * @param agent the underlying agent implementation to wrap.
+     */
     public WeilAgent(T agent) {
         this(agent, (String) null, (Wallet) null, null);
     }
 
+    /**
+     * Create a WeilAgent and load the wallet from an account export file.
+     *
+     * @param agent             the underlying agent implementation to wrap.
+     * @param accountExportPath path to the {@code wallet.wc} or {@code account.wc} file.
+     */
     public WeilAgent(T agent, String accountExportPath) {
         this(agent, accountExportPath, null, null);
     }
 
+    /**
+     * Create a WeilAgent with an already-constructed wallet.
+     *
+     * @param agent  the underlying agent implementation to wrap.
+     * @param wallet the pre-loaded wallet to use for signing and auditing.
+     */
     public WeilAgent(T agent, Wallet wallet) {
         this(agent, null, wallet, null);
     }
 
+    /**
+     * Create a WeilAgent with a custom Sentinel host.
+     *
+     * @param agent             the underlying agent implementation to wrap.
+     * @param accountExportPath path to the wallet file.
+     * @param sentinelHost      base URL of the Sentinel node; overrides the {@code SENTINEL_HOST} env var.
+     */
     public WeilAgent(T agent, String accountExportPath, String sentinelHost) {
         this(agent, accountExportPath, null, sentinelHost);
     }
 
+    /**
+     * Primary constructor used by all other constructors.
+     *
+     * @param agent             the underlying agent implementation.
+     * @param accountExportPath path to the wallet file; ignored when {@code wallet} is non-null.
+     * @param wallet            pre-loaded wallet; takes priority over {@code accountExportPath}.
+     * @param sentinelHost      Sentinel base URL; falls back to {@code SENTINEL_HOST} env var if null.
+     */
     public WeilAgent(T agent, String accountExportPath, Wallet wallet, String sentinelHost) {
         this.agent = agent;
         this.sentinelHost = sentinelHost != null ? sentinelHost : System.getenv("SENTINEL_HOST");
@@ -56,6 +89,15 @@ public class WeilAgent<T> {
         setWalletPath(Paths.get(path));
     }
 
+    /**
+     * Set or change the wallet identity from a {@link Path}.
+     * The existing {@link WeilClient} is discarded and will be recreated on the next
+     * call to {@link #audit(String)}.
+     *
+     * @param path path to the {@code wallet.wc} file.
+     * @throws IllegalArgumentException if the file does not exist.
+     * @throws RuntimeException         if the wallet file cannot be parsed.
+     */
     public void setWalletPath(Path path) {
         if (!Files.isRegularFile(path)) {
             throw new IllegalArgumentException("Wallet file not found: " + path);
@@ -68,6 +110,12 @@ public class WeilAgent<T> {
         }
     }
 
+    /**
+     * Replace the wallet with an already-constructed instance.
+     * The existing {@link WeilClient} is discarded and will be recreated lazily.
+     *
+     * @param wallet the new wallet to use for signing and auditing.
+     */
     public void setWallet(Wallet wallet) {
         this.wallet = wallet;
         this.client = null;
@@ -102,6 +150,9 @@ public class WeilAgent<T> {
         return agent;
     }
 
+    /**
+     * Return the current wallet, or {@code null} if none has been set.
+     */
     public Wallet getWallet() {
         return wallet;
     }

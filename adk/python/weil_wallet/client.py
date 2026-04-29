@@ -65,6 +65,14 @@ class WeilClient:
         sentinel_host: Optional[str] = "https://sentinel.unweil.me",
         verify: bool = True,
     ) -> "WeilClient":
+        """Construct a WeilClient from a single-account export file (``account.wc``).
+
+        Args:
+            path:          Path to the account export JSON file.
+            concurrency:   Max concurrent in-flight requests. Defaults to DEFAULT_CONCURRENCY.
+            sentinel_host: Base URL of the Sentinel node.
+            verify:        Whether to verify TLS certificates.
+        """
         wallet = Wallet.from_account_export_file(path)
         return cls(wallet, concurrency, sentinel_host=sentinel_host, verify=verify)
 
@@ -77,14 +85,43 @@ class WeilClient:
         sentinel_host: Optional[str] = "https://sentinel.unweil.me",
         verify: bool = True,
     ) -> "WeilClient":
+        """Construct a WeilClient from a multi-account wallet file (``wallet.wc``).
+
+        Derived accounts are re-derived from the stored xprv; external accounts
+        are read directly from the file.
+
+        Args:
+            path:          Path to the wallet file.
+            concurrency:   Max concurrent in-flight requests. Defaults to DEFAULT_CONCURRENCY.
+            sentinel_host: Base URL of the Sentinel node.
+            verify:        Whether to verify TLS certificates.
+        """
         wallet = Wallet.from_wallet_file(path)
         return cls(wallet, concurrency, sentinel_host=sentinel_host, verify=verify)
 
     async def add_account_from_export_file(self, path: str) -> None:
+        """Append an additional account from a sentinel account export file.
+
+        The new account is added to the external account list. The active
+        account does not change.
+
+        Args:
+            path: Path to the account export JSON file.
+        """
         async with self._wallet_lock:
             self._wallet.add_account_from_export_file(path)
 
     async def set_account(self, selected: SelectedAccount) -> None:
+        """Switch the active signing account.
+
+        Args:
+            selected: Identifies the account to activate. Use
+                ``SelectedAccount("derived", index)`` or
+                ``SelectedAccount("external", index)``.
+
+        Raises:
+            ValueError: If the index is out of bounds for the account list.
+        """
         async with self._wallet_lock:
             self._wallet.set_index(selected)
 
@@ -272,7 +309,20 @@ class WeilContractClient:
     async def _sign_and_construct_txn(
         self, method_name: str, method_args: str, should_hide_args: bool
     ) -> tuple[BaseTransaction, str, dict]:
-        """Build and sign the base transaction and execute args."""
+        """Build, sign, and return (base_txn, hex_signature, args_dict).
+
+        Acquires the wallet lock, derives the public key and address from the
+        active account, builds a TransactionHeader with a timestamp-based nonce,
+        then signs the canonical JSON payload with the wallet's secp256k1 key.
+
+        Args:
+            method_name:      Exported applet method to invoke.
+            method_args:      JSON-encoded argument payload.
+            should_hide_args: When True the arguments are encrypted server-side.
+
+        Returns:
+            A 3-tuple of (BaseTransaction, hex signature string, args dict).
+        """
         async with self._client._wallet_lock:
             public_key = self._client._wallet.get_public_key()
             from_addr = self._client._wallet.get_address()
@@ -365,7 +415,21 @@ class WeilContractClient:
         should_hide_args: bool = True,
         is_non_blocking: bool = False,
     ) -> TransactionResult:
-        """Execute an exported method (non-streaming)."""
+        """Execute an exported applet method and return the transaction result.
+
+        Builds and signs the transaction, then submits it to the platform API.
+        Concurrency is bounded by the parent client's semaphore.
+
+        Args:
+            method_name:      The exported method to invoke.
+            method_args:      JSON-encoded argument payload.
+            should_hide_args: When True the arguments are encrypted before submission.
+            is_non_blocking:  When True the platform responds immediately without
+                              waiting for transaction finalization.
+
+        Returns:
+            TransactionResult with status, block height, and application result.
+        """
         base_txn, signature, args = await self._sign_and_construct_txn(
             method_name, method_args, should_hide_args
         )
@@ -381,7 +445,18 @@ class WeilContractClient:
         method_name: str,
         method_args: str,
     ) -> ByteStream:
-        """Execute an exported method and return a streaming response."""
+        """Execute an exported applet method and return an async streaming response.
+
+        Suitable for methods that produce incremental output (e.g. LLM inference).
+        Iterate the returned ByteStream with ``async for chunk in stream``.
+
+        Args:
+            method_name: The exported method to invoke.
+            method_args: JSON-encoded argument payload.
+
+        Returns:
+            ByteStream that yields ``bytes`` chunks as they arrive.
+        """
         base_txn, signature, args = await self._sign_and_construct_txn(
             method_name, method_args, False
         )

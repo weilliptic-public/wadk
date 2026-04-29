@@ -42,6 +42,13 @@ public final class Wallet {
 
     private Wallet() {}
 
+    /**
+     * Create a single-account wallet from a raw private key.
+     * The account address is initially empty; use {@link #fromAccountExportFile(Path)}
+     * to get a sentinel-minted address.
+     *
+     * @param privateKey the hex-encoded private key.
+     */
     public Wallet(PrivateKey privateKey) {
         ECKey key = ECKey.fromPrivate(privateKey.toBytes());
         this.addedAccounts.add(new Account(key, ""));
@@ -50,6 +57,15 @@ public final class Wallet {
 
     // ── account.wc (legacy single-account export) ────────────────────────────
 
+    /**
+     * Load a single-account wallet from an account export file ({@code account.wc}).
+     * The file is produced by the Weilliptic CLI's {@code wallet export-account} command.
+     *
+     * @param path path to the account export JSON file.
+     * @return a wallet with one external account.
+     * @throws IOException              if the file cannot be read.
+     * @throws IllegalArgumentException if the file type is not {@code "account"} or is missing fields.
+     */
     public static Wallet fromAccountExportFile(Path path) throws IOException {
         Account acc = accountFromExportFile(path);
         Wallet w = new Wallet();
@@ -58,16 +74,44 @@ public final class Wallet {
         return w;
     }
 
+    /**
+     * Append an additional account from a sentinel account export file.
+     * The active account does not change.
+     *
+     * @param path path to the account export JSON file.
+     * @throws IOException              if the file cannot be read.
+     * @throws IllegalArgumentException if the file is malformed.
+     */
     public void addAccountFromExportFile(Path path) throws IOException {
         this.addedAccounts.add(accountFromExportFile(path));
     }
 
     // ── wallet.wc (multi-account export) ─────────────────────────────────────
 
+    /**
+     * Load a wallet from a {@code wallet.wc} file (string path convenience overload).
+     *
+     * @param path path to the wallet file.
+     * @throws IOException if the file cannot be read or parsed.
+     * @see #fromWalletFile(Path)
+     */
     public static Wallet fromWalletFile(String path) throws IOException {
         return fromWalletFile(Paths.get(path));
     }
 
+    /**
+     * Load a wallet from a {@code wallet.wc} file.
+     *
+     * <p>Derived account secret keys are re-derived from the stored {@code xprv}.
+     * External account secret keys are read directly from the file. The active
+     * account is set from the {@code selected_account} field (defaults to derived[0]).</p>
+     *
+     * @param path path to the wallet file.
+     * @return a fully-loaded wallet.
+     * @throws IOException              if the file cannot be read.
+     * @throws IllegalArgumentException if the file type is not {@code "wallet"}, contains no accounts,
+     *                                  or the selected account index is out of bounds.
+     */
     public static Wallet fromWalletFile(Path path) throws IOException {
         String content = Files.readString(path);
         JsonNode root = JSON.readTree(content);
@@ -130,6 +174,13 @@ public final class Wallet {
 
     // ── Account selection ────────────────────────────────────────────────────
 
+    /**
+     * Switch the active account used for signing and address lookups.
+     *
+     * @param selected identifies the account to activate.
+     * @throws IllegalArgumentException if the index is out of bounds for the account list,
+     *                                  or the account type is unsupported.
+     */
     public void setIndex(SelectedAccount selected) {
         if (selected.getType() == SelectedAccount.Type.DERIVED) {
             int i = selected.getIndex();
@@ -151,14 +202,17 @@ public final class Wallet {
         this.currentIndex = selected;
     }
 
+    /** Return the number of externally imported accounts. */
     public int externalAccountCount() {
         return addedAccounts.size();
     }
 
+    /** Return the number of BIP32-derived accounts. */
     public int derivedAccountCount() {
         return derivedAccounts.size();
     }
 
+    /** Return the sentinel-minted on-chain address of the currently selected account. */
     public String getAddress() {
         return currentAccount().getAddress();
     }
@@ -170,6 +224,7 @@ public final class Wallet {
         return currentAccount().getEcKey().getPubKeyPoint().getEncoded(false);
     }
 
+    /** Return the EC key of the currently selected account. */
     public ECKey getECKey() {
         return currentAccount().getEcKey();
     }

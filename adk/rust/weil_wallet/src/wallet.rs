@@ -175,18 +175,23 @@ impl Account {
         Self::from_secret_bytes_and_address(&bytes, address)
     }
 
+    /// Return the secp256k1 public key for this account.
     pub fn get_public_key(&self) -> PublicKey {
         self.public_key
     }
 
+    /// Return the sentinel-minted on-chain address for this account.
     pub fn get_address(&self) -> &str {
         &self.account_address
     }
 
+    /// Return a reference to the raw secp256k1 secret key.
     pub fn get_secret_key(&self) -> &SecretKey {
         &self.secret_key
     }
 
+    /// Sign `buf` with ECDSA secp256k1 (SHA-256 digest). Returns hex-encoded
+    /// 64-byte compact signature (r || s).
     pub fn sign(&self, buf: &[u8]) -> anyhow::Result<String> {
         let digest = hash_sha256(buf);
         let msg = Message::parse_slice(&digest)?;

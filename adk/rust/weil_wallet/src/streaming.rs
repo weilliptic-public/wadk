@@ -10,7 +10,6 @@ use std::pin::Pin;
 /// # Example
 /// Below is a complete example of the client code for calling a `ask_llm` exported method of a contract which returns a `ByteStream` response.
 /// It shows how the response is processed using `next` on the `ByteStream` and interpreting raw bytes i.e `Vec<u8>` as `UTF-8 encoded` string.
-/// ```ignore
 /// use futures_util::StreamExt;
 /// use serde::Serialize;
 /// use std::io;

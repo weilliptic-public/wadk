@@ -1,0 +1,24 @@
+record IncidentLog {
+    incident_id: string,
+    timestamp: string,
+    event_type: string,
+    message: string,
+    metadata: string
+}
+
+interface IncidentLogger {
+
+    mutate func log_event(
+        incident_id: string,
+        timestamp: string,
+        event_type: string,
+        message: string,
+        metadata: string
+    ) -> result<(), string>;
+
+    query func get_incident_logs(
+        incident_id: string
+    ) -> result<list<IncidentLog>, string>;
+
+    query func list_incidents() -> result<list<string>, string>
+}

@@ -1,0 +1,103 @@
+// Incident Management MCP - WIDL Interface Definition
+// This defines a single MCP server that powers a full incident management system
+
+record IncidentManagementConfig {
+    discord_webhook_url: string,
+    slack_webhook_url: string,
+    twilio_account_sid: string,
+    twilio_auth_token: string,
+    twilio_from_phone: string,
+    pagerduty_api_key: string,
+    pagerduty_service_id: string,
+    statuspage_api_key: string,
+    statuspage_page_id: string,
+    logger_contract_id: string
+}
+
+record IncidentLog {
+    incident_id: string,
+    timestamp: string,
+    event_type: string,
+    message: string,
+    metadata: string
+}
+
+@mcp
+interface IncidentManagement {
+    // Configuration for external service integrations
+    config -> IncidentManagementConfig;
+
+    // Send a Discord notification about an incident with severity level
+    query func notify_discord(
+        incident_id: string,
+        message: string,
+        severity: string
+    ) -> result<string, string>;
+
+    // Send a Slack notification about an incident with severity level
+    query func notify_slack(
+        incident_id: string,
+        message: string,
+        severity: string
+    ) -> result<string, string>;
+
+    // Send an SMS notification via Twilio to a specific phone number
+    query func notify_sms(
+        incident_id: string,
+        phone: string,
+        message: string
+    ) -> result<string, string>;
+
+    // Page on-call engineers using PagerDuty to create an incident
+    query func page_oncall(
+        incident_id: string,
+        description: string,
+        severity: string
+    ) -> result<string, string>;
+
+    // Update incident status on Statuspage to inform customers
+    query func update_status(
+        incident_id: string,
+        status: string,
+        message: string
+    ) -> result<string, string>;
+
+    // Create a war room automatically for severe incidents requiring collaboration
+    query func create_war_room(
+        incident_id: string,
+        severity: string
+    ) -> result<string, string>;
+
+    // Send an email notification via SendGrid
+    query func notify_email(
+        incident_id: string,
+        to_email: string,
+        subject: string,
+        message: string,
+        severity: string
+    ) -> result<string, string>;
+
+
+    // Trigger AI-driven remediation workflow for autonomous incident resolution
+    query func ai_remediation(
+        incident_id: string,
+        description: string,
+        severity: string
+    ) -> result<string, string>;
+
+    // Log a new event for an incident
+    mutate func log_incident_event(
+        incident_id: string,
+        event_type: string,
+        message: string,
+        metadata: string
+    ) -> result<string, string>;
+
+    // List all incidents tracked in the logger
+    query func list_all_incidents() -> result<list<string>, string>;
+
+    // Get complete timeline of events for a specific incident
+    query func get_incident_timeline(
+        incident_id: string
+    ) -> result<list<IncidentLog>, string>
+}

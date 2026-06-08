@@ -1,13 +1,16 @@
+// A single audit log entry for an incident.
 record IncidentLog {
-    incident_id: string,
-    timestamp: string,
-    event_type: string,
-    message: string,
-    metadata: string
+    incident_id: string,  // e.g. INC-042
+    timestamp: string,    // block timestamp when this was recorded
+    event_type: string,   // e.g. WAR_ROOM_CREATED, SMS_SENT
+    message: string,      // what happened
+    metadata: string      // extra context as JSON
 }
 
+// Append-only audit logger. Entries cannot be modified once written.
 interface IncidentLogger {
 
+    // Appends a new event to the log for the given incident.
     mutate func log_event(
         incident_id: string,
         timestamp: string,
@@ -16,9 +19,12 @@ interface IncidentLogger {
         metadata: string
     ) -> result<(), string>;
 
+    // Returns all log entries for an incident in insertion order.
+    // Returns empty list if incident has no logs.
     query func get_incident_logs(
         incident_id: string
     ) -> result<list<IncidentLog>, string>;
 
+    // Returns all incident IDs that have at least one log entry.
     query func list_incidents() -> result<list<string>, string>
 }

@@ -1,19 +1,18 @@
-// Incident Management MCP - WIDL Interface Definition
-// This defines a single MCP server that powers a full incident management system
-
+// All external service credentials. Loaded from config.yaml at runtime.
 record IncidentManagementConfig {
     discord_webhook_url: string,
     slack_webhook_url: string,
     twilio_account_sid: string,
     twilio_auth_token: string,
-    twilio_from_phone: string,
+    twilio_from_phone: string,   // E.164 format e.g. +1XXXXXXXXXX
     pagerduty_api_key: string,
     pagerduty_service_id: string,
     statuspage_api_key: string,
     statuspage_page_id: string,
-    logger_contract_id: string
+    logger_contract_id: string   // deployed contract ID of the incident_logger
 }
 
+// A single audit log entry. Same shape as the one in incident_logger.
 record IncidentLog {
     incident_id: string,
     timestamp: string,
@@ -22,53 +21,53 @@ record IncidentLog {
     metadata: string
 }
 
+// MCP that orchestrates the full incident response lifecycle.
 @mcp
 interface IncidentManagement {
-    // Configuration for external service integrations
     config -> IncidentManagementConfig;
 
-    // Send a Discord notification about an incident with severity level
+    // Posts a colour-coded embed to Discord. severity controls the colour.
     query func notify_discord(
         incident_id: string,
         message: string,
-        severity: string
+        severity: string  // critical | high | medium | low
     ) -> result<string, string>;
 
-    // Send a Slack notification about an incident with severity level
+    // Posts a notification to Slack via incoming webhook.
     query func notify_slack(
         incident_id: string,
         message: string,
-        severity: string
+        severity: string  // critical | high | medium | low
     ) -> result<string, string>;
 
-    // Send an SMS notification via Twilio to a specific phone number
+    // Sends an SMS via Twilio. Use after page_oncall to get the phone number.
     query func notify_sms(
         incident_id: string,
-        phone: string,
+        phone: string,    // E.164 format e.g. +1XXXXXXXXXX
         message: string
     ) -> result<string, string>;
 
-    // Page on-call engineers using PagerDuty to create an incident
+    // Pages on-call via PagerDuty. Returns engineer name, phone and email.
     query func page_oncall(
         incident_id: string,
         description: string,
         severity: string
     ) -> result<string, string>;
 
-    // Update incident status on Statuspage to inform customers
+    // Updates the customer-facing status page.
     query func update_status(
         incident_id: string,
-        status: string,
+        status: string,   // investigating | identified | monitoring | resolved
         message: string
     ) -> result<string, string>;
 
-    // Create a war room automatically for severe incidents requiring collaboration
+    // Creates a War room. Returns join_url and host_url.
     query func create_war_room(
         incident_id: string,
         severity: string
     ) -> result<string, string>;
 
-    // Send an email notification via SendGrid
+    // Sends an HTML incident alert email via SendGrid.
     query func notify_email(
         incident_id: string,
         to_email: string,
@@ -77,26 +76,25 @@ interface IncidentManagement {
         severity: string
     ) -> result<string, string>;
 
-
-    // Trigger AI-driven remediation workflow for autonomous incident resolution
+    // Runs AI-driven remediation via Claude API and returns suggested steps.
     query func ai_remediation(
         incident_id: string,
         description: string,
         severity: string
     ) -> result<string, string>;
 
-    // Log a new event for an incident
+    // Appends an audit event to the incident log. Call this after every action.
     mutate func log_incident_event(
         incident_id: string,
         event_type: string,
         message: string,
-        metadata: string
+        metadata: string  // JSON string e.g. {"join_url": "https://..."}
     ) -> result<string, string>;
 
-    // List all incidents tracked in the logger
+    // Returns all tracked incident IDs.
     query func list_all_incidents() -> result<list<string>, string>;
 
-    // Get complete timeline of events for a specific incident
+    // Returns the full event timeline for an incident in chronological order.
     query func get_incident_timeline(
         incident_id: string
     ) -> result<list<IncidentLog>, string>

@@ -9,8 +9,6 @@ use syn::{
     Signature, Token, Type, TypePath,
 };
 
-static IDENTITY_PREFIX: &str = "identity::";
-
 pub enum QueryOpaqueKind {
     Stream,
     Plottable,
@@ -755,7 +753,7 @@ pub fn impl_smart_contract_secured_macro(
                 "".to_string()
             };
 
-            let identity_contract_name = format!(IDENTITY_PREFIX, group);
+            let identity_contract_name = format!("identity::{}", group);
             let identity_addr = weil_rs::runtime::Runtime::contract_id_for_name(&identity_contract_name).map_err(|err| err.to_string())?;
 
             #[derive(Serialize)]
@@ -791,19 +789,31 @@ pub fn impl_smart_contract_secured_macro(
                 purpose: weil_contracts::key_management::KeyPurpose,
             }
 
-            let args = Args {
-                key: qualified_addr,
+            let exec_args = Args {
+                key: qualified_addr.clone(),
                 purpose: weil_contracts::key_management::KeyPurpose::Execution,
             };
 
-            let has_purpose = weil_rs::runtime::Runtime::call_contract::<bool>(
-                key_manager_addr,
+            let has_exec_purpose = weil_rs::runtime::Runtime::call_contract::<bool>(
+                key_manager_addr.clone(),
                 "key_has_purpose".to_string(),
-                Some(serde_json::to_string(&args).unwrap()),
+                Some(serde_json::to_string(&exec_args).unwrap()),
             )
             .map_err(|err| err.to_string())?;
 
-            if !has_purpose {
+            let manager_args = Args {
+                key: qualified_addr,
+                purpose: weil_contracts::key_management::KeyPurpose::Management,
+            };
+
+            let has_manager_purpose = weil_rs::runtime::Runtime::call_contract::<bool>(
+                key_manager_addr,
+                "key_has_purpose".to_string(),
+                Some(serde_json::to_string(&manager_args).unwrap()),
+            )
+            .map_err(|err| err.to_string())?;
+
+            if !has_exec_purpose && !has_manager_purpose {
                 return Err("sender address not authorized".to_string());
             }
         }

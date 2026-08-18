@@ -12,8 +12,9 @@ use flate2::{write::GzEncoder, Compression};
 use libsecp256k1::PublicKey;
 use openssl::sha::Sha256;
 use serde::Serialize;
-use std::io::Write;
 use std::{sync::Arc, time::SystemTime};
+use std::fs::File;
+use std::io::{self, Read, Write, Seek, SeekFrom};
 
 /// Compute the SHA-256 digest of `buf`.
 ///
@@ -71,4 +72,28 @@ pub(crate) fn compress<T: Serialize>(value: &T) -> Result<Vec<u8>, anyhow::Error
     encoder.write_all(json_str.as_bytes())?;
 
     Ok(encoder.finish()?)
+}
+
+
+/*
+read a file from a given offset and return up to `limit` bytes
+*/
+pub fn read_file_range_utf8(
+    file_path: &str,
+    offset: u64,
+    limit: usize,
+) -> io::Result<String> {
+    let mut file = File::open(file_path)?;
+
+    file.seek(SeekFrom::Start(offset))?;
+
+    let mut buffer = vec![0u8; limit];
+    let bytes_read = file.read(&mut buffer)?;
+    buffer.truncate(bytes_read);
+
+    // Convert to UTF-8 string
+    let content = String::from_utf8(buffer)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    Ok(content)
 }

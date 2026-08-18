@@ -12,7 +12,7 @@
 //! 1. Build an [`ExecuteArgs`] payload for the target applet method.
 //! 2. Construct a [`TransactionHeader`] with a nonce and addressing metadata.
 //! 3. Canonicalize the payload (sorted `BTreeMap`), JSON-encode, and **sign** with
-//!    the wallet’s secp256k1 key.
+//!    the wallet's secp256k1 key.
 //! 4. Wrap into a [`BaseTransaction`] with a default TTL.
 //! 5. Submit via the platform API, optionally obtaining a streaming response
 //!    ([`streaming::ByteStream`]).
@@ -21,6 +21,19 @@
 //! Outbound HTTP submissions are gated by a `Semaphore` (default concurrency is
 //! [`DEFAULT_CONCURRENCY`]). Clone the client freely; it is internally `Arc`
 //! managed and safe to use across async tasks.
+//!
+//! ## Multi-account
+//! The wallet is held behind a `Mutex` so the active account can be switched
+//! at runtime without recreating the client:
+//! ```no_run
+//! use weil_wallet::{WeilClient, wallet::SelectedAccount};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let client = WeilClient::from_wallet_file("wallet.wc", None)?;
+//! client.set_account(&SelectedAccount::Derived(1)).await?; // switch to account 1
+//! # Ok(())
+//! # }
+//! ```
 
 use api::{
     request::{SubmitTxnRequest, Transaction, UserTransaction, Verifier},
@@ -35,10 +48,10 @@ use std::{future::Future, sync::Arc};
 use streaming::ByteStream;
 use tokio::sync::{Mutex, Semaphore};
 use transaction::{value_to_btreemap, BaseTransaction, TransactionHeader, TransactionResult};
-use utils::{current_time_millis, get_address_from_public_key};
+use utils::{current_time_millis, hash_sha256};
 use wallet::{SelectedAccount, Wallet};
 
-const AUDIT_APPLET_SVC_NAME: &str = "auditor";
+const AUDIT_APPLET_SVC_NAME: &str = "auditor::weil";
 
 pub mod api;
 pub mod constants;
@@ -52,9 +65,9 @@ pub mod wallet;
 
 /// High-level client for interacting with **WeilChain** applet methods.
 ///
-/// Internally wraps a `reqwest::Client`, a signer [`Wallet`], and a concurrency
-/// limiter. The whole struct is `Clone` (via `Arc`) and intended to be reused
-/// across tasks.
+/// Internally wraps a `reqwest::Client`, a signer [`Wallet`] (behind a `Mutex`
+/// for multi-account support), and a concurrency limiter. The whole struct is
+/// `Clone` (via `Arc`) and safe to share across tasks.
 #[derive(Clone)]
 pub struct WeilClient {
     http_client: Client,
@@ -67,7 +80,7 @@ impl WeilClient {
     /// Construct a new [`WeilClient`].
     ///
     /// # Arguments
-    /// - `wallet`: caller’s signing identity.
+    /// - `wallet`: caller's signing identity.
     /// - `concurrency`: optional maximum number of concurrent HTTP submissions.
     ///   Defaults to [`DEFAULT_CONCURRENCY`].
     ///
@@ -81,24 +94,15 @@ impl WeilClient {
                 .build()?,
             wallet: Arc::new(std::sync::Mutex::new(wallet)),
             semaphore: Arc::new(Semaphore::new(match concurrency {
-                Some(concurrency) => concurrency,
-                None => DEFAULT_CONCURRENCY, // default value
+                Some(c) => c,
+                None => DEFAULT_CONCURRENCY,
             })),
             audit_contract_id: Arc::new(Mutex::new(None)),
         })
     }
 
-    /// Construct a [`WeilClient`] from a single-account export JSON file.
+    /// Construct a [`WeilClient`] from a `wallet.wc` file.
     /// No sentinel connection required for wallet construction.
-    pub fn from_account_export_file<P: AsRef<std::path::Path>>(
-        path: P,
-        concurrency: Option<usize>,
-    ) -> Result<Self, anyhow::Error> {
-        let wallet = Wallet::from_account_export_file(path)?;
-        Self::new(wallet, concurrency)
-    }
-
-    /// Construct a [`WeilClient`] from a multi-account `wallet.wc` file.
     pub fn from_wallet_file<P: AsRef<std::path::Path>>(
         path: P,
         concurrency: Option<usize>,
@@ -107,16 +111,7 @@ impl WeilClient {
         Self::new(wallet, concurrency)
     }
 
-    /// Add a new account to the wallet from an account export JSON file.
-    ///
-    /// The new account is appended; the active account does not change.
-    pub async fn add_account_from_export_file<P: AsRef<std::path::Path>>(
-        &self,
-        path: P,
-    ) -> anyhow::Result<()> {
-        let mut wallet = self.wallet.lock().unwrap();
-        wallet.add_account_from_export_file(path)
-    }
+    // ── Multi-account management ─────────────────────────────────────────────
 
     /// Switch the active account used for signing.
     ///
@@ -126,13 +121,17 @@ impl WeilClient {
         wallet.set_index(selected)
     }
 
+    /// Return the number of derived (HD) accounts in the wallet.
     pub async fn derived_account_count(&self) -> usize {
         self.wallet.lock().unwrap().derived_account_count()
     }
 
+    /// Return the number of externally added accounts in the wallet.
     pub async fn external_account_count(&self) -> usize {
         self.wallet.lock().unwrap().external_account_count()
     }
+
+    // ── Internal ─────────────────────────────────────────────────────────────
 
     /// Resolve and cache the audit applet contract address from the Sentinel API.
     async fn get_audit_contract_id(&self) -> anyhow::Result<ContractId> {
@@ -211,53 +210,186 @@ impl WeilClient {
         Ok(resp)
     }
 
-    /// Audits a log message using the platform's audit contract.
-    ///
-    /// This method sends the given log message to the auditor applet, which is typically
-    /// used for verifiable off-chain or on-chain audit trails. The log message is passed
-    /// as an argument to the `"audit"` contract method via a transaction. The transaction
-    /// is sent in non-blocking mode and does not conceal arguments from auditing infrastructure.
-    ///
-    /// # Arguments
-    ///
-    /// * `log` - The string to be audited.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` if the audit log was successfully submitted.
-    /// * `Err(anyhow::Error)` if the submission or contract call failed.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use weil_wallet::WeilClient;
-    /// # async fn example(client: WeilClient) -> anyhow::Result<()> {
-    /// client.audit("User action: something important".to_string()).await?;
-    /// println!("Audit log submitted.");
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn audit(&self, log: String) -> anyhow::Result<()> {
-        // Resolve the auditor applet contract id
+    pub async fn audit(&self, log: String) -> anyhow::Result<String> {
         let contract_id = self.get_audit_contract_id().await?;
         let method_name = "audit";
 
         #[derive(Serialize)]
         struct AuditArgs {
             log: String,
+            org: Option<String>
         }
 
-        // Prepare arguments to send as JSON
-        let method_args = serde_json::to_string(&AuditArgs { log }).unwrap();
+        let org = self.wallet.lock().unwrap().org().map(|o| o.name.clone());
 
-        // Send transaction to the audit applet (non-blocking, arguments visible)
-        let _ = self
+        let method_args = serde_json::to_string(&AuditArgs { log, org }).unwrap();
+
+        let resp = self
             .execute(
                 contract_id,
                 method_name.to_string(),
                 method_args,
                 Some(false),
-                Some(true),
+                Some(false),
+            )
+            .await?;
+
+        let txn_result = resp.txn_result;
+
+        Ok(txn_result)
+    }
+
+    pub async fn persist_receipt_for_commit(
+        &self,
+        commit_hash: String,
+        receipt: String,
+    )-> anyhow::Result<String>{
+        let contract_id = self.get_audit_contract_id().await?;
+        let method_name = "persist_receipt_for_commit";
+
+        #[derive(Serialize)]
+        struct PersistReceiptArgs {
+            commit_hash: String,
+            receipt: String,
+        }
+
+        let method_args = serde_json::to_string(&PersistReceiptArgs { commit_hash, receipt }).unwrap();
+
+        let resp = self
+            .execute(
+                contract_id,
+                method_name.to_string(),
+                method_args,
+                Some(false),
+                Some(false),
+            )
+            .await?;
+
+        let txn_result = resp.txn_result;
+
+        Ok(txn_result)
+    }
+
+    /// Uploads a receipt (trace + transcript) to cloud storage via the `audit_me`
+    /// contract's `validate_and_persist_receipt` method.
+    ///
+    /// The caller's org and subgroup are extracted from the wallet export so that
+    /// the contract can verify identity using the caller's actual subgroup — not a
+    /// hardcoded group name.
+    pub async fn persist_receipt_in_s3(
+        &self,
+        content: String,
+    ) -> anyhow::Result<String> {
+        let contract_id = self.get_audit_contract_id().await?;
+        let method_name = "validate_and_persist_receipt";
+
+        #[derive(Serialize)]
+        struct PersistReceiptInS3Args {
+            org: Option<String>,
+            subgroup: Option<String>,
+            hash: String,
+            content: String,
+        }
+
+        let hash = hex::encode(hash_sha256(content.as_bytes()));
+        let wallet = self.wallet.lock().unwrap();
+        let org = wallet.org().map(|o| o.name.clone());
+        let subgroup = wallet.org().and_then(|o| o.subgroup.clone());
+        drop(wallet);
+
+        let method_args =
+            serde_json::to_string(&PersistReceiptInS3Args { org, subgroup, hash, content })
+                .unwrap();
+
+        let resp = self
+            .execute(
+                contract_id,
+                method_name.to_string(),
+                method_args,
+                Some(false),
+                Some(false),
+            )
+            .await?;
+
+        let txn_result = resp.txn_result;
+
+        Ok(txn_result)
+    }
+
+    pub async fn index_prompt_in_bigquery(&self, prompt_text: String, receipts: Vec<String>) -> Result<(), anyhow::Error> {
+        
+        let contract_id = self.get_audit_contract_id().await?;
+        let org = self.wallet.lock().unwrap().org().map(|o| o.name.clone());
+        let prompt_id = hex::encode(hash_sha256(prompt_text.as_bytes()));
+        let namespace = org.clone().unwrap_or_default();
+
+        #[derive(Serialize)]
+        struct Args {
+            org: Option<String>,
+            namespace: String,
+            prompt_text: String,
+            prompt_id: String,
+            receipts: Vec<String>,
+        }
+
+        let args = Args { org, namespace, prompt_text, prompt_id, receipts };
+
+        let _ = self.
+            execute(
+                contract_id,
+                "index_prompt".to_string(),
+                serde_json::to_string(&args).unwrap(),
+                None, 
+                None).await?;
+
+        Ok(())
+    }
+
+    /// Indexes multiple prompts in a single on-chain transaction.
+    ///
+    /// Each `(prompt_text, receipts)` pair is converted into a `PromptEntry`
+    /// with a SHA-256-derived `prompt_id` and the org name as `namespace`.
+    /// The `audit_me` contract qualifies each `prompt_id` with the caller's
+    /// wallet address before forwarding the batch to Sentinel.
+    pub async fn batch_index_prompts(
+        &self,
+        prompts: Vec<(String, Vec<String>)>,
+    ) -> Result<(), anyhow::Error> {
+        let contract_id = self.get_audit_contract_id().await?;
+        let org = self.wallet.lock().unwrap().org().map(|o| o.name.clone());
+        let namespace = org.clone().unwrap_or_default();
+
+        #[derive(Serialize)]
+        struct PromptEntry {
+            namespace: String,
+            prompt_text: String,
+            prompt_id: String,
+            receipts: Vec<String>,
+        }
+
+        #[derive(Serialize)]
+        struct Args {
+            org: Option<String>,
+            prompts: Vec<PromptEntry>,
+        }
+
+        let entries: Vec<PromptEntry> = prompts
+            .into_iter()
+            .map(|(prompt_text, receipts)| {
+                let prompt_id = hex::encode(hash_sha256(prompt_text.as_bytes()));
+                PromptEntry { namespace: namespace.clone(), prompt_text, prompt_id, receipts }
+            })
+            .collect();
+
+        let args = Args { org, prompts: entries };
+
+        let _ = self
+            .execute(
+                contract_id,
+                "batch_index_prompts".to_string(),
+                serde_json::to_string(&args).unwrap(),
+                None,
+                None,
             )
             .await?;
 
@@ -350,22 +482,17 @@ impl WeilContractClient {
 
     /// Construct and sign the base transaction for a method call.
     ///
-    /// - Derives `from_addr` from the wallet's secp256k1 public key (`SHA-256` hex).
-    /// - Uses current time in ms as the `nonce`.
-    /// - Resolves the target `weilpod_counter` from the [`ContractId`].
-    /// - Canonicalizes and signs the payload via [`Self::sign_execute_args`].
+    /// Locks the wallet mutex briefly to snapshot the current account's address,
+    /// public key, and produce the signature, then releases the lock before any
+    /// network I/O.
     fn sign_and_construct_txn(
         &self,
         method_name: String,
         method_args: String,
         should_hide_args: bool,
     ) -> Result<(BaseTransaction, String, ExecuteArgs), anyhow::Error> {
-        let public_key = self.client.wallet.lock().unwrap().get_public_key();
-        let from_addr = get_address_from_public_key(&public_key);
-        let to_addr = from_addr.clone();
         let contract_id = self.contract_id.clone();
         let weilpod_counter = contract_id.pod_counter()?;
-        let public_key = hex::encode(&public_key.serialize());
 
         let args = ExecuteArgs {
             contract_address: self.contract_id.clone(),
@@ -374,25 +501,39 @@ impl WeilContractClient {
             should_hide_args,
         };
 
+        // Lock the wallet only for the duration of address/key access and signing.
+        let wallet = self.client.wallet.lock().unwrap();
+
+        let from_addr = Arc::new(wallet.get_address().to_string());
+        let to_addr = from_addr.clone();
+        let public_key_hex = hex::encode(wallet.get_public_key().serialize());
+
         let nonce = current_time_millis() as usize;
-        let mut txn_header =
-            TransactionHeader::new(nonce, public_key, from_addr, to_addr, weilpod_counter);
+        let mut txn_header = TransactionHeader::new(
+            nonce,
+            public_key_hex,
+            from_addr,
+            to_addr,
+            weilpod_counter,
+        );
 
-        let signature = self.sign_execute_args(&txn_header, &args)?;
+        let signature = self.sign_execute_args(&wallet, &txn_header, &args)?;
+        drop(wallet); // release lock before any I/O
+
         txn_header.set_signature(signature.as_str());
-
         let base_txn = BaseTransaction::new(txn_header);
 
         Ok((base_txn, signature, args))
     }
 
-    /// Canonicalize and **sign** the execute payload using the client wallet.
+    /// Canonicalize and **sign** the execute payload using the provided wallet.
     ///
     /// - Builds a stable, sorted representation by converting the JSON payload
     ///   to a `BTreeMap` (`value_to_btreemap`) before serialization.
     /// - Signs the resulting bytes with `secp256k1` ECDSA via [`wallet::Wallet::sign`].
     fn sign_execute_args(
         &self,
+        wallet: &Wallet,
         txn_header: &TransactionHeader,
         args: &ExecuteArgs,
     ) -> anyhow::Result<String> {
@@ -411,26 +552,13 @@ impl WeilContractClient {
 
         let json_payload_btreemap = value_to_btreemap(json_payload);
         let json_payload = serde_json::to_string(&json_payload_btreemap)?;
-        let signature = self
-            .client
-            .wallet
-            .lock()
-            .unwrap()
-            .sign(json_payload.as_bytes())?;
-
-        Ok(signature)
+        wallet.sign(json_payload.as_bytes())
     }
 
     /// Common submission path for both normal and streaming executions.
     ///
     /// Accepts an API function (from [`PlatformApi`]) to perform the actual HTTP
     /// request. Concurrency is limited by the client's internal semaphore.
-    ///
-    /// # Type parameters
-    /// - `R`: API result type (e.g., [`TransactionResult`] or [`ByteStream`]).
-    /// - `T`: future returned by the API function.
-    /// - `F`: callable that takes a [`SubmitTxnRequest`] and a `reqwest::Client`,
-    ///   returning `T`.
     async fn hit_api<R, T, F>(
         &self,
         signature: String,

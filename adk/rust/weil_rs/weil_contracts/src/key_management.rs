@@ -22,7 +22,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet,HashMap};
 use weil_macros::WeilType;
 use weil_rs::collections::{map::WeilMap, WeilIdGenerator};
 
@@ -115,6 +115,14 @@ pub trait WRC734 {
     /// Return all keys that currently hold a given `purpose`.
     fn get_keys_by_purpose(&self, purpose: KeyPurpose) -> Vec<String>;
 
+    /// Batch sibling of [`Self::get_keys_by_purpose`]. ONE host read
+    /// returns every requested purpose bucket. Missing purposes are
+    /// absent from the returned map (no empty-vec stand-ins).
+    fn get_keys_by_purposes(
+        &self,
+        purposes: Vec<KeyPurpose>,
+    ) -> HashMap<KeyPurpose, Vec<String>>;
+
     /// Add (or extend) a `key` with a `purpose` and `key_type`.
     ///
     /// Idempotent if the mapping already exists.
@@ -192,6 +200,20 @@ impl WRC734 for KeyManager {
         }
     }
 
+    /// Batch fetch of `purpose → keys` for several purposes in ONE
+    /// host read, via [`WeilMap::getN`] on the unpartitioned
+    /// `keys_by_purpose` row.
+    fn get_keys_by_purposes(
+        &self,
+        purposes: Vec<KeyPurpose>,
+    ) -> HashMap<KeyPurpose, Vec<String>> {
+        self.keys_by_purpose
+            .getN(None, &purposes)
+            .into_iter()
+            .map(|(purpose, set)| (purpose, set.into_iter().collect()))
+            .collect()
+    }
+
     /// Add (or extend) a mapping `key → purpose` and maintain the reverse index.
     ///
     /// Idempotent: inserting an already-present purpose is a no-op.
@@ -203,20 +225,26 @@ impl WRC734 for KeyManager {
     ) -> Result<(), anyhow::Error> {
         if let Some(mut key_entry) = self.keys.get(&key) {
             if key_entry.insert(purpose) {
-                self.keys.insert(key.clone(), key_entry);
+                self.keys
+                .insert(key.clone(), key_entry)
+                .map_err(anyhow::Error::msg)?;
             }
         } else {
             self.keys
-                .insert(key.clone(), BTreeSet::from([purpose.clone()]));
+                .insert(key.clone(), BTreeSet::from([purpose.clone()]))
+                .map_err(anyhow::Error::msg)?;
         }
 
         if let Some(mut keys) = self.keys_by_purpose.get(&purpose) {
             if keys.insert(key.clone()) {
-                self.keys_by_purpose.insert(purpose, keys);
+                self.keys_by_purpose
+                .insert(purpose, keys)
+                .map_err(anyhow::Error::msg)?;
             }
         } else {
             self.keys_by_purpose
-                .insert(purpose, BTreeSet::from([key.clone()]));
+                .insert(purpose, BTreeSet::from([key.clone()]))
+                .map_err(anyhow::Error::msg)?;
         }
 
         Ok(())
@@ -245,12 +273,16 @@ impl WRC734 for KeyManager {
     fn remove_key(&mut self, key: String, purpose: KeyPurpose) -> Result<bool, anyhow::Error> {
         if let Some(mut key_entry) = self.keys.get(&key) {
             key_entry.remove(&purpose);
-            self.keys.insert(key.clone(), key_entry);
+            self.keys
+                .insert(key.clone(), key_entry)
+                .map_err(anyhow::Error::msg)?;
         }
 
         if let Some(mut keys) = self.keys_by_purpose.get(&purpose) {
             keys.remove(&key);
-            self.keys_by_purpose.insert(purpose, keys);
+            self.keys_by_purpose
+                .insert(purpose, keys)
+                .map_err(anyhow::Error::msg)?;
         }
 
         Ok(true)

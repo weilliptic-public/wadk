@@ -30,7 +30,8 @@ impl<T> WeilVec<T> {
 impl<T: WeilType> WeilVec<T> {
     /// Appends an element to the back of a collection.
     pub fn push(&mut self, item: T) {
-        Memory::write_collection(self.state_tree_key(&self.len), item);
+        Memory::write_collection(self.state_tree_key(&self.len), item)
+            .expect("generated vec key must be valid");
 
         self.len += 1;
     }
@@ -87,7 +88,8 @@ impl<T: WeilType> WeilVec<T> {
             });
         }
 
-        Memory::write_collection(self.state_tree_key(&index), item);
+        Memory::write_collection(self.state_tree_key(&index), item)
+            .expect("generated vec key must be valid");
 
         Ok(())
     }

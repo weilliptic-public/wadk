@@ -16,7 +16,7 @@ impl<T> WeilSet<T>
 where
     T: WeilType + Hash + Eq,
 {
-    pub fn insert(&mut self, value: T) {
+    pub fn insert(&mut self, value: T) -> Result<(), String> {
         Memory::write_collection::<()>(self.state_tree_key(&value), ())
     }
 

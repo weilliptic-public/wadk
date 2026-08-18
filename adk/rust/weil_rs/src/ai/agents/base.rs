@@ -27,8 +27,6 @@ impl BaseAgentHelper {
     /// # Arguments
     ///
     /// * `task_prompt` - The natural language prompt describing the task.
-    /// * `mcp_contract_address` - Address of the MCP contract to use for tooling.
-    /// * `model` - The model to use for task execution.
     ///
     /// # Returns
     ///
@@ -37,30 +35,18 @@ impl BaseAgentHelper {
     /// # Errors
     ///
     /// Returns an error if the contract call fails or the response cannot be parsed.
-    pub fn run_task(
-        &self,
-        task_prompt: String,
-        mcp_contract_address: String,
-        model: Model,
-        model_key: Option<String>
-    ) -> Result<String> {
+    pub fn run_task(&self, mcp_contract_addresses: Vec<String>, server_names: Vec<String>, model: Model, model_key: Option<String>, task_prompt: String) -> Result<String> {
+
         #[derive(Debug, Serialize)]
         struct run_taskArgs {
-            task_prompt: String,
-            mcp_contract_address: String,
+            mcp_contract_addresses: Vec<String>,
+            server_names: Vec<String>,
             model: Model,
-            model_key: Option<String>
+            model_key: Option<String>,
+            task_prompt: String,
         }
 
-        let serialized_args = Some(
-            serde_json::to_string(&run_taskArgs {
-                task_prompt,
-                mcp_contract_address,
-                model,
-                model_key,
-            })
-            .unwrap(),
-        );
+        let serialized_args = Some(serde_json::to_string(&run_taskArgs { mcp_contract_addresses, server_names, model, model_key, task_prompt }).unwrap());
 
         let resp = Runtime::call_contract::<String>(
             self.contract_id.to_string(),

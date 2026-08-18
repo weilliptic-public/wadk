@@ -218,14 +218,18 @@ impl NonFungibleToken {
         };
 
         // Update the token
-        self.owners.insert(token_id.clone(), to_addr.clone());
+        self.owners
+            .insert(token_id.clone(), to_addr.clone())
+            .map_err(Error::msg)?;
 
         // Update the owners
         let Some(mut old_owners_tokens) = self.owned.get(&from_addr) else {
             return Err(Error::msg(format!("owned tokens is missing")));
         };
         old_owners_tokens.remove(&token_id);
-        self.owned.insert(from_addr.clone(), old_owners_tokens);
+        self.owned
+            .insert(from_addr.clone(), old_owners_tokens)
+            .map_err(Error::msg)?;
 
         let new_owners_tokens = match self.owned.get(&to_addr.clone()) {
             Some(mut current_tokens) => {
@@ -234,7 +238,9 @@ impl NonFungibleToken {
             }
             None => BTreeSet::from([token_id.clone()]),
         };
-        self.owned.insert(to_addr.clone(), new_owners_tokens);
+        self.owned
+            .insert(to_addr.clone(), new_owners_tokens)
+            .map_err(Error::msg)?;
 
         // Update old owner's individual allowances
         let key = format!("{}${}", from_addr, token_id.clone());
@@ -378,7 +384,7 @@ impl NonFungibleToken {
         if spender == EMPTY_ADDRESS {
             self.allowances.remove(&key);
         } else {
-            self.allowances.insert(key, spender);
+            self.allowances.insert(key, spender).map_err(Error::msg)?;
         }
 
         Ok(())
@@ -388,15 +394,17 @@ impl NonFungibleToken {
     ///
     /// Total allowances may overlap with individual allowances; the per-token
     /// entry remains independent.
-    pub fn set_approve_for_all(&mut self, spender: String, approval: bool) {
+    pub fn set_approve_for_all(&mut self, spender: String, approval: bool) -> Result<()> {
         let from_addr = Runtime::sender();
 
         let key = format!("{}${}", from_addr, EMPTY_TOKEN_ID);
         if approval {
-            self.allowances.insert(key, spender);
+            self.allowances.insert(key, spender).map_err(Error::msg)?;
         } else {
             self.allowances.remove(&key);
         }
+
+        Ok(())
     }
 
     /// Return the list of approved spenders for a `token_id`.
@@ -476,8 +484,12 @@ impl NonFungibleToken {
             )));
         };
 
-        self.tokens.insert(token_id.clone(), token);
-        self.owners.insert(token_id.clone(), from_addr.clone());
+        self.tokens
+            .insert(token_id.clone(), token)
+            .map_err(Error::msg)?;
+        self.owners
+            .insert(token_id.clone(), from_addr.clone())
+            .map_err(Error::msg)?;
 
         let new_owners_tokens = match self.owned.get(&from_addr) {
             Some(mut current_tokens) => {
@@ -486,7 +498,9 @@ impl NonFungibleToken {
             }
             None => BTreeSet::from([token_id]),
         };
-        self.owned.insert(from_addr.clone(), new_owners_tokens);
+        self.owned
+            .insert(from_addr.clone(), new_owners_tokens)
+            .map_err(Error::msg)?;
 
         Ok(())
     }

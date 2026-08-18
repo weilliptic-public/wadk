@@ -15,3 +15,4 @@ pub mod sqs;
 pub mod traits;
 pub mod utils;
 pub mod webserver;
+pub mod basicutils;

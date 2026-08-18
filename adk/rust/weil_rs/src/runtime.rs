@@ -28,6 +28,7 @@ use crate::{
     collections::trie::map::WeilTriePrefixMap, traits::WeilType, utils::ParsedTimeInterval,
 };
 use crate::{
+    basicutils::{is_valid_key, INVALID_KEY_ERROR},
     errors::WeilError,
     utils::{AppletDetails, StateArgsValue, StateResultValue},
 };
@@ -47,6 +48,20 @@ extern "C" {
     fn delete_collection(key: i32) -> i32;
     fn read_collection(key: i32) -> i32;
     fn read_bulk_collection(prefix: i32) -> i32;
+    fn write_collection_with_suffix(key: i32, val: i32, row_suffix: i32);
+    fn delete_collection_with_suffix(key: i32, row_suffix: i32) -> i32;
+    fn read_collection_with_suffix(key: i32, row_suffix: i32) -> i32;
+    fn read_bulk_collection_with_suffix(prefix: i32, row_suffix: i32) -> i32;
+    fn read_items_with_suffix(
+        items_json: i32,
+        row_suffix: i32,
+    ) -> i32;
+    fn read_items(items_json: i32) -> i32;
+    fn read_bulk_collection_with_range_and_suffix(
+        start_key: i32,
+        end_key: i32,
+        row_suffix: i32,
+    ) -> i32;
     fn get_state_and_args() -> i32;
     fn get_sender() -> i32;
     fn get_block_height() -> i32;
@@ -59,6 +74,14 @@ extern "C" {
     fn uuid() -> i32;
     fn applet_addr_for_name(name: i32) -> i32;
     fn get_applet_details(applet_id: i32) -> i32;
+    fn attest(org: i32, wallet_addr: i32, txn_id: i32, claim_data: i32, webhook: i32) -> i32;
+    fn get_txn_instantiator_addr() -> i32;
+    fn get_txn_id() -> i32;
+    fn get_txn_from_addr(txn_id: i32) -> i32;
+    fn get_pod_id_from_address(wallet_addr: i32) -> i32;
+    fn list_contract_transactions(ptr: i32) -> i32;
+    fn aggregate_contract_transactions(ptr: i32) -> i32;
+    fn audit(audit_params: i32) -> i32;
     fn parse_human_time(s: i32) -> i32;
 }
 
@@ -213,14 +236,28 @@ pub(crate) fn get_length_prefixed_bytes_from_string(payload: &str, is_error: u8)
 /// It wraps host FFI for collection operations and performs JSON (de)serialization.
 pub(crate) struct Memory;
 
+/// Validate that a collection key does not contain
+/// invalid characters.
+fn validate_collection_key(key: &str) -> Result<(), String> {
+    if is_valid_key(key) {
+        Ok(())
+    } else {
+        Err(INVALID_KEY_ERROR.to_string())
+    }
+}
+
 impl Memory {
     /// Insert or overwrite a collection entry at `key` with serialized `val`.
-    pub fn write_collection<V: Serialize>(key: String, val: V) {
+    pub fn write_collection<V: Serialize>(key: String, val: V) -> Result<(), String> {
+        validate_collection_key(&key)?;
+
         let raw_key = get_length_prefixed_bytes_from_string(&key, 0);
         let raw_val = get_length_prefixed_bytes_from_result(Ok(val));
 
         // SAFETY: Both buffers are valid length-prefixed byte slices in WASM memory.
         unsafe { write_collection(raw_key.as_ptr() as _, raw_val.as_ptr() as _) };
+        
+        Ok(())
     }
 
     /// Delete a collection entry and (optionally) return its previous value.
@@ -303,6 +340,319 @@ impl Memory {
             }
         }
     }
+
+/// Insert or overwrite a collection entry at `key` with serialized `val`
+    /// targeting the partitioned row `{contract_id}_{row_suffix}`.
+    pub fn write_collection_with_suffix<V: Serialize>(
+        key: String,
+        val: V,
+        row_suffix: &str,
+    ) -> Result<(), String> {
+        validate_collection_key(&key)?;
+
+        let raw_key = get_length_prefixed_bytes_from_string(&key, 0);
+        let raw_val = get_length_prefixed_bytes_from_result(Ok(val));
+        let raw_suffix = get_length_prefixed_bytes_from_string(row_suffix, 0);
+
+        // SAFETY: All three buffers are valid length-prefixed byte slices in WASM memory.
+        unsafe {
+            write_collection_with_suffix(
+                raw_key.as_ptr() as _,
+                raw_val.as_ptr() as _,
+                raw_suffix.as_ptr() as _,
+            )
+        };
+
+        Ok(())
+    }
+
+    /// Delete a collection entry from the partitioned row
+    /// `{contract_id}_{row_suffix}` and (optionally) return its previous value.
+    pub fn delete_collection_with_suffix<V: DeserializeOwned>(
+        key: String,
+        row_suffix: &str,
+    ) -> Option<V> {
+        let raw_key = get_length_prefixed_bytes_from_string(&key, 0);
+        let raw_suffix = get_length_prefixed_bytes_from_string(row_suffix, 0);
+        // SAFETY: Both buffers are valid length-prefixed buffers; host returns a status/result pointer.
+        let ptr =
+            unsafe { delete_collection_with_suffix(raw_key.as_ptr() as _, raw_suffix.as_ptr() as _) };
+
+        match read_bytes_from_memory(ptr) {
+            Ok(buffer) => Some(serde_json::from_str::<V>(&buffer).unwrap()),
+            Err(err) => {
+                let WeilError::NoValueReturnedFromDeletingCollectionItem(_) = err else {
+                    panic!(
+                        "panic occured while deletion of collection key `{}` => {}",
+                        key, err
+                    )
+                };
+
+                None
+            }
+        }
+    }
+
+    /// Read a collection entry by `key` from the partitioned row
+    /// `{contract_id}_{row_suffix}`, returning `None` if the key does not exist.
+    pub fn read_collection_with_suffix<V: DeserializeOwned>(
+        key: String,
+        row_suffix: &str,
+    ) -> Option<V> {
+        let raw_key = get_length_prefixed_bytes_from_string(&key, 0);
+        let raw_suffix = get_length_prefixed_bytes_from_string(row_suffix, 0);
+        // SAFETY: Both buffers are valid length-prefixed buffers; host returns a status/result pointer.
+        let ptr =
+            unsafe { read_collection_with_suffix(raw_key.as_ptr() as _, raw_suffix.as_ptr() as _) };
+
+        match read_bytes_from_memory(ptr) {
+            Ok(buffer) => Some(serde_json::from_str::<V>(&buffer).unwrap()),
+            Err(err) => {
+                let WeilError::KeyNotFoundInCollection(_) = err else {
+                    panic!(
+                        "panic occured while reading collection key `{}` => {}",
+                        key, err
+                    )
+                };
+
+                None
+            }
+        }
+    }
+
+    /// Read all entries whose keys start with `prefix` from the partitioned row
+    /// `{contract_id}_{row_suffix}` as raw JSON string.
+    fn read_bulk_collection_with_suffix(
+        prefix: &str,
+        row_suffix: &str,
+    ) -> Result<String, WeilError> {
+        let raw_prefix = get_length_prefixed_bytes_from_string(prefix, 0);
+        let raw_suffix = get_length_prefixed_bytes_from_string(row_suffix, 0);
+        // SAFETY: Both buffers are valid length-prefixed buffers; host returns a status/result pointer.
+        let ptr = unsafe {
+            read_bulk_collection_with_suffix(raw_prefix.as_ptr() as _, raw_suffix.as_ptr() as _)
+        };
+        let value = read_bytes_from_memory(ptr)?;
+
+        Ok(value)
+    }
+
+    /// Read a prefix map for a trie from the partitioned row
+    /// `{contract_id}_{row_suffix}`, deserializing to [`WeilTriePrefixMap<T>`].
+    pub fn read_prefix_for_trie_with_suffix<T: DeserializeOwned>(
+        prefix: String,
+        row_suffix: &str,
+    ) -> Option<WeilTriePrefixMap<T>> {
+        match Memory::read_bulk_collection_with_suffix(&prefix, row_suffix) {
+            Ok(buffer) => Some(serde_json::from_str::<WeilTriePrefixMap<T>>(&buffer).unwrap()),
+            Err(err) => {
+                let WeilError::EntriesNotFoundInCollectionForKeysWithPrefix(_) = err else {
+                    panic!(
+                        "panic occured while reading prefix `{}` for trie => {}",
+                        prefix, err
+                    )
+                };
+
+                None
+            }
+        }
+    }
+
+    /// Exact-key multi-get against a partitioned row. Each entry in
+    /// `items` is the FULL column key (not a prefix); the host returns
+    /// every matching (key, value) on the row in one SQL query.
+    fn read_items_with_suffix(
+        items: &[String],
+        row_suffix: &str,
+    ) -> Result<String, WeilError> {
+        let items_json = serde_json::to_string(items).unwrap();
+        let raw_items = get_length_prefixed_bytes_from_string(&items_json, 0);
+        let raw_suffix = get_length_prefixed_bytes_from_string(row_suffix, 0);
+        // SAFETY: Both buffers are valid length-prefixed buffers; host returns a status/result pointer.
+        let ptr = unsafe {
+            read_items_with_suffix(
+                raw_items.as_ptr() as _,
+                raw_suffix.as_ptr() as _,
+            )
+        };
+        let value = read_bytes_from_memory(ptr)?;
+
+        Ok(value)
+    }
+
+    /// No-suffix variant of `read_items_with_suffix`. Reads the default
+    /// contract row by exact-key multi-get. Same wire shape as the
+    /// with-suffix variant; just no row_suffix parameter.
+    fn read_items(items: &[String]) -> Result<String, WeilError> {
+        let items_json = serde_json::to_string(items).unwrap();
+        let raw_items = get_length_prefixed_bytes_from_string(&items_json, 0);
+        // SAFETY: `raw_items` is a valid length-prefixed buffer; host returns a status/result pointer.
+        let ptr = unsafe { read_items(raw_items.as_ptr() as _) };
+        let value = read_bytes_from_memory(ptr)?;
+        Ok(value)
+    }
+
+    /// Read a typed prefix map for a trie from the partitioned row by
+    /// an exact-key item list. Each entry in `items` is a full column
+    /// key; the host returns the matching set as one
+    /// [`WeilTriePrefixMap<T>`] in a single call.
+    ///
+    /// Used by aggregation queries that need a known set of records
+    /// from a row in one shot — collapses N FFI crossings + N SQL
+    /// queries into 1 + 1.
+    pub fn read_items_for_trie_with_suffix<T: DeserializeOwned>(
+        items: Vec<String>,
+        row_suffix: &str,
+    ) -> Option<WeilTriePrefixMap<T>> {
+        match Memory::read_items_with_suffix(&items, row_suffix) {
+            Ok(buffer) => Some(serde_json::from_str::<WeilTriePrefixMap<T>>(&buffer).unwrap()),
+            Err(err) => {
+                let WeilError::EntriesNotFoundInCollectionForKeysWithPrefix(_) = err else {
+                    panic!(
+                        "panic occured while reading items `{:?}` for trie => {}",
+                        items, err
+                    )
+                };
+
+                None
+            }
+        }
+    }
+
+    /// Typed wrapper for `WeilMap` callers — returns a flat
+    /// `std::collections::HashMap<storage_key, V>` from the partitioned
+    /// row's exact-key multi-get. Reuses the existing
+    /// `read_items_with_suffix` host fn; per-pair deserialization is
+    /// handled by [`parse_items_as_map`].
+    ///
+    /// Companion to [`read_items_for_trie_with_suffix`] — same wire
+    /// path, different return shape suited to `HashMap` callers.
+    pub fn read_items_for_map_with_suffix<V: DeserializeOwned>(
+        items: &[String],
+        row_suffix: &str,
+    ) -> Option<std::collections::HashMap<String, V>> {
+        match Memory::read_items_with_suffix(items, row_suffix) {
+            Ok(buffer) => parse_items_as_map(&buffer),
+            Err(err) => {
+                let WeilError::EntriesNotFoundInCollectionForKeysWithPrefix(_) = err else {
+                    panic!(
+                        "panic occured while reading items `{:?}` for map (with suffix) => {}",
+                        items, err
+                    )
+                };
+
+                None
+            }
+        }
+    }
+
+    /// No-suffix variant of [`read_items_for_map_with_suffix`]. Reads
+    /// the default contract row. Pairs with `WeilMap::getN(None, ...)`.
+    pub fn read_items_for_map<V: DeserializeOwned>(
+        items: &[String],
+    ) -> Option<std::collections::HashMap<String, V>> {
+        match Memory::read_items(items) {
+            Ok(buffer) => parse_items_as_map(&buffer),
+            Err(err) => {
+                let WeilError::EntriesNotFoundInCollectionForKeysWithPrefix(_) = err else {
+                    panic!(
+                        "panic occured while reading items `{:?}` for map => {}",
+                        items, err
+                    )
+                };
+
+                None
+            }
+        }
+    }
+
+    /// Range variant of [`read_bulk_collection_with_suffix`]. Scans
+    /// the partition row's columns over the closed byte-lex interval
+    /// `[start_key, end_key]` in a single underlying SQL call.
+    ///
+    /// Constant-size FFI payload regardless of window width — three
+    /// length-prefixed string buffers — versus the per-key item list
+    /// that [`read_items_with_suffix`] requires.
+    /// Use this when the column keys are lex-sortable (e.g. `pad_me`-
+    /// padded numeric keys) and span a contiguous band.
+    fn read_bulk_collection_with_range_and_suffix(
+        start_key: &str,
+        end_key: &str,
+        row_suffix: &str,
+    ) -> Result<String, WeilError> {
+        let raw_start = get_length_prefixed_bytes_from_string(start_key, 0);
+        let raw_end = get_length_prefixed_bytes_from_string(end_key, 0);
+        let raw_suffix = get_length_prefixed_bytes_from_string(row_suffix, 0);
+        // SAFETY: All three buffers are valid length-prefixed buffers;
+        // host returns a status/result pointer through the standard
+        // write_memory/read_memory plumbing.
+        let ptr = unsafe {
+            read_bulk_collection_with_range_and_suffix(
+                raw_start.as_ptr() as _,
+                raw_end.as_ptr() as _,
+                raw_suffix.as_ptr() as _,
+            )
+        };
+        let value = read_bytes_from_memory(ptr)?;
+        Ok(value)
+    }
+
+    /// Read a prefix map for a trie from the partitioned row covering
+    /// every column whose key lies in the closed byte-lex interval
+    /// `[start_key, end_key]`. ONE host call, ONE SQL query, constant-
+    /// size args.
+    ///
+    /// Companion to [`read_items_for_trie_with_suffix`] — pick the
+    /// range form when the window is a contiguous lex band (the typical
+    /// case for `pad_me`-padded day keys spanning a date window) and
+    /// the prefix form when the window is a non-contiguous set of
+    /// prefixes.
+    pub fn read_range_for_trie_with_suffix<T: DeserializeOwned>(
+        start_key: String,
+        end_key: String,
+        row_suffix: &str,
+    ) -> Option<WeilTriePrefixMap<T>> {
+        match Memory::read_bulk_collection_with_range_and_suffix(
+            &start_key,
+            &end_key,
+            row_suffix,
+        ) {
+            Ok(buffer) => Some(serde_json::from_str::<WeilTriePrefixMap<T>>(&buffer).unwrap()),
+            Err(err) => {
+                let WeilError::EntriesNotFoundInCollectionForKeysWithPrefix(_) = err else {
+                    panic!(
+                        "panic occured while reading range `{}~{}` for trie => {}",
+                        start_key, end_key, err
+                    )
+                };
+
+                None
+            }
+        }
+    }
+}
+
+/// Reshape the host's exact-key multi-get response into a
+/// `HashMap<storage_key, V>` for `WeilMap` callers.
+///
+/// Wire format from the host (`read_items_*_from_db`) is
+/// `Vec<(storage_key, value_json)>` — same shape used by the trie's
+/// typed wrapper. We parse the outer Vec, then deserialize each
+/// `value_json` into V before populating the map. Pairs with malformed
+/// JSON values are silently skipped (matches the trie's
+/// `serde_json::from_str(...).unwrap()` pattern but doesn't panic on
+/// best-effort batch reads).
+fn parse_items_as_map<V: DeserializeOwned>(
+    buffer: &str,
+) -> Option<std::collections::HashMap<String, V>> {
+    let pairs: Vec<(String, String)> = serde_json::from_str(buffer).ok()?;
+    let mut out = std::collections::HashMap::with_capacity(pairs.len());
+    for (sk, v_json) in pairs {
+        if let Ok(v) = serde_json::from_str::<V>(&v_json) {
+            out.insert(sk, v);
+        }
+    }
+    Some(out)
 }
 
 /// Arguments envelope for cross-contract calls over FFI.
@@ -427,6 +777,20 @@ impl Runtime {
         let addr = read_bytes_from_memory(ptr).unwrap();
 
         addr
+    }
+
+    pub fn origin() -> String {
+        let ptr = unsafe { get_txn_instantiator_addr() };
+        let addr = read_bytes_from_memory(ptr).unwrap();
+
+        addr
+    }
+
+    pub fn get_txn_id() -> String {
+        let ptr = unsafe { get_txn_id() };
+        let tnx_id = read_bytes_from_memory(ptr).unwrap();
+
+        tnx_id
     }
 
     /// Resolve an applet name to its contract identifier.
@@ -557,6 +921,83 @@ impl Runtime {
         let _ = unsafe { debug_log(raw_log.as_ptr() as _) };
     }
 
+    pub fn get_txn_from_addr(txn_id: String) -> Result<String, WeilError> {
+        let raw_txn_id = get_length_prefixed_bytes_from_string(&txn_id, 0);
+        let ptr = unsafe { get_txn_from_addr(raw_txn_id.as_ptr() as _) };
+        match read_bytes_from_memory(ptr) {
+            Ok(addr) => Ok(addr),
+            Err(err) => Err(WeilError::InvalidWasmModuleError(format!(
+                "Failed to get txn from address for txn_id '{}': {}",
+                txn_id, err
+            ))),
+        }
+    }
+
+    pub fn get_pod_id_from_addr(wallet_addr: String) -> Result<String, WeilError> {
+        let raw_wallet_addr = get_length_prefixed_bytes_from_string(&wallet_addr, 0);
+        let ptr = unsafe { get_pod_id_from_address(raw_wallet_addr.as_ptr() as _) };
+        match read_bytes_from_memory(ptr) {
+            Ok(addr) => Ok(addr),
+            Err(err) => Err(WeilError::InvalidWasmModuleError(format!(
+                "Failed to get pod id from address for wallet_addr '{}': {}",
+                wallet_addr, err
+            ))),
+        }
+    }
+
+    /// Query transaction history for the current contract from the block indexer.
+    /// Accepts filters (HashMap<String, String>), limit, and offset.
+    /// Returns a JSON string with `{ transactions: [...], total_count: N }`.
+    pub fn list_contract_transactions(
+        filters: std::collections::HashMap<String, String>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<String, WeilError> {
+        #[derive(Serialize)]
+        struct Args {
+            filters: std::collections::HashMap<String, String>,
+            limit: usize,
+            offset: usize,
+        }
+        let args = Args {
+            filters,
+            limit,
+            offset,
+        };
+        let json_args = serde_json::to_string(&args).unwrap();
+        let raw_args = get_length_prefixed_bytes_from_string(&json_args, 0);
+        let ptr = unsafe { list_contract_transactions(raw_args.as_ptr() as _) };
+        read_bytes_from_memory(ptr)
+    }
+
+    /// Aggregate transaction data for the current contract from the block indexer.
+    /// The `range_days` parameter determines both the time window and the grouping bucket:
+    ///   - <= 14 days → group by day
+    ///   - <= 90 days → group by week
+    ///   - > 90 days  → group by month
+    /// Returns a JSON string with aggregated data points.
+    pub fn aggregate_contract_transactions(
+        filters: std::collections::HashMap<String, String>,
+        range_days: u32,
+        value_field: String,
+    ) -> Result<String, WeilError> {
+        #[derive(Serialize)]
+        struct Args {
+            filters: std::collections::HashMap<String, String>,
+            range_days: u32,
+            value_field: String,
+        }
+        let args = Args {
+            filters,
+            range_days,
+            value_field,
+        };
+        let json_args = serde_json::to_string(&args).unwrap();
+        let raw_args = get_length_prefixed_bytes_from_string(&json_args, 0);
+        let ptr = unsafe { aggregate_contract_transactions(raw_args.as_ptr() as _) };
+        read_bytes_from_memory(ptr)
+    }
+
     /// Run a future to completion on a local single-threaded executor and return its output.
     pub fn spawn_task<T>(task: impl Future<Output = T>) -> T {
         let ex = LocalExecutor::new();
@@ -600,6 +1041,78 @@ impl Runtime {
                                                              // host-native function does not have any error propagation, but just Ok(...)
 
         uuid_str
+    }
+
+    pub fn attest(
+        org: String,
+        wallet_addr: String,
+        txn_id: String,
+        claim_data: String,
+        webhook: String,
+    ) -> Result<(), anyhow::Error> {
+        let serialized_org = get_length_prefixed_bytes_from_string(&org, 0);
+        let serialized_wallet_addr = get_length_prefixed_bytes_from_string(&wallet_addr, 0);
+        let serialized_txn_id = get_length_prefixed_bytes_from_string(&txn_id, 0);
+        let serialized_claim_data = get_length_prefixed_bytes_from_string(&claim_data, 0);
+        let serialized_webhook = get_length_prefixed_bytes_from_string(&webhook, 0);
+
+        let result_ptr = unsafe {
+            attest(
+                serialized_org.as_ptr() as _,
+                serialized_wallet_addr.as_ptr() as _,
+                serialized_txn_id.as_ptr() as _,
+                serialized_claim_data.as_ptr() as _,
+                serialized_webhook.as_ptr() as _,
+            )
+        };
+
+        let _ = read_bytes_from_memory(result_ptr)?;
+
+        Ok(())
+    }
+
+    // Audit logs the entry in block-explorer
+    // Parameters:
+    // - `mcp_server_name`: Name of the MCP server to which the audit log
+    //   will be sent
+    // - `task_id`: Unique identifier for the task being audited
+    // - `applet_address`: Address of the applet being audited
+    // - `applet_method`: Method of the applet being audited
+    // - `request`: JSON string representing the log being audited
+    // - `wallet_addr`: Wallet address associated with the audit log entry
+    pub fn audit(
+        mcp_server_name: String,
+        task_id: String,
+        applet_address: String,
+        applet_method: String,
+        request: String,
+        wallet_addr: String,
+    ) -> Result<(), anyhow::Error> {
+        #[derive(Serialize)]
+        struct AuditParams {
+            mcp_server_name: String,
+            task_id: String,
+            applet_address: String,
+            applet_method: String,
+            request: String,
+            wallet_addr: String,
+        }
+
+        let audit_params = AuditParams {
+            mcp_server_name,
+            task_id,
+            applet_address,
+            applet_method,
+            request,
+            wallet_addr,
+        };
+
+        let result_ptr =
+            unsafe { audit(get_length_prefixed_bytes_from_result(Ok(audit_params)).as_ptr() as _) };
+
+        let _ = read_bytes_from_memory(result_ptr)?;
+
+        Ok(())
     }
 
     /// Parse a human-readable time span into a concrete interval.

@@ -136,7 +136,7 @@ impl WebServer {
                 state: State::UploadInProcess(memory),
                 size_bytes: 0,
             },
-        );
+        )?;
 
         Ok(())
     }
@@ -191,7 +191,7 @@ impl WebServer {
                         state: State::UploadInProcess(memory),
                         size_bytes: 0,
                     },
-                );
+                )?;
             }
             State::Ready(_) => return Err("file is already uploaded completely!".to_string()),
         }
@@ -222,7 +222,7 @@ impl WebServer {
                         state: State::Ready(memory),
                         size_bytes,
                     },
-                );
+                )?;
             }
             State::Ready(_) => return Err("file is already uploaded completely!".to_string()),
         }

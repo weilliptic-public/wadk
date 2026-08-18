@@ -74,6 +74,9 @@ impl FungibleToken {
     /// Transfer `amount` tokens from the **caller** to `to_addr`.
     ///
     /// Delegates to [`Ledger::transfer`].
+    /// /// the amount should always be deducted from the
+    /// initiator of the transfer, which is given by
+    /// Runtime::origin
     pub fn transfer(&mut self, to_addr: String, amount: u64) -> Result<()> {
         Ledger::transfer(self.symbol(), Runtime::sender(), to_addr, amount)
     }
@@ -81,9 +84,9 @@ impl FungibleToken {
     /// Set/overwrite allowance for `spender` to `amount` for the **caller**.
     ///
     /// Stored locally in `allowances` as `"<owner>$<spender>" → amount`.
-    pub fn approve(&mut self, spender: String, amount: u64) {
+    pub fn approve(&mut self, spender: String, amount: u64) -> Result<()> {
         let key = format!("{}${}", Runtime::sender(), spender);
-        self.allowances.insert(key, amount);
+        self.allowances.insert(key, amount).map_err(Error::msg)
     }
 
     /// Mint `amount` new tokens to the **caller**.
@@ -93,6 +96,15 @@ impl FungibleToken {
         self.total_supply += amount;
 
         Ledger::mint(self.symbol(), Runtime::sender(), amount)
+    }
+    
+    /// Credit `amount` new tokens to the **recipient**.
+    ///
+    /// `credit`` will only be used in stablecoin like settings
+    pub fn credit(&mut self, recipient: String, amount: u64) -> Result<()> {
+        self.total_supply += amount;
+
+        Ledger::mint(self.symbol(), recipient, amount)
     }
 
     /// Transfer `amount` from `from_addr` to `to_addr` using the caller’s allowance.
@@ -121,7 +133,9 @@ impl FungibleToken {
 
         Ledger::transfer(self.symbol(), from_addr, to_addr, amount)?;
 
-        self.allowances.insert(key, balance - amount);
+        self.allowances
+            .insert(key, balance - amount)
+            .map_err(Error::msg)?;
 
         Ok(())
     }

@@ -1,0 +1,10 @@
+langchain>=1.0
+langchain-openai>=2.0
+langchain-core>=0.3
+langgraph>=1.0
+pydantic>=2.0
+openai>=1.0
+python-dotenv>=1.0
+# weil_ai + weil_wallet are part of this repo (python/weil_ai, python/weil_wallet).
+# When running from python/ directory they are importable directly.
+# No extra install needed beyond `pip install -r ../requirements.txt`.

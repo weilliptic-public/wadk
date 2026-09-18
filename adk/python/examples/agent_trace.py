@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from weil_wallet import PrivateKey, Wallet, WeilClient
+from weil_wallet import Wallet, WeilClient
 
 server = Server("agent-trace")
 
@@ -17,16 +17,15 @@ server = Server("agent-trace")
 def _make_client() -> WeilClient:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     for candidate in (
-        os.path.join(script_dir, "private_key.wc"),
-        "private_key.wc",
-        os.path.join(os.path.dirname(script_dir), "private_key.wc"),
+        os.path.join(script_dir, "account.wc"),
+        "account.wc",
+        os.path.join(os.path.dirname(script_dir), "account.wc"),
     ):
         if os.path.isfile(candidate):
-            pk = PrivateKey.from_file(candidate)
-            wallet = Wallet(pk)
+            wallet = Wallet.from_account_export_file(candidate)
             return WeilClient(wallet)
     raise FileNotFoundError(
-        "private_key.wc not found. Place it in examples/, python/, or cwd."
+        "account.wc not found. Place it in examples/, python/, or cwd."
     )
 
 

@@ -58,6 +58,7 @@ class SubmitTxnRequest:
                     "signature": h.signature,
                     "weilpod_counter": h.weilpod_counter,
                     "creation_time": h.creation_time,
+                    "salt": h.salt,
                 },
                 "verifier": {"type": txn.verifier.ty},
                 "user_txn": {

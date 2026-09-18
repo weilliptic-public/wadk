@@ -58,7 +58,7 @@ class WalletAccount:
     def to_weil_wallet(self) -> Wallet:
         """Return a Weil SDK Wallet that can sign and be used with WeilClient."""
         pk = PrivateKey.from_bytes(self.private_key)
-        return Wallet(pk)
+        return Wallet.from_private_key_and_address(pk, self.address)
 
 
 class MnemonicWallet:

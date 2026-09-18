@@ -24,4 +24,4 @@ where = [".."]
 include = ["weil_wallet*"]
 
 [tool.setuptools.package-data]
-weil_wallet = ["py.typed"]
+weil_wallet = ["py.typed", "secure_native/*.c", "secure_native/*.h", "secure_native/*.md", "secure_native/CMakeLists.txt"]

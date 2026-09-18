@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional
@@ -29,10 +30,16 @@ class TransactionHeader:
     signature: Optional[str] = None
     weilpod_counter: int = 0
     creation_time: int = 0
+    # Random UUIDv4. Covered by the signature (see _sign_execute_args) and
+    # mixed into the node's get_txn_id(), so two transactions never collide
+    # on id even if nonce happens to match.
+    salt: str = ""
 
     def __post_init__(self) -> None:
         if self.creation_time == 0:
             self.creation_time = int(current_time_millis())
+        if not self.salt:
+            self.salt = str(uuid.uuid4())
 
     def set_signature(self, signature: str) -> None:
         """Attach a hex-encoded signature to the header."""

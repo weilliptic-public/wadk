@@ -39,6 +39,7 @@ public class SubmitTxnRequest {
         txnHeader.put("signature", h.getSignature());
         txnHeader.put("weilpod_counter", h.getWeilpodCounter());
         txnHeader.put("creation_time", h.getCreationTime());
+        txnHeader.put("salt", h.getSalt());
 
         Map<String, Object> verifier = new LinkedHashMap<>();
         verifier.put("type", txn.getVerifier().getType());

@@ -1,6 +1,5 @@
 package com.weilliptic.weilwallet.agents;
 
-import com.weilliptic.weilwallet.PrivateKey;
 import com.weilliptic.weilwallet.Wallet;
 import com.weilliptic.weilwallet.WeilClient;
 import com.weilliptic.weilwallet.transaction.TransactionResult;
@@ -13,7 +12,7 @@ import java.nio.file.Paths;
 /**
  * Wraps an agent with a Weil identity (wallet) and audit capability.
  * Call {@link #audit(String)} to record a log entry on-chain.
- * Use {@link #setWalletPath(String)} to set or change the wallet (wallet.wc file).
+ * Use {@link #setWalletPath(String)} to set or change the wallet (private key file).
  */
 public class WeilAgent<T> {
 
@@ -33,13 +32,13 @@ public class WeilAgent<T> {
     }
 
     /**
-     * Create a WeilAgent and load the wallet from an account export file.
+     * Create a WeilAgent that loads its wallet from a private key file.
      *
-     * @param agent             the underlying agent implementation to wrap.
-     * @param accountExportPath path to the {@code wallet.wc} or {@code account.wc} file.
+     * @param agent          the underlying agent implementation to wrap.
+     * @param privateKeyPath path to the {@code wallet.wc} file; {@code null} defers setup.
      */
-    public WeilAgent(T agent, String accountExportPath) {
-        this(agent, accountExportPath, null, null);
+    public WeilAgent(T agent, String privateKeyPath) {
+        this(agent, privateKeyPath, null, null);
     }
 
     /**
@@ -53,31 +52,36 @@ public class WeilAgent<T> {
     }
 
     /**
-     * Create a WeilAgent with a custom Sentinel host.
+     * Create a WeilAgent that loads its wallet from a private key file
+     * and targets a specific Sentinel host.
      *
-     * @param agent             the underlying agent implementation to wrap.
-     * @param accountExportPath path to the wallet file.
-     * @param sentinelHost      base URL of the Sentinel node; overrides the {@code SENTINEL_HOST} env var.
+     * @param agent          the underlying agent implementation to wrap.
+     * @param privateKeyPath path to the {@code wallet.wc} file; {@code null} defers setup.
+     * @param sentinelHost   Sentinel host to use; {@code null} falls back to {@code SENTINEL_HOST} env var.
      */
-    public WeilAgent(T agent, String accountExportPath, String sentinelHost) {
-        this(agent, accountExportPath, null, sentinelHost);
+    public WeilAgent(T agent, String privateKeyPath, String sentinelHost) {
+        this(agent, privateKeyPath, null, sentinelHost);
     }
 
     /**
-     * Primary constructor used by all other constructors.
+     * Create a WeilAgent with optional wallet, private key file, and Sentinel host.
      *
-     * @param agent             the underlying agent implementation.
-     * @param accountExportPath path to the wallet file; ignored when {@code wallet} is non-null.
-     * @param wallet            pre-loaded wallet; takes priority over {@code accountExportPath}.
-     * @param sentinelHost      Sentinel base URL; falls back to {@code SENTINEL_HOST} env var if null.
+     * <p>A pre-built {@code wallet} takes precedence over {@code privateKeyPath}.
+     * When both are {@code null}, no wallet is configured and
+     * {@link #setWalletPath(String)} must be called before {@link #audit(String)}.</p>
+     *
+     * @param agent          the underlying agent implementation to wrap.
+     * @param privateKeyPath path to the {@code wallet.wc} file; may be {@code null}.
+     * @param wallet         a pre-loaded wallet; may be {@code null}.
+     * @param sentinelHost   Sentinel host to use; {@code null} falls back to {@code SENTINEL_HOST} env var.
      */
-    public WeilAgent(T agent, String accountExportPath, Wallet wallet, String sentinelHost) {
+    public WeilAgent(T agent, String privateKeyPath, Wallet wallet, String sentinelHost) {
         this.agent = agent;
         this.sentinelHost = sentinelHost != null ? sentinelHost : System.getenv("SENTINEL_HOST");
         if (wallet != null) {
             this.wallet = wallet;
-        } else if (accountExportPath != null && !accountExportPath.isEmpty()) {
-            setWalletPath(accountExportPath);
+        } else if (privateKeyPath != null && !privateKeyPath.isEmpty()) {
+            setWalletPath(privateKeyPath);
         }
     }
 
@@ -100,13 +104,13 @@ public class WeilAgent<T> {
      */
     public void setWalletPath(Path path) {
         if (!Files.isRegularFile(path)) {
-            throw new IllegalArgumentException("Wallet file not found: " + path);
+            throw new IllegalArgumentException("Account file not found: " + path);
         }
         try {
             this.wallet = Wallet.fromWalletFile(path);
             this.client = null;
         } catch (IOException e) {
-            throw new RuntimeException("Failed to load wallet from " + path, e);
+            throw new RuntimeException("Failed to load account from " + path, e);
         }
     }
 
@@ -121,14 +125,22 @@ public class WeilAgent<T> {
         this.client = null;
     }
 
+    /**
+     * Return the configured wallet, throwing if none has been set.
+     *
+     * @throws IllegalStateException if no wallet has been configured.
+     */
     private Wallet ensureWallet() {
         if (wallet == null) {
             throw new IllegalStateException(
-                "No wallet set. Call setWalletPath(path) or create the agent with accountExportPath or wallet.");
+                "No wallet set. Call setWalletPath(path) or create the agent with privateKeyPath or wallet.");
         }
         return wallet;
     }
 
+    /**
+     * Return the {@link WeilClient}, creating it lazily from the current wallet.
+     */
     private WeilClient getClient() {
         if (client == null) {
             client = new WeilClient(ensureWallet(), sentinelHost);
@@ -158,20 +170,23 @@ public class WeilAgent<T> {
     }
 
     /**
-     * Default locations to look for wallet.wc (cwd, then parent, then examples/).
+     * Find {@code private_key.wc} in the default locations: cwd, then parent, then {@code examples/}.
+     *
+     * @return the first existing {@code private_key.wc} path.
+     * @throws IllegalStateException if the file is not found in any default location.
      */
-    public static Path findDefaultAccountExportPath() {
+    public static Path findDefaultPrivateKeyPath() {
         Path cwd = Paths.get("").toAbsolutePath();
         Path[] candidates = {
-            cwd.resolve("wallet.wc"),
-            cwd.getParent() != null ? cwd.getParent().resolve("wallet.wc") : null,
-            cwd.resolve("examples").resolve("wallet.wc")
+            cwd.resolve("private_key.wc"),
+            cwd.getParent() != null ? cwd.getParent().resolve("private_key.wc") : null,
+            cwd.resolve("examples").resolve("private_key.wc")
         };
         for (Path p : candidates) {
             if (p != null && Files.isRegularFile(p)) {
                 return p;
             }
         }
-        throw new IllegalStateException("wallet.wc not found. Place it in cwd, project root, or examples/.");
+        throw new IllegalStateException("private_key.wc not found. Place it in cwd, project root, or examples/.");
     }
 }

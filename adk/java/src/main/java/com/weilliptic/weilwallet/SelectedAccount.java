@@ -1,61 +1,70 @@
 package com.weilliptic.weilwallet;
 
+import java.util.Objects;
+
 /**
  * Identifies which account in the wallet is currently active.
  *
- * <p>Use the factory methods {@link #derived(int)} and {@link #external(int)}
- * to create instances, then pass to {@link Wallet#setIndex(SelectedAccount)} or
- * {@link WeilClient#setAccount(SelectedAccount)} to switch the signing account.</p>
+ * <p>Supports both {@code Derived} (HD-derived from the wallet xprv) and
+ * {@code External} (externally imported) accounts.</p>
  */
 public final class SelectedAccount {
-    /** The kind of account: BIP32-derived from the wallet's xprv, or externally imported. */
-    public enum Type { DERIVED, EXTERNAL }
 
-    private final Type type;
+    private final String kind;
     private final int index;
 
     /**
-     * Construct a SelectedAccount directly.
-     * Prefer the factory methods {@link #derived(int)} and {@link #external(int)}.
-     *
-     * @param type  account kind (DERIVED or EXTERNAL).
-     * @param index zero-based position in the corresponding account list.
+     * @param kind  The account kind ({@code "external"}).
+     * @param index The zero-based index into the account list.
      */
-    public SelectedAccount(Type type, int index) {
-        this.type = type;
+    public SelectedAccount(String kind, int index) {
+        this.kind = kind;
         this.index = index;
     }
 
     /**
-     * Create a selector for the external (imported) account at {@code index}.
+     * Create a selector for a BIP32 HD-derived account at the given index.
      *
-     * @param index zero-based index into the wallet's external account list.
+     * @param index Zero-based index into the derived accounts list.
+     * @return A new SelectedAccount targeting the derived account.
      */
-    public static SelectedAccount external(int index) {
-        return new SelectedAccount(Type.EXTERNAL, index);
+    public static SelectedAccount Derived(int index) {
+        return new SelectedAccount("derived", index);
     }
 
     /**
-     * Create a selector for the BIP32-derived account at {@code index}.
+     * Create a selector for an externally imported account at the given index.
      *
-     * @param index zero-based index into the wallet's derived account list.
+     * @param index Zero-based index into the external accounts list.
+     * @return A new SelectedAccount targeting the external account.
      */
-    public static SelectedAccount derived(int index) {
-        return new SelectedAccount(Type.DERIVED, index);
+    public static SelectedAccount External(int index) {
+        return new SelectedAccount("external", index);
     }
 
-    /**
-     * Return the account kind (DERIVED or EXTERNAL).
-     */
-    public Type getType() {
-        return type;
+    public String kind() {
+        return kind;
     }
 
-    /**
-     * Return the zero-based index within the corresponding account list.
-     */
-    public int getIndex() {
+    public int index() {
         return index;
     }
-}
 
+    @Override
+    public String toString() {
+        return kind.substring(0, 1).toUpperCase() + kind.substring(1) + " Account " + index;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof SelectedAccount)) return false;
+        SelectedAccount that = (SelectedAccount) o;
+        return index == that.index && Objects.equals(kind, that.kind);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(kind, index);
+    }
+}

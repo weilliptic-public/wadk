@@ -1,6 +1,8 @@
 package com.weilliptic.weilwallet;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weilliptic.weilwallet.api.*;
 import com.weilliptic.weilwallet.transaction.TransactionHeader;
@@ -15,8 +17,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
+import java.util.UUID;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * High-level client for WeilChain applet methods.
@@ -36,17 +41,28 @@ import java.util.concurrent.Semaphore;
 public class WeilClient implements AutoCloseable {
 
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final String AUDIT_APPLET_SVC_NAME = "auditor";
+    private static final String AUDIT_APPLET_SVC_NAME = "auditor::weil";
 
     private final Wallet wallet;
-    private final Object walletLock = new Object();
     private final String sentinelHost;
     private final HttpClient httpClient;
     private final Semaphore semaphore;
+    private final ReentrantLock walletLock = new ReentrantLock();
     private volatile ContractId auditContractId;
 
     /**
-     * Create a WeilClient with the given wallet, using the default sentinel host
+     * Create a WeilClient by loading a wallet directly from a wallet.wc file.
+     *
+     * @param path Path to the wallet.wc file.
+     * @return A new WeilClient bound to the loaded wallet.
+     * @throws IOException If the file cannot be read or parsed.
+     */
+    public static WeilClient fromWalletFile(String path) throws IOException {
+        return new WeilClient(Wallet.fromWalletFile(path));
+    }
+
+    /**
+     * Create a WeilClient with the given wallet, default sentinel host,
      * and default concurrency.
      *
      * @param wallet the signing wallet.
@@ -82,64 +98,28 @@ public class WeilClient implements AutoCloseable {
     }
 
     /**
-     * Construct a WeilClient from a single-account export file ({@code account.wc}).
-     *
-     * @param path path to the account export JSON file.
-     * @throws IOException if the file cannot be read or parsed.
-     */
-    public static WeilClient fromAccountExportFile(String path) throws IOException {
-        Wallet w = Wallet.fromAccountExportFile(java.nio.file.Paths.get(path));
-        return new WeilClient(w);
-    }
-
-    /**
-     * Construct a WeilClient from a multi-account wallet file ({@code wallet.wc}).
-     * Derived accounts are re-derived from the stored xprv; external accounts are
-     * read directly from the file.
-     *
-     * @param path path to the wallet file.
-     * @throws IOException if the file cannot be read or parsed.
-     */
-    public static WeilClient fromWalletFile(String path) throws IOException {
-        Wallet w = Wallet.fromWalletFile(java.nio.file.Paths.get(path));
-        return new WeilClient(w);
-    }
-
-    /**
-     * Append an additional account from a sentinel account export file.
-     * The active account does not change. Thread-safe.
-     *
-     * @param path path to the account export JSON file.
-     * @throws IOException if the file cannot be read or parsed.
-     */
-    public void addAccountFromExportFile(String path) throws IOException {
-        synchronized (walletLock) {
-            wallet.addAccountFromExportFile(java.nio.file.Paths.get(path));
-        }
-    }
-
-    /**
-     * Switch the active signing account. Thread-safe.
-     *
-     * @param selected identifies the account to activate (use {@link SelectedAccount#derived(int)}
-     *                 or {@link SelectedAccount#external(int)}).
-     * @throws IllegalArgumentException if the index is out of bounds.
-     */
-    public void setAccount(SelectedAccount selected) {
-        synchronized (walletLock) {
-            wallet.setIndex(selected);
-        }
-    }
-
-    /**
      * Resolve and cache the audit applet contract address from the Sentinel API.
+     *
+     * <p>Sends the caller's own {@code wallet_address} alongside {@code svc_name} so Sentinel pins
+     * resolution to that wallet's home weilpod (derived server-side from the pod counter embedded
+     * in the address) instead of falling back to a random pod in its region. Without this,
+     * {@code validate_and_persist_receipt} can land on a pod whose local {@code identity::<org>}
+     * copy never saw this wallet's membership.</p>
      */
     private synchronized ContractId getAuditContractId() throws IOException, InterruptedException {
         if (auditContractId != null) {
             return auditContractId;
         }
+        String walletAddress;
+        walletLock.lock();
+        try {
+            walletAddress = wallet.getAddress();
+        } finally {
+            walletLock.unlock();
+        }
         String url = sentinelHost.replaceAll("/$", "") + "/get_applet_address";
-        String body = JSON.writeValueAsString(Map.of("svc_name", AUDIT_APPLET_SVC_NAME));
+        String body = JSON.writeValueAsString(
+            Map.of("svc_name", AUDIT_APPLET_SVC_NAME, "wallet_address", walletAddress));
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(url))
             .timeout(Duration.ofSeconds(30))
@@ -172,6 +152,124 @@ public class WeilClient implements AutoCloseable {
         return execute(contractId, methodName, methodArgs, false);
     }
 
+    // ── Multi-account management ──────────────────────────────────────────
+
+    /**
+     * Switch the active account in the wallet.
+     *
+     * <p>Thread-safe: acquires the wallet lock before mutating the wallet.</p>
+     *
+     * <p>Also drops the cached audit contract id — it's pinned to whichever account's home pod
+     * resolved it (see {@link #getAuditContractId()}), so a stale entry from the previous account
+     * must not leak into calls made under the new one. The wallet lock is released before the
+     * monitor guarding the cache is taken, because {@code getAuditContractId} holds them in the
+     * opposite order and holding both here would risk a deadlock.</p>
+     *
+     * @param selected The account selector (e.g. {@code SelectedAccount.External(1)}).
+     */
+    public void setAccount(SelectedAccount selected) {
+        walletLock.lock();
+        try {
+            wallet.setIndex(selected);
+        } finally {
+            walletLock.unlock();
+        }
+        synchronized (this) {
+            auditContractId = null;
+        }
+    }
+
+    /**
+     * Read back the receipt content currently persisted for {@code commitHash}, or an empty
+     * {@link Optional} if nothing has been persisted for it yet.
+     *
+     * <p>Used by the same-turn-commit-gap amend path to fetch the payload an agent-run mid-turn
+     * commit already shipped — with empty prompts/usage, since that commit landed before Stop had
+     * computed them — so it can be merged and re-persisted under the same commit hash.</p>
+     */
+    public Optional<String> getReceiptForCommit(String commitHash) throws IOException, InterruptedException {
+        ContractId contractId = getAuditContractId();
+        String methodArgs = JSON.writeValueAsString(Map.of("commit_hash", commitHash));
+        TransactionResult resp = execute(contractId, "get_receipt_for_commit", methodArgs, false, false);
+        return parseGetReceiptForCommitResult(resp.getTxnResult());
+    }
+
+    /**
+     * Decode the {@code txn_result} of a {@code get_receipt_for_commit} call into the receipt
+     * content, or an empty {@link Optional} when nothing is persisted for the commit.
+     *
+     * <p>The value is double-wrapped: the platform puts every contract call's result in an
+     * {@code {"Ok": ...}}/{@code {"Err": ...}} envelope, and "Ok"'s value is itself the callee's
+     * return value <em>re-serialized to a JSON string</em> rather than embedded directly. So this
+     * needs two decode passes: unwrap the envelope, then parse the resulting string to reach the
+     * actual optional receipt.</p>
+     */
+    static Optional<String> parseGetReceiptForCommitResult(String txnResult) {
+        JsonNode envelope;
+        try {
+            envelope = JSON.readTree(txnResult);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("failed to parse get_receipt_for_commit response: " + e.getMessage(), e);
+        }
+        if (envelope == null || envelope.isMissingNode()) {
+            throw new RuntimeException("failed to parse get_receipt_for_commit response: empty result");
+        }
+        if (envelope.has("Err")) {
+            throw new RuntimeException("get_receipt_for_commit returned an error: " + envelope.get("Err"));
+        }
+
+        JsonNode okValue = envelope.has("Ok") ? envelope.get("Ok") : envelope;
+        if (okValue.isNull()) {
+            return Optional.empty();
+        }
+
+        JsonNode inner = okValue;
+        if (okValue.isTextual()) {
+            try {
+                inner = JSON.readTree(okValue.asText());
+            } catch (JsonProcessingException e) {
+                throw new RuntimeException(
+                    "failed to parse get_receipt_for_commit inner value: " + e.getMessage(), e);
+            }
+        }
+
+        if (inner == null || inner.isNull() || inner.isMissingNode()) {
+            return Optional.empty();
+        }
+        if (inner.isTextual()) {
+            return Optional.of(inner.asText());
+        }
+        throw new RuntimeException("unexpected get_receipt_for_commit payload shape: " + inner);
+    }
+
+    /**
+     * Return the number of HD-derived accounts.
+     *
+     * <p>Thread-safe: acquires the wallet lock before reading the wallet.</p>
+     */
+    public int derivedAccountCount() {
+        walletLock.lock();
+        try {
+            return wallet.derivedAccountCount();
+        } finally {
+            walletLock.unlock();
+        }
+    }
+
+    /**
+     * Return the number of externally imported accounts.
+     *
+     * <p>Thread-safe: acquires the wallet lock before reading the wallet.</p>
+     */
+    public int externalAccountCount() {
+        walletLock.lock();
+        try {
+            return wallet.externalAccountCount();
+        } finally {
+            walletLock.unlock();
+        }
+    }
+
     /**
      * Execute a contract method and return the transaction result.
      *
@@ -188,21 +286,40 @@ public class WeilClient implements AutoCloseable {
      */
     public TransactionResult execute(ContractId contractId, String methodName, String methodArgs, boolean shouldHideArgs)
         throws IOException, InterruptedException {
+        return execute(contractId, methodName, methodArgs, shouldHideArgs, !shouldHideArgs);
+    }
+
+    /**
+     * Execute a contract method and return the transaction result, choosing the blocking mode
+     * explicitly. Callers that need the contract's return value must pass
+     * {@code isNonBlocking = false}, otherwise the result comes back before the transaction has
+     * been applied and {@code txnResult} is empty.
+     */
+    public TransactionResult execute(ContractId contractId, String methodName, String methodArgs,
+                                     boolean shouldHideArgs, boolean isNonBlocking)
+        throws IOException, InterruptedException {
         semaphore.acquire();
         try {
             String fromAddr;
             String toAddr;
             String publicKeyHex;
-            synchronized (walletLock) {
+            String signature;
+
+            walletLock.lock();
+            try {
                 fromAddr = wallet.getAddress();
                 toAddr = fromAddr;
                 publicKeyHex = Utils.bytesToHex(wallet.getPublicKeyUncompressed());
+            } finally {
+                walletLock.unlock();
             }
+
             int weilpodCounter = contractId.podCounter();
             long nonce = Utils.currentTimeMillis();
+            String salt = UUID.randomUUID().toString();
 
             TransactionHeader header = new TransactionHeader(
-                nonce, publicKeyHex, fromAddr, toAddr, null, weilpodCounter, 0);
+                nonce, publicKeyHex, fromAddr, toAddr, null, weilpodCounter, 0, salt);
 
             Map<String, Object> args = new LinkedHashMap<>();
             args.put("contract_address", contractId.toString());
@@ -220,14 +337,19 @@ public class WeilClient implements AutoCloseable {
             Map<String, Object> payload = new TreeMap<>();
             payload.put("from_addr", fromAddr);
             payload.put("nonce", nonce);
+            payload.put("salt", salt);
             payload.put("to_addr", toAddr);
             payload.put("user_txn", userTxn);
 
             String canonicalJson = JSON.writeValueAsString(payload);
-            String signature;
-            synchronized (walletLock) {
+
+            walletLock.lock();
+            try {
                 signature = wallet.sign(canonicalJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } finally {
+                walletLock.unlock();
             }
+
             header.setSignature(signature);
 
             header.setCreationTime(Utils.currentTimeMillis());
@@ -237,8 +359,7 @@ public class WeilClient implements AutoCloseable {
             TransactionPayload txn = new TransactionPayload(false, header, verifier, userTxnObj);
             SubmitTxnRequest req = new SubmitTxnRequest(txn);
 
-            boolean nonBlocking = !shouldHideArgs;
-            return PlatformApi.submitTransaction(req, httpClient, sentinelHost, nonBlocking);
+            return PlatformApi.submitTransaction(req, httpClient, sentinelHost, isNonBlocking);
         } finally {
             semaphore.release();
         }

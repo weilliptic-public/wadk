@@ -3,7 +3,7 @@ package com.weilliptic.weilwallet.transaction;
 import com.weilliptic.weilwallet.Utils;
 
 /**
- * Transaction header: nonce, public key, addresses, signature, weilpod counter, creation time.
+ * Transaction header: nonce, public key, addresses, signature, weilpod counter, creation time, salt.
  */
 public class TransactionHeader {
 
@@ -14,9 +14,17 @@ public class TransactionHeader {
     private String signature;
     private final int weilpodCounter;
     private long creationTime;
+    // Random UUIDv4. Covered by the signature (see WeilClient.execute) and
+    // mixed into the node's get_txn_id(), so two transactions never collide
+    // on id even if nonce happens to match.
+    private final String salt;
 
+    /**
+     * Create a transaction header. A {@code creationTime} of 0 is replaced
+     * with the current time.
+     */
     public TransactionHeader(long nonce, String publicKey, String fromAddr, String toAddr,
-                             String signature, int weilpodCounter, long creationTime) {
+                             String signature, int weilpodCounter, long creationTime, String salt) {
         this.nonce = nonce;
         this.publicKey = publicKey;
         this.fromAddr = fromAddr;
@@ -24,6 +32,7 @@ public class TransactionHeader {
         this.signature = signature;
         this.weilpodCounter = weilpodCounter;
         this.creationTime = creationTime != 0 ? creationTime : (long) Utils.currentTimeMillis();
+        this.salt = salt;
     }
 
     public long getNonce() { return nonce; }
@@ -33,6 +42,7 @@ public class TransactionHeader {
     public String getSignature() { return signature; }
     public int getWeilpodCounter() { return weilpodCounter; }
     public long getCreationTime() { return creationTime; }
+    public String getSalt() { return salt; }
 
     public void setSignature(String signature) {
         this.signature = signature;

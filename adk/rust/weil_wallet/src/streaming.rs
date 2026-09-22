@@ -10,7 +10,7 @@ use std::pin::Pin;
 /// # Example
 /// Below is a complete example of the client code for calling a `ask_llm` exported method of a contract which returns a `ByteStream` response.
 /// It shows how the response is processed using `next` on the `ByteStream` and interpreting raw bytes i.e `Vec<u8>` as `UTF-8 encoded` string.
-/// ```
+/// ```no_run
 /// use futures_util::StreamExt;
 /// use serde::Serialize;
 /// use std::io;
@@ -18,8 +18,8 @@ use std::pin::Pin;
 /// use weil_wallet::{
 ///     contract::ContractId,
 ///     streaming::ByteStream,
-///     wallet::{PrivateKey, Wallet},
-///    WeilClient, WeilContractClient,
+///     wallet::Wallet,
+///     WeilClient, WeilContractClient,
 /// };
 ///
 /// struct StreamingClient {
@@ -46,6 +46,7 @@ use std::pin::Pin;
 ///             .execute_with_streaming(
 ///                 "ask_llm".to_string(),
 ///                 serde_json::to_string(&args).unwrap(),
+///                 None,
 ///             )
 ///             .await?;
 ///
@@ -53,31 +54,28 @@ use std::pin::Pin;
 ///     }
 /// }
 ///
-/// #[tokio::main]
-/// async fn main() {
-///     let private_key = PrivateKey::from_file("/root/.weilliptic/private_key.wc").unwrap();
-///     let wallet = Wallet::new(private_key).unwrap();
+/// async fn run() -> anyhow::Result<()> {
+///     let wallet = Wallet::from_wallet_file("wallet.wc")?;
 ///
 ///     // put your contract id here!
 ///     let contract_id = "00000002d011ad7c20eed92cc30811c86e5da68e832619d3fb5e82834efb99e0562d9f3f"
-///         .parse::<ContractId>()
-///         .unwrap();
+///         .parse::<ContractId>()?;
 ///
-///     let client = StreamingClient::new(contract_id, wallet).unwrap();
+///     let client = StreamingClient::new(contract_id, wallet)?;
 ///
 ///     let mut res = client
 ///         .ask_llm("Why is sky blue ?".to_string())
-///         .await
-///         .unwrap();
+///         .await?;
 ///
 ///     let mut stdout = io::stdout();
 ///
 ///     while let Some(chunk) = res.next().await {
-///         print!("{}", String::from_utf8(chunk.into()).unwrap());
-///         stdout.flush().unwrap();
+///         print!("{}", String::from_utf8(chunk)?);
+///         stdout.flush()?;
 ///     }
 ///
 ///     println!("\n");
+///     Ok(())
 /// }
 /// ```
 pub struct ByteStream {

@@ -32,6 +32,6 @@ public class WalletAccount {
 
     /** Return a Weil SDK Wallet that can sign and be used with WeilClient. */
     public Wallet toWeilWallet() {
-        return new Wallet(PrivateKey.fromBytes(privateKey));
+        return new Wallet(PrivateKey.fromBytes(privateKey), address);
     }
 }

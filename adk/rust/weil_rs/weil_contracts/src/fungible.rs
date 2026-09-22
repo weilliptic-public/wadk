@@ -12,6 +12,7 @@
 //! - Allowance workflow: [`FungibleToken::approve`], [`FungibleToken::allowance`],
 //!   [`FungibleToken::transfer_from`]
 //! - Minting (updates `total_supply` and calls Ledger): [`FungibleToken::mint`]
+//! - Burning (calls Ledger): [`FungibleToken::burn`]
 
 use anyhow::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -74,11 +75,11 @@ impl FungibleToken {
     /// Transfer `amount` tokens from the **caller** to `to_addr`.
     ///
     /// Delegates to [`Ledger::transfer`].
-    /// /// the amount should always be deducted from the
+    /// the amount should always be deducted from the
     /// initiator of the transfer, which is given by
     /// Runtime::origin
     pub fn transfer(&mut self, to_addr: String, amount: u64) -> Result<()> {
-        Ledger::transfer(self.symbol(), Runtime::sender(), to_addr, amount)
+        Ledger::transfer(self.symbol(), Runtime::origin(), to_addr, amount)
     }
 
     /// Set/overwrite allowance for `spender` to `amount` for the **caller**.
@@ -97,7 +98,7 @@ impl FungibleToken {
 
         Ledger::mint(self.symbol(), Runtime::sender(), amount)
     }
-    
+
     /// Credit `amount` new tokens to the **recipient**.
     ///
     /// `credit`` will only be used in stablecoin like settings
@@ -105,6 +106,35 @@ impl FungibleToken {
         self.total_supply += amount;
 
         Ledger::mint(self.symbol(), recipient, amount)
+    }
+
+    /// Burn `amount` tokens from the **caller**.
+    ///
+    /// Delegates to [`Ledger::burn`]. The caller’s balance must be at least `amount`;
+    /// otherwise an error is returned and no state change occurs.
+    ///
+    /// # Arguments
+    /// * `amount` — number of tokens to burn from the caller
+    ///
+    /// # Errors
+    /// Returns an error if the caller’s balance (from [`Self::balance_for`]) is less than
+    /// `amount`, or if the Ledger burn call fails.
+    pub fn burn(&mut self, amount: u64) -> Result<()> {
+        let current_balance = match self.balance_for(Runtime::sender()) {
+            Ok(val) => val,
+            Err(_) => 0,
+        };
+        if current_balance < amount {
+            //cannot burn
+            return Err(Error::msg(format!(
+                "Balance of account `{}` is `{}`, which is less than burn amount requested for`{}`",
+                Runtime::sender(),
+                current_balance,
+                amount
+            )));
+        }
+
+        Ledger::burn(self.symbol(), Runtime::sender(), amount)
     }
 
     /// Transfer `amount` from `from_addr` to `to_addr` using the caller’s allowance.

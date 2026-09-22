@@ -82,7 +82,6 @@ extern "C" {
     fn list_contract_transactions(ptr: i32) -> i32;
     fn aggregate_contract_transactions(ptr: i32) -> i32;
     fn audit(audit_params: i32) -> i32;
-    fn parse_human_time(s: i32) -> i32;
 }
 
 /// Wrapper for returning an optional state and a success value from a contract call.
@@ -256,7 +255,7 @@ impl Memory {
 
         // SAFETY: Both buffers are valid length-prefixed byte slices in WASM memory.
         unsafe { write_collection(raw_key.as_ptr() as _, raw_val.as_ptr() as _) };
-        
+
         Ok(())
     }
 
@@ -341,7 +340,7 @@ impl Memory {
         }
     }
 
-/// Insert or overwrite a collection entry at `key` with serialized `val`
+    /// Insert or overwrite a collection entry at `key` with serialized `val`
     /// targeting the partitioned row `{contract_id}_{row_suffix}`.
     pub fn write_collection_with_suffix<V: Serialize>(
         key: String,
@@ -827,7 +826,7 @@ impl Runtime {
 
     /// Returns `Ledger` contract identifier.
     pub(crate) fn ledger_contract_id() -> String {
-        // SAFETY: `Ledger` is a systemic applet
+        // safety : we are unwrapping here because Ledger contract is always expected to be deployed
         Runtime::contract_id_for_name("Ledger").unwrap()
     }
 
@@ -1004,7 +1003,7 @@ impl Runtime {
         let task = ex.spawn(async { task.await });
         block_on(ex.run(task))
     }
-    
+
     /// Helper to set only a result value (no state) from a contract method.
     ///
     /// Converts `Ok(val)` into `Ok(WeilValue::<(), T>)` and passes to the host.
@@ -1113,22 +1112,5 @@ impl Runtime {
         let _ = read_bytes_from_memory(result_ptr)?;
 
         Ok(())
-    }
-
-    /// Parse a human-readable time span into a concrete interval.
-    ///
-    /// Examples of accepted inputs depend on host capabilities (e.g., `"last 24 hours"`,
-    /// `"yesterday"`, `"next week"`). The result contains RFC3339 (or host-defined) `from`/`to`.
-    ///
-    /// # Errors
-    /// - Returns an error if host memory cannot be read or the JSON cannot be deserialized.
-    pub fn parse_human_time(s: &str) -> Result<ParsedTimeInterval> {
-        let serialized_payload = get_length_prefixed_bytes_from_string(s, 0);
-        // SAFETY: `serialized_payload` is valid; host returns a JSON for `ParsedTimeInterval`.
-        let result_ptr = unsafe { parse_human_time(serialized_payload.as_ptr() as _) };
-        let response = read_bytes_from_memory(result_ptr)?;
-        let interval: ParsedTimeInterval = serde_json::from_str(&response).unwrap();
-
-        Ok(interval)
     }
 }

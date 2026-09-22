@@ -19,7 +19,7 @@ pub struct WeilTrieMap<T> {
 impl<T> WeilTrieMap<T> {
     /// Constructs a new empty `WeilTrieMap<T>`.
     pub fn new(id: WeilId) -> Self {
-        WeilTrieMap {
+        Self {
             state_id: id,
             phantom: PhantomData,
         }

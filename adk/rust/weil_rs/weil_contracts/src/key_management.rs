@@ -22,7 +22,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet,HashMap};
+use std::collections::{BTreeSet, HashMap};
 use weil_macros::WeilType;
 use weil_rs::collections::{map::WeilMap, WeilIdGenerator};
 
@@ -226,8 +226,8 @@ impl WRC734 for KeyManager {
         if let Some(mut key_entry) = self.keys.get(&key) {
             if key_entry.insert(purpose) {
                 self.keys
-                .insert(key.clone(), key_entry)
-                .map_err(anyhow::Error::msg)?;
+                    .insert(key.clone(), key_entry)
+                    .map_err(anyhow::Error::msg)?;
             }
         } else {
             self.keys
@@ -238,8 +238,8 @@ impl WRC734 for KeyManager {
         if let Some(mut keys) = self.keys_by_purpose.get(&purpose) {
             if keys.insert(key.clone()) {
                 self.keys_by_purpose
-                .insert(purpose, keys)
-                .map_err(anyhow::Error::msg)?;
+                    .insert(purpose, keys)
+                    .map_err(anyhow::Error::msg)?;
             }
         } else {
             self.keys_by_purpose

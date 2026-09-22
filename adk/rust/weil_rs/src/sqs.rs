@@ -14,6 +14,7 @@ extern "C" {
     fn sqs_delete_messages(params: i32) -> i32;
 }
 
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ListQueuesResponse {
     pub queues: Vec<String>,
@@ -22,6 +23,7 @@ pub struct ListQueuesResponse {
 pub struct SQS;
 
 impl SQS {
+
     /// Creates a queue. Returns a queue URL.
     pub fn create_queue(params: CreateQueueParams) -> Result<String, anyhow::Error> {
         let params_json = serde_json::to_string(&params)?;
@@ -51,9 +53,7 @@ impl SQS {
     }
 
     /// Sends multiple message to the specified queue. Returns a JSON object with lists of successful and failed message IDs.
-    pub fn send_messages(
-        params: SendMessagesParams,
-    ) -> Result<SendMessagesResponse, anyhow::Error> {
+    pub fn send_messages(params: SendMessagesParams) -> Result<SendMessagesResponse, anyhow::Error> {
         let params_json = serde_json::to_string(&params)?;
         let raw_params = get_length_prefixed_bytes_from_string(&params_json, 0);
         let ptr = unsafe { sqs_send_messages(raw_params.as_ptr() as _) };
@@ -63,9 +63,7 @@ impl SQS {
     }
 
     /// Receives messages from the specified queue. Returns a vector of tuples of messages and their receipt handles.
-    pub fn receive_messages(
-        params: ReceiveMessagesParams,
-    ) -> Result<ReceiveMessagesResponse, anyhow::Error> {
+    pub fn receive_messages(params: ReceiveMessagesParams) -> Result<ReceiveMessagesResponse, anyhow::Error> {
         let params_json = serde_json::to_string(&params)?;
         let raw_params = get_length_prefixed_bytes_from_string(&params_json, 0);
         let ptr = unsafe { sqs_receive_messages(raw_params.as_ptr() as _) };
@@ -75,9 +73,7 @@ impl SQS {
     }
 
     /// Deletes multiple message, with the specified ids, from the specified queue.
-    pub fn delete_messages(
-        params: DeleteMessagesParams,
-    ) -> Result<DeleteMessagesResponse, anyhow::Error> {
+    pub fn delete_messages(params: DeleteMessagesParams) -> Result<DeleteMessagesResponse, anyhow::Error> {
         let params_json = serde_json::to_string(&params)?;
         let raw_params = get_length_prefixed_bytes_from_string(&params_json, 0);
         let ptr = unsafe { sqs_delete_messages(raw_params.as_ptr() as _) };

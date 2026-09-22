@@ -34,6 +34,10 @@ pub(crate) struct TransactionHeader {
     pub weilpod_counter: i32,
     /// Creation timestamp in **ms** since UNIX epoch.
     pub creation_time: u64,
+    /// Random UUIDv4. Covered by the signature (see `sign_execute_args`) and
+    /// mixed into the node's `get_txn_id()`, so two transactions never
+    /// collide on id even if nonce happens to match.
+    pub salt: String,
 }
 
 impl TransactionHeader {
@@ -55,6 +59,7 @@ impl TransactionHeader {
             signature: None,
             weilpod_counter,
             creation_time: current_time_millis() as u64,
+            salt: uuid::Uuid::new_v4().to_string(),
         }
     }
 

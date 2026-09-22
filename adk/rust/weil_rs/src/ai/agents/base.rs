@@ -1,7 +1,6 @@
 //! Base agent helper for running single tasks via contract calls.
 
-use super::models::Model;
-use crate::runtime::Runtime;
+use crate::{ai::agents::Model, runtime::Runtime};
 use anyhow::Result;
 use serde::Serialize;
 

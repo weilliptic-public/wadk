@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/google/uuid"
 	"github.com/tidwall/btree"
 	"github.com/weilliptic-public/wadk/adk/go/weil_go/types"
 )
@@ -18,6 +19,10 @@ type TransactionHeader struct {
 	Signature      *types.Option[string] `json:"signature"`
 	WeilpodCounter int                   `json:"weilpod_counter"`
 	CreationTime   int                   `json:"creation_time"`
+	// Random UUIDv4. Covered by the signature (see SignExecuteArgs) and
+	// mixed into the node's get_txn_id(), so two transactions never collide
+	// on id even if nonce happens to match.
+	Salt string `json:"salt"`
 }
 
 func NewTransactionHeader(nonce int, publicKey string, fromAddr string, toAddr string, weilpodCounter int) *TransactionHeader {
@@ -28,10 +33,15 @@ func NewTransactionHeader(nonce int, publicKey string, fromAddr string, toAddr s
 		ToAddr:         toAddr,
 		WeilpodCounter: weilpodCounter,
 		CreationTime:   int(time.Now().UnixMilli()),
+		Salt:           uuid.NewString(),
 	}
 }
 
-func NewTransactionHeaderWithSignature(nonce int, publicKey string, fromAddr string, toAddr string, signature string, weilpodCounter int) *TransactionHeader {
+// NewTransactionHeaderWithSignature rebuilds the wire-format header for
+// submission. `salt` must be the same value used when signing (typically
+// txn.Header.Salt) — it's covered by the signature, so regenerating it here
+// would make the signature fail verification against the node.
+func NewTransactionHeaderWithSignature(nonce int, publicKey string, fromAddr string, toAddr string, signature string, weilpodCounter int, salt string) *TransactionHeader {
 	return &TransactionHeader{
 		Nonce:          nonce,
 		PublicKey:      publicKey,
@@ -40,6 +50,7 @@ func NewTransactionHeaderWithSignature(nonce int, publicKey string, fromAddr str
 		Signature:      types.NewSomeOption(&signature),
 		WeilpodCounter: weilpodCounter,
 		CreationTime:   int(time.Now().UnixMilli()),
+		Salt:           salt,
 	}
 }
 

@@ -48,8 +48,12 @@ type NonceFailureResponse struct {
 //   - isNonBlocking: when true the platform responds immediately without
 //     waiting for the transaction to be finalized.
 func (w *WeilContractClient) Execute(methodName string, methodArgs string, shouldHideArgs bool, isNonBlocking bool) (*transaction.TransactionResult, error) {
-	publicKey := w.client.activePublicKey()
-	fromAddr := w.client.activeAddress()
+	// Snapshot wallet state under the mutex so we don't hold it during network I/O.
+	w.client.walletMu.Lock()
+	publicKey := w.client.wallet.GetPublicKey()
+	fromAddr := w.client.wallet.GetAddress()
+	w.client.walletMu.Unlock()
+
 	toAddr := fromAddr
 	contractId := w.contractId
 	weilpodCounter, err := contract.PodCounter(contractId)
@@ -96,6 +100,7 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 		"nonce":     txnHeader.Nonce,
 		"from_addr": txnHeader.FromAddr,
 		"to_addr":   txnHeader.ToAddr,
+		"salt":      txnHeader.Salt,
 		"user_txn": map[string]any{
 			"type":                 "SmartContractExecutor",
 			"contract_address":     args.ContractAddress,
@@ -112,7 +117,9 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 		return nil, err
 	}
 
-	signature, err := w.client.sign(jsonPayloadJson)
+	w.client.walletMu.Lock()
+	signature, err := w.client.wallet.Sign(jsonPayloadJson)
+	w.client.walletMu.Unlock()
 
 	if err != nil {
 		return nil, err
@@ -137,6 +144,7 @@ func (w WeilContractClient) SubmitSignedArgs(signature string, txn *transaction.
 				txn.Header.ToAddr,
 				signature,
 				txn.Header.WeilpodCounter,
+				txn.Header.Salt,
 			),
 			Verifier: &api.Verifier{
 				Ty: "DefaultVerifier",

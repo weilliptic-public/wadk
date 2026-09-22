@@ -43,15 +43,16 @@ use constants::{DEFAULT_CONCURRENCY, SENTINEL_HOST};
 use contract::ContractId;
 use reqwest::Client;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{future::Future, sync::Arc};
 use streaming::ByteStream;
 use tokio::sync::{Mutex, Semaphore};
 use transaction::{value_to_btreemap, BaseTransaction, TransactionHeader, TransactionResult};
 use utils::{current_time_millis, hash_sha256};
-use wallet::{SelectedAccount, Wallet};
+use wallet::{S3Credentials, SelectedAccount, Wallet};
 
 const AUDIT_APPLET_SVC_NAME: &str = "auditor::weil";
+const COMMIT_DETAILS_COLLECTION: &str = "COMMIT_DETAILS";
 
 pub mod api;
 pub mod constants;
@@ -74,6 +75,8 @@ pub struct WeilClient {
     wallet: Arc<std::sync::Mutex<Wallet>>,
     semaphore: Arc<Semaphore>,
     audit_contract_id: Arc<Mutex<Option<ContractId>>>,
+    creds: Option<S3Credentials>,
+    sentinel_host: String,
 }
 
 impl WeilClient {
@@ -98,6 +101,42 @@ impl WeilClient {
                 None => DEFAULT_CONCURRENCY,
             })),
             audit_contract_id: Arc::new(Mutex::new(None)),
+            creds: None,
+            sentinel_host: SENTINEL_HOST.to_string(),
+        })
+    }
+
+    /// Construct a [`WeilClient`] from an **Agent Registry API key**.
+    ///
+    /// Resolves the key's wallet via Sentinel's `/get_agent_wallet` endpoint.
+    /// The wallet is masked (no local secret key), so executions must use the
+    /// remote-signing path ([`WeilClient::execute_remotely`]), which delegates
+    /// signing to Sentinel's `/sign_payload` endpoint.
+    ///
+    /// # Arguments
+    /// - `api_key`: Agent Registry API key identifying the wallet.
+    /// - `creds`: optional S3 credentials for caller-owned wallet storage.
+    /// - `concurrency`: max concurrent HTTP submissions (defaults to [`DEFAULT_CONCURRENCY`]).
+    /// - `sentinel_host`: Sentinel base URL (defaults to [`SENTINEL_HOST`]).
+    pub async fn with_api_key(
+        api_key: &str,
+        creds: Option<S3Credentials>,
+        concurrency: Option<usize>,
+        sentinel_host: Option<String>,
+    ) -> Result<Self, anyhow::Error> {
+        let wallet = Wallet::from_api_key(api_key, creds.clone(), sentinel_host.clone()).await?;
+        Ok(Self {
+            http_client: Client::builder()
+                .danger_accept_invalid_certs(true)
+                .build()?,
+            wallet: Arc::new(std::sync::Mutex::new(wallet)),
+            semaphore: Arc::new(Semaphore::new(match concurrency {
+                Some(c) => c,
+                None => DEFAULT_CONCURRENCY,
+            })),
+            audit_contract_id: Arc::new(Mutex::new(None)),
+            creds,
+            sentinel_host: sentinel_host.unwrap_or_else(|| SENTINEL_HOST.to_string()),
         })
     }
 
@@ -115,10 +154,27 @@ impl WeilClient {
 
     /// Switch the active account used for signing.
     ///
-    /// Returns an error if the index is out of bounds.
+    /// Returns an error if the index is out of bounds. Also drops the cached
+    /// audit contract id — it's pinned to whichever account's home pod
+    /// resolved it (see `get_audit_contract_id`), so a stale entry from the
+    /// previous account must not leak into calls made under the new one.
     pub async fn set_account(&self, selected: &SelectedAccount) -> anyhow::Result<()> {
-        let mut wallet = self.wallet.lock().unwrap();
-        wallet.set_index(selected)
+        {
+            let mut wallet = self.wallet.lock().unwrap();
+            wallet.set_index(selected)?;
+        }
+        *self.audit_contract_id.lock().await = None;
+        Ok(())
+    }
+
+    /// Return the address of the currently selected account — resolved via
+    /// `selected_account` in the wallet file, so this is correct whether the
+    /// active account is derived (HD) or externally imported. Callers that
+    /// re-derive an address by hand-parsing `derived_accounts` alone will
+    /// silently get the wrong wallet whenever `selected_account.type ==
+    /// "external"`.
+    pub fn current_address(&self) -> String {
+        self.wallet.lock().unwrap().get_address().to_string()
     }
 
     /// Return the number of derived (HD) accounts in the wallet.
@@ -134,13 +190,23 @@ impl WeilClient {
     // ── Internal ─────────────────────────────────────────────────────────────
 
     /// Resolve and cache the audit applet contract address from the Sentinel API.
+    ///
+    /// Sends the caller's own `wallet_address` alongside `svc_name` so Sentinel
+    /// pins resolution to that wallet's home weilpod (derived server-side from
+    /// the pod counter embedded in the address) instead of falling back to a
+    /// random pod in its region. Without this, `validate_and_persist_receipt`
+    /// can land on a pod whose local `identity::<org>` copy never saw this
+    /// wallet's membership — see `get_applet_address_for_service` server-side,
+    /// and `weil_hooks::audit::resolve_codensics_contract` /
+    /// `weil_hooks::pre_tool::resolve_contract`, which already pin this way.
     async fn get_audit_contract_id(&self) -> anyhow::Result<ContractId> {
         let mut guard = self.audit_contract_id.lock().await;
         if let Some(ref id) = *guard {
             return Ok(id.clone());
         }
+        let wallet_address = self.wallet.lock().unwrap().get_address().to_string();
         let url = format!("{}/get_applet_address", SENTINEL_HOST);
-        let body = json!({ "svc_name": AUDIT_APPLET_SVC_NAME });
+        let body = json!({ "svc_name": AUDIT_APPLET_SVC_NAME, "wallet_address": wallet_address });
         let resp = self.http_client.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
             let status = resp.status();
@@ -192,6 +258,28 @@ impl WeilClient {
         Ok(resp)
     }
 
+    /// Execute a contract method with **remote signing** and wait for the normal
+    /// (non-streaming) result.
+    ///
+    /// Signs via Sentinel's `/sign_payload` endpoint instead of a local secret
+    /// key; use this for API-key clients ([`WeilClient::with_api_key`]).
+    /// Convenience wrapper around [`WeilContractClient::execute_remotely`].
+    pub async fn execute_remotely(
+        &self,
+        contract_id: ContractId,
+        method_name: String,
+        method_args: String,
+        should_hide_args: Option<bool>,
+        is_non_blocking: Option<bool>,
+    ) -> anyhow::Result<TransactionResult> {
+        let resp = self
+            .to_contract_client(contract_id)
+            .execute_remotely(method_name, method_args, should_hide_args, is_non_blocking)
+            .await?;
+
+        Ok(resp)
+    }
+
     /// Execute a contract method with **streaming** response semantics.
     ///
     /// Convenience wrapper around [`WeilContractClient::execute_with_streaming`].
@@ -210,6 +298,10 @@ impl WeilClient {
         Ok(resp)
     }
 
+    /// Submit an audit log entry to the on-chain auditor applet.
+    ///
+    /// Resolves the audit contract id, attaches the caller's org name, and
+    /// executes the `audit` method. Returns the raw `txn_result` string.
     pub async fn audit(&self, log: String) -> anyhow::Result<String> {
         let contract_id = self.get_audit_contract_id().await?;
         let method_name = "audit";
@@ -217,7 +309,7 @@ impl WeilClient {
         #[derive(Serialize)]
         struct AuditArgs {
             log: String,
-            org: Option<String>
+            org: Option<String>,
         }
 
         let org = self.wallet.lock().unwrap().org().map(|o| o.name.clone());
@@ -230,7 +322,7 @@ impl WeilClient {
                 method_name.to_string(),
                 method_args,
                 Some(false),
-                Some(false),
+                Some(true),
             )
             .await?;
 
@@ -239,11 +331,63 @@ impl WeilClient {
         Ok(txn_result)
     }
 
+    /// Persists a receipt and associates it with a source-control commit hash.
+    ///
+    /// This is a two-step operation:
+    ///
+    /// 1. The receipt content is uploaded with an HTTP `POST` to Sentinel's
+    ///    `/persist_in_s3` endpoint. The commit hash is used as the object key
+    ///    and the object is stored in the `COMMIT_DETAILS` collection.
+    /// 2. Sentinel's returned storage id is passed to the audit applet's
+    ///    `persist_receipt_for_commit` method, which records the mapping from
+    ///    `commit_hash` to that id.
+    ///
+    /// The Sentinel host is selected by the crate configuration: the `local`
+    /// feature uses the local Sentinel deployment, while the default build uses
+    /// the production deployment.
+    ///
+    /// Returns the audit applet transaction result. Transport errors, non-2xx
+    /// Sentinel responses, invalid Sentinel responses, and applet execution
+    /// failures are returned as errors.
     pub async fn persist_receipt_for_commit(
         &self,
         commit_hash: String,
         receipt: String,
-    )-> anyhow::Result<String>{
+    ) -> anyhow::Result<String> {
+        let url = format!("{}/persist_in_s3", SENTINEL_HOST);
+        let request_body = json!({
+            "content": receipt,
+            "key": commit_hash.clone(),
+            "collection": COMMIT_DETAILS_COLLECTION,
+        });
+
+        let response = self
+            .http_client
+            .post(&url)
+            .json(&request_body)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "persist receipt failed on sentinel: HTTP {} {}",
+                status,
+                text
+            );
+        }
+
+        #[derive(serde::Deserialize)]
+        struct PersistCommitDetailsResponse {
+            id: String,
+        }
+
+        let persisted_receipt_id = response
+            .json::<PersistCommitDetailsResponse>()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to parse commit details response: {}", e))?
+            .id;
+
         let contract_id = self.get_audit_contract_id().await?;
         let method_name = "persist_receipt_for_commit";
 
@@ -253,7 +397,10 @@ impl WeilClient {
             receipt: String,
         }
 
-        let method_args = serde_json::to_string(&PersistReceiptArgs { commit_hash, receipt }).unwrap();
+        let method_args = serde_json::to_string(&PersistReceiptArgs {
+            commit_hash,
+            receipt: persisted_receipt_id,
+        })?;
 
         let resp = self
             .execute(
@@ -270,16 +417,80 @@ impl WeilClient {
         Ok(txn_result)
     }
 
+    /// Reads back the receipt content currently persisted for `commit_hash`,
+    /// or `None` if nothing has been persisted for it yet.
+    ///
+    /// Used by the same-turn-commit-gap amend path (`weil_hooks::audit::
+    /// amend_commit_receipt`) to fetch the payload an agent-run mid-turn
+    /// commit already shipped — with empty prompts/usage, since that commit
+    /// landed before Stop had computed them — so it can be merged and
+    /// re-persisted under the same `commit_hash` via
+    /// [`WeilClient::persist_receipt_for_commit`].
+    pub async fn get_receipt_for_commit(
+        &self,
+        commit_hash: String,
+    ) -> anyhow::Result<Option<String>> {
+        let contract_id = self.get_audit_contract_id().await?;
+        let method_name = "get_receipt_for_commit";
+
+        #[derive(Serialize)]
+        struct GetReceiptForCommitArgs {
+            commit_hash: String,
+        }
+
+        let method_args = serde_json::to_string(&GetReceiptForCommitArgs { commit_hash })?;
+
+        let resp = self
+            .execute(
+                contract_id,
+                method_name.to_string(),
+                method_args,
+                Some(false),
+                Some(false),
+            )
+            .await?;
+
+        // `txn_result` is double-wrapped: the platform puts every contract
+        // call's result in a `{"Ok": ...}`/`{"Err": ...}` envelope, and "Ok"'s
+        // value is itself the callee's return value *re-serialized to a JSON
+        // string* rather than embedded directly (confirmed empirically: a
+        // live capture returned `Ok` as a quoted, escaped JSON string whose
+        // *content* was our `CommitReceiptPayload` text, not the object
+        // itself). So this needs two decode passes: unwrap the envelope, then
+        // parse the resulting string to reach the actual `Option<String>`.
+        let envelope: Value = serde_json::from_str(&resp.txn_result).map_err(|e| {
+            anyhow::anyhow!("failed to parse get_receipt_for_commit response: {e}")
+        })?;
+
+        if let Some(err) = envelope.get("Err") {
+            anyhow::bail!("get_receipt_for_commit returned an error: {err}");
+        }
+        let ok_value = envelope.get("Ok").cloned().unwrap_or(envelope);
+
+        let inner: Value = match ok_value {
+            Value::Null => return Ok(None),
+            Value::String(s) => serde_json::from_str(&s).map_err(|e| {
+                anyhow::anyhow!("failed to parse get_receipt_for_commit inner value: {e}")
+            })?,
+            other => other,
+        };
+
+        match inner {
+            Value::Null => Ok(None),
+            Value::String(s) => Ok(Some(s)),
+            other => anyhow::bail!(
+                "unexpected get_receipt_for_commit payload shape: {other}"
+            ),
+        }
+    }
+
     /// Uploads a receipt (trace + transcript) to cloud storage via the `audit_me`
     /// contract's `validate_and_persist_receipt` method.
     ///
     /// The caller's org and subgroup are extracted from the wallet export so that
     /// the contract can verify identity using the caller's actual subgroup — not a
     /// hardcoded group name.
-    pub async fn persist_receipt_in_s3(
-        &self,
-        content: String,
-    ) -> anyhow::Result<String> {
+    pub async fn persist_receipt_in_s3(&self, content: String) -> anyhow::Result<String> {
         let contract_id = self.get_audit_contract_id().await?;
         let method_name = "validate_and_persist_receipt";
 
@@ -292,14 +503,21 @@ impl WeilClient {
         }
 
         let hash = hex::encode(hash_sha256(content.as_bytes()));
-        let wallet = self.wallet.lock().unwrap();
-        let org = wallet.org().map(|o| o.name.clone());
-        let subgroup = wallet.org().and_then(|o| o.subgroup.clone());
-        drop(wallet);
+        let (org, subgroup) = {
+            let wallet = self.wallet.lock().unwrap();
+            (
+                wallet.org().map(|o| o.name.clone()),
+                wallet.org().and_then(|o| o.subgroup.clone()),
+            )
+        };
 
-        let method_args =
-            serde_json::to_string(&PersistReceiptInS3Args { org, subgroup, hash, content })
-                .unwrap();
+        let method_args = serde_json::to_string(&PersistReceiptInS3Args {
+            org,
+            subgroup,
+            hash,
+            content,
+        })
+        .unwrap();
 
         let resp = self
             .execute(
@@ -316,8 +534,11 @@ impl WeilClient {
         Ok(txn_result)
     }
 
-    pub async fn index_prompt_in_bigquery(&self, prompt_text: String, receipts: Vec<String>) -> Result<(), anyhow::Error> {
-        
+    pub async fn index_prompt_in_bigquery(
+        &self,
+        prompt_text: String,
+        receipts: Vec<String>,
+    ) -> Result<(), anyhow::Error> {
         let contract_id = self.get_audit_contract_id().await?;
         let org = self.wallet.lock().unwrap().org().map(|o| o.name.clone());
         let prompt_id = hex::encode(hash_sha256(prompt_text.as_bytes()));
@@ -332,15 +553,23 @@ impl WeilClient {
             receipts: Vec<String>,
         }
 
-        let args = Args { org, namespace, prompt_text, prompt_id, receipts };
+        let args = Args {
+            org,
+            namespace,
+            prompt_text,
+            prompt_id,
+            receipts,
+        };
 
-        let _ = self.
-            execute(
+        let _ = self
+            .execute(
                 contract_id,
                 "index_prompt".to_string(),
                 serde_json::to_string(&args).unwrap(),
-                None, 
-                None).await?;
+                None,
+                None,
+            )
+            .await?;
 
         Ok(())
     }
@@ -377,11 +606,19 @@ impl WeilClient {
             .into_iter()
             .map(|(prompt_text, receipts)| {
                 let prompt_id = hex::encode(hash_sha256(prompt_text.as_bytes()));
-                PromptEntry { namespace: namespace.clone(), prompt_text, prompt_id, receipts }
+                PromptEntry {
+                    namespace: namespace.clone(),
+                    prompt_text,
+                    prompt_id,
+                    receipts,
+                }
             })
             .collect();
 
-        let args = Args { org, prompts: entries };
+        let args = Args {
+            org,
+            prompts: entries,
+        };
 
         let _ = self
             .execute(
@@ -429,11 +666,51 @@ impl WeilContractClient {
         should_hide_args: Option<bool>,
         is_non_blocking: Option<bool>,
     ) -> anyhow::Result<TransactionResult> {
-        let (base_txn, signature, args) = self.sign_and_construct_txn(
-            method_name,
-            method_args,
-            should_hide_args.unwrap_or(true),
-        )?;
+        let (base_txn, signature, args) = self
+            .sign_and_construct_txn(
+                method_name,
+                method_args,
+                should_hide_args.unwrap_or(true),
+                false,
+            )
+            .await?;
+
+        let resp = self
+            .hit_api(
+                signature,
+                &base_txn,
+                args,
+                is_non_blocking.unwrap_or(false),
+                |payload: SubmitTxnRequest, http_client: Client, is_non_blocking: bool| {
+                    PlatformApi::submit_transaction(payload, http_client, is_non_blocking)
+                },
+            )
+            .await;
+
+        resp
+    }
+
+    /// Execute an exported method of the bound applet with **remote signing**
+    /// (non-streaming).
+    ///
+    /// Builds the transaction, signs it via Sentinel's `/sign_payload` endpoint
+    /// instead of a local secret key, and submits it; resolves to a
+    /// [`TransactionResult`].
+    pub async fn execute_remotely(
+        &self,
+        method_name: String,
+        method_args: String,
+        should_hide_args: Option<bool>,
+        is_non_blocking: Option<bool>,
+    ) -> anyhow::Result<TransactionResult> {
+        let (base_txn, signature, args) = self
+            .sign_and_construct_txn(
+                method_name,
+                method_args,
+                should_hide_args.unwrap_or(true),
+                true,
+            )
+            .await?;
 
         let resp = self
             .hit_api(
@@ -459,11 +736,14 @@ impl WeilContractClient {
         method_args: String,
         should_hide_args: Option<bool>,
     ) -> anyhow::Result<ByteStream> {
-        let (base_txn, signature, args) = self.sign_and_construct_txn(
-            method_name,
-            method_args,
-            should_hide_args.unwrap_or(true),
-        )?;
+        let (base_txn, signature, args) = self
+            .sign_and_construct_txn(
+                method_name,
+                method_args,
+                should_hide_args.unwrap_or(true),
+                false,
+            )
+            .await?;
 
         let resp = self
             .hit_api(
@@ -485,11 +765,12 @@ impl WeilContractClient {
     /// Locks the wallet mutex briefly to snapshot the current account's address,
     /// public key, and produce the signature, then releases the lock before any
     /// network I/O.
-    fn sign_and_construct_txn(
+    async fn sign_and_construct_txn(
         &self,
         method_name: String,
         method_args: String,
         should_hide_args: bool,
+        is_remote: bool,
     ) -> Result<(BaseTransaction, String, ExecuteArgs), anyhow::Error> {
         let contract_id = self.contract_id.clone();
         let weilpod_counter = contract_id.pod_counter()?;
@@ -501,24 +782,23 @@ impl WeilContractClient {
             should_hide_args,
         };
 
-        // Lock the wallet only for the duration of address/key access and signing.
-        let wallet = self.client.wallet.lock().unwrap();
-
-        let from_addr = Arc::new(wallet.get_address().to_string());
-        let to_addr = from_addr.clone();
-        let public_key_hex = hex::encode(wallet.get_public_key().serialize());
-
         let nonce = current_time_millis() as usize;
-        let mut txn_header = TransactionHeader::new(
-            nonce,
-            public_key_hex,
-            from_addr,
-            to_addr,
-            weilpod_counter,
-        );
+        let (wallet, mut txn_header) = {
+            let wallet = self.client.wallet.lock().unwrap();
+            let from_addr = Arc::new(wallet.get_address().to_string());
+            let to_addr = from_addr.clone();
+            let public_key_hex = hex::encode(wallet.get_public_key().serialize());
+            (
+                wallet.clone(),
+                TransactionHeader::new(nonce, public_key_hex, from_addr, to_addr, weilpod_counter),
+            )
+        };
 
-        let signature = self.sign_execute_args(&wallet, &txn_header, &args)?;
-        drop(wallet); // release lock before any I/O
+        let signature = if is_remote {
+            self.remote_sign_execute_args(&wallet, &txn_header, &args).await?
+        } else {
+            self.sign_execute_args(&wallet, &txn_header, &args)?
+        };
 
         txn_header.set_signature(signature.as_str());
         let base_txn = BaseTransaction::new(txn_header);
@@ -531,16 +811,16 @@ impl WeilContractClient {
     /// - Builds a stable, sorted representation by converting the JSON payload
     ///   to a `BTreeMap` (`value_to_btreemap`) before serialization.
     /// - Signs the resulting bytes with `secp256k1` ECDSA via [`wallet::Wallet::sign`].
-    fn sign_execute_args(
+    fn execute_payload(
         &self,
-        wallet: &Wallet,
         txn_header: &TransactionHeader,
         args: &ExecuteArgs,
-    ) -> anyhow::Result<String> {
-        let json_payload = json!({
+    ) -> serde_json::Value {
+        json!({
             "nonce": txn_header.nonce,
             "from_addr": txn_header.from_addr,
             "to_addr": txn_header.to_addr,
+            "salt": txn_header.salt,
             "user_txn": {
                 "type": "SmartContractExecutor",
                 "contract_address": args.contract_address,
@@ -548,11 +828,35 @@ impl WeilContractClient {
                 "contract_input_bytes": args.contract_input_bytes,
                 "should_hide_args": args.should_hide_args
             }
-        });
+        })
+    }
 
-        let json_payload_btreemap = value_to_btreemap(json_payload);
+    fn sign_execute_args(
+        &self,
+        wallet: &Wallet,
+        txn_header: &TransactionHeader,
+        args: &ExecuteArgs,
+    ) -> anyhow::Result<String> {
+        let json_payload_btreemap = value_to_btreemap(self.execute_payload(txn_header, args));
         let json_payload = serde_json::to_string(&json_payload_btreemap)?;
         wallet.sign(json_payload.as_bytes())
+    }
+
+    async fn remote_sign_execute_args(
+        &self,
+        wallet: &Wallet,
+        txn_header: &TransactionHeader,
+        args: &ExecuteArgs,
+    ) -> anyhow::Result<String> {
+        let json_payload = self.execute_payload(txn_header, args);
+        wallet
+            .remote_sign(
+                &json_payload,
+                &self.client.sentinel_host,
+                self.client.creds.clone(),
+                &self.client.http_client,
+            )
+            .await
     }
 
     /// Common submission path for both normal and streaming executions.
@@ -586,6 +890,7 @@ impl WeilContractClient {
                     signature: Some(signature),
                     weilpod_counter: txn.header.weilpod_counter,
                     creation_time: current_time_millis() as u64,
+                    salt: txn.header.salt.clone(),
                 },
                 verifier: Verifier {
                     ty: "DefaultVerifier".to_string(),

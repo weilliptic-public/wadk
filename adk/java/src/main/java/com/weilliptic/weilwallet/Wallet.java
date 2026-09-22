@@ -1,129 +1,97 @@
 package com.weilliptic.weilwallet;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.bitcoinj.core.ECKey;
-import org.bitcoinj.core.Sha256Hash;
 import org.bitcoinj.crypto.ChildNumber;
 import org.bitcoinj.crypto.DeterministicKey;
 import org.bitcoinj.crypto.HDKeyDerivation;
 import org.bitcoinj.params.MainNetParams;
 
 import java.io.IOException;
-import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Multi-account secp256k1-backed wallet for the WeilChain platform.
+ * Multi-account secp256k1 wallet for the WeilChain platform.
  *
- * <p>Supports loading from:
+ * <p>Loaded from a {@code wallet.wc} file. Holds:
  * <ul>
- *   <li>{@code wallet.wc}: multi-account wallet export (derived + external)</li>
- *   <li>{@code account.wc}: legacy single-account export</li>
+ *   <li><b>derivedAccounts</b> — HD-derived from the {@code xprv} stored in the file.</li>
+ *   <li><b>addedAccounts</b> — externally imported accounts with their own secret keys.</li>
  * </ul>
- * Signs with ECDSA secp256k1 over the SHA-256 digest of the input.
- * Signature is 64-byte compact (r || s), hex-encoded.</p>
+ * All signing and address operations act on the currently selected account.
+ * Use {@link #setIndex(SelectedAccount)} to switch accounts at runtime.</p>
  */
 public final class Wallet {
 
-    private static final int COMPACT_SIG_LEN = 32;
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final List<Account> derivedAccounts = new ArrayList<>();
     private final List<Account> addedAccounts = new ArrayList<>();
     private SelectedAccount currentIndex;
+    private OrgInfo org;
+
+    // ── Internal constructor ─────────────────────────────────────────────────
 
     private Wallet() {}
 
     /**
-     * Create a single-account wallet from a raw private key.
-     * The account address is initially empty; use {@link #fromAccountExportFile(Path)}
-     * to get a sentinel-minted address.
+     * Create a Wallet from a private key and pre-minted account address.
      *
-     * @param privateKey the hex-encoded private key.
+     * <p>Used by {@code derived} package and callers that hold raw keys.
+     * The account is stored as {@code External(0)} and selected by default.</p>
      */
-    public Wallet(PrivateKey privateKey) {
-        ECKey key = ECKey.fromPrivate(privateKey.toBytes());
-        this.addedAccounts.add(new Account(key, ""));
-        this.currentIndex = SelectedAccount.external(0);
+    public Wallet(PrivateKey privateKey, String accountAddress) {
+        addedAccounts.add(Account.fromPrivateKeyAndAddress(privateKey, accountAddress));
+        currentIndex = SelectedAccount.External(0);
     }
 
-    // ── account.wc (legacy single-account export) ────────────────────────────
+    // ── Static factory ───────────────────────────────────────────────────────
 
     /**
-     * Load a single-account wallet from an account export file ({@code account.wc}).
-     * The file is produced by the Weilliptic CLI's {@code wallet export-account} command.
+     * Load a Wallet from a {@code wallet.wc} file.
      *
-     * @param path path to the account export JSON file.
-     * @return a wallet with one external account.
-     * @throws IOException              if the file cannot be read.
-     * @throws IllegalArgumentException if the file type is not {@code "account"} or is missing fields.
-     */
-    public static Wallet fromAccountExportFile(Path path) throws IOException {
-        Account acc = accountFromExportFile(path);
-        Wallet w = new Wallet();
-        w.addedAccounts.add(acc);
-        w.currentIndex = SelectedAccount.external(0);
-        return w;
-    }
-
-    /**
-     * Append an additional account from a sentinel account export file.
-     * The active account does not change.
+     * <p>Derived account secret keys are re-derived from the stored {@code xprv}.
+     * External account secret keys are read directly from the file.
+     * The active account is taken from the {@code selected_account} field
+     * (defaults to derived index 0 when absent).</p>
      *
-     * @param path path to the account export JSON file.
-     * @throws IOException              if the file cannot be read.
-     * @throws IllegalArgumentException if the file is malformed.
-     */
-    public void addAccountFromExportFile(Path path) throws IOException {
-        this.addedAccounts.add(accountFromExportFile(path));
-    }
-
-    // ── wallet.wc (multi-account export) ─────────────────────────────────────
-
-    /**
-     * Load a wallet from a {@code wallet.wc} file (string path convenience overload).
-     *
-     * @param path path to the wallet file.
-     * @throws IOException if the file cannot be read or parsed.
-     * @see #fromWalletFile(Path)
+     * @param path Path to the wallet.wc file.
+     * @return A fully initialised Wallet.
+     * @throws IOException              If the file cannot be read.
+     * @throws IllegalArgumentException If the file type is not {@code "wallet"} or
+     *                                  contains no accounts.
      */
     public static Wallet fromWalletFile(String path) throws IOException {
         return fromWalletFile(Paths.get(path));
     }
 
     /**
-     * Load a wallet from a {@code wallet.wc} file.
+     * Load a Wallet from a {@code wallet.wc} file.
      *
-     * <p>Derived account secret keys are re-derived from the stored {@code xprv}.
-     * External account secret keys are read directly from the file. The active
-     * account is set from the {@code selected_account} field (defaults to derived[0]).</p>
-     *
-     * @param path path to the wallet file.
-     * @return a fully-loaded wallet.
-     * @throws IOException              if the file cannot be read.
-     * @throws IllegalArgumentException if the file type is not {@code "wallet"}, contains no accounts,
-     *                                  or the selected account index is out of bounds.
+     * @param path Path to the wallet.wc file.
+     * @return A fully initialised Wallet.
+     * @throws IOException If the file cannot be read or parsed.
      */
     public static Wallet fromWalletFile(Path path) throws IOException {
-        String content = Files.readString(path);
+        String content = new String(Files.readAllBytes(path));
         JsonNode root = JSON.readTree(content);
 
         String type = root.path("type").asText("");
         if (!"wallet".equals(type)) {
-            throw new IllegalArgumentException("expected file type 'wallet', got '" + type + "'");
+            throw new IllegalArgumentException(
+                "expected file type 'wallet', got '" + type + "'");
         }
 
-        JsonNode derivedNodes = root.path("derived_accounts");
-        JsonNode externalNodes = root.path("external_accounts");
-        if ((!derivedNodes.isArray() || derivedNodes.size() == 0) && (!externalNodes.isArray() || externalNodes.size() == 0)) {
+        JsonNode derivedNodes   = root.path("derived_accounts");
+        JsonNode externalNodes  = root.path("external_accounts");
+
+        if ((derivedNodes.isMissingNode() || derivedNodes.size() == 0)
+                && (externalNodes.isMissingNode() || externalNodes.size() == 0)) {
             throw new IllegalArgumentException("wallet file contains no accounts");
         }
 
@@ -132,74 +100,92 @@ public final class Wallet {
         DeterministicKey accountKey = resolveAccountLevelKey(masterKey, derivedNodes);
 
         Wallet w = new Wallet();
+
         for (JsonNode entry : derivedNodes) {
             int index = entry.path("index").asInt();
             String address = entry.path("account_address").asText();
-            DeterministicKey childKey = HDKeyDerivation.deriveChildKey(accountKey, new ChildNumber(index, false));
+            DeterministicKey childKey = HDKeyDerivation.deriveChildKey(
+                accountKey, new ChildNumber(index, false));
             ECKey ecKey = ECKey.fromPrivate(childKey.getPrivKeyBytes());
             w.derivedAccounts.add(new Account(ecKey, address));
         }
+
         for (JsonNode entry : externalNodes) {
             String secretKeyHex = entry.path("secret_key").asText();
             String address = entry.path("account_address").asText();
             PrivateKey pk = new PrivateKey(secretKeyHex);
-            ECKey ecKey = ECKey.fromPrivate(pk.toBytes());
-            w.addedAccounts.add(new Account(ecKey, address));
+            w.addedAccounts.add(Account.fromPrivateKeyAndAddress(pk, address));
         }
 
+        // Resolve selected_account (default: derived index 0).
         String kind = "derived";
         int index = 0;
         JsonNode sel = root.path("selected_account");
         if (!sel.isMissingNode()) {
-            kind = sel.path("type").asText("derived");
+            kind  = sel.path("type").asText("derived");
             index = sel.path("index").asInt(0);
         }
+
         if ("external".equals(kind)) {
             if (index >= w.addedAccounts.size()) {
                 throw new IllegalArgumentException(
-                    "selected external account index " + index + " out of bounds (have " + w.addedAccounts.size() + ")"
-                );
+                    "selected external account index " + index
+                        + " out of bounds (have " + w.addedAccounts.size() + ")");
             }
-            w.currentIndex = SelectedAccount.external(index);
+            w.currentIndex = SelectedAccount.External(index);
         } else {
             if (index >= w.derivedAccounts.size()) {
                 throw new IllegalArgumentException(
-                    "selected derived account index " + index + " out of bounds (have " + w.derivedAccounts.size() + ")"
-                );
+                    "selected derived account index " + index
+                        + " out of bounds (have " + w.derivedAccounts.size() + ")");
             }
-            w.currentIndex = SelectedAccount.derived(index);
+            w.currentIndex = SelectedAccount.Derived(index);
         }
+
+        // ── Resolve org ─────────────────────────────────────────────────
+        // Priority: per-account v2 orgs > top-level v2 orgs > v1 single org.
+        w.org = resolveOrg(root, kind, index);
+
         return w;
     }
 
-    // ── Account selection ────────────────────────────────────────────────────
+    // ── Account management ───────────────────────────────────────────────────
 
     /**
-     * Switch the active account used for signing and address lookups.
+     * Switch the active account.
      *
-     * @param selected identifies the account to activate.
-     * @throws IllegalArgumentException if the index is out of bounds for the account list,
-     *                                  or the account type is unsupported.
+     * @param selected The account selector (e.g. {@code SelectedAccount.Derived(1)}).
+     * @throws IndexOutOfBoundsException If the index is out of bounds.
+     * @throws IllegalArgumentException  If the kind is unknown.
      */
     public void setIndex(SelectedAccount selected) {
-        if (selected.getType() == SelectedAccount.Type.DERIVED) {
-            int i = selected.getIndex();
-            if (i < 0 || i >= derivedAccounts.size()) {
+        switch (selected.kind()) {
+            case "derived":
+                if (selected.index() < 0 || selected.index() >= derivedAccounts.size()) {
+                    throw new IndexOutOfBoundsException(
+                        "derived account index " + selected.index()
+                            + " out of bounds (have " + derivedAccounts.size() + " derived account(s))");
+                }
+                break;
+            case "external":
+                if (selected.index() < 0 || selected.index() >= addedAccounts.size()) {
+                    throw new IndexOutOfBoundsException(
+                        "external account index " + selected.index()
+                            + " out of bounds (have " + addedAccounts.size() + " external account(s))");
+                }
+                break;
+            default:
                 throw new IllegalArgumentException(
-                    "derived account index " + i + " out of bounds (have " + derivedAccounts.size() + " derived account(s))"
-                );
-            }
-        } else if (selected.getType() == SelectedAccount.Type.EXTERNAL) {
-            int i = selected.getIndex();
-            if (i < 0 || i >= addedAccounts.size()) {
-                throw new IllegalArgumentException(
-                    "external account index " + i + " out of bounds (have " + addedAccounts.size() + " external account(s))"
-                );
-            }
-        } else {
-            throw new IllegalArgumentException("unsupported account type: " + selected.getType());
+                    "unknown account kind: '" + selected.kind() + "'");
         }
-        this.currentIndex = selected;
+        currentIndex = selected;
+    }
+
+    // ── Accessors ────────────────────────────────────────────────────────────
+
+    /** Return the number of HD-derived accounts. */
+    public int derivedAccountCount() {
+        return derivedAccounts.size();
     }
 
     /** Return the number of externally imported accounts. */
@@ -207,85 +193,114 @@ public final class Wallet {
         return addedAccounts.size();
     }
 
-    /** Return the number of BIP32-derived accounts. */
-    public int derivedAccountCount() {
-        return derivedAccounts.size();
+    /** Return the currently selected account index. */
+    public SelectedAccount currentAccountIndex() {
+        return currentIndex;
     }
 
-    /** Return the sentinel-minted on-chain address of the currently selected account. */
+    /**
+     * Return the org info if this wallet has a linked organization, or {@code null} if none.
+     */
+    public OrgInfo org() {
+        return org;
+    }
+
+    /**
+     * Return the sentinel-minted 72-char hex account address of the current account.
+     */
     public String getAddress() {
         return currentAccount().getAddress();
     }
 
     /**
-     * Return the account's secp256k1 public key (uncompressed 65 bytes for wire format).
+     * Return the current account's secp256k1 public key (uncompressed 65 bytes for wire format).
      */
     public byte[] getPublicKeyUncompressed() {
-        return currentAccount().getEcKey().getPubKeyPoint().getEncoded(false);
-    }
-
-    /** Return the EC key of the currently selected account. */
-    public ECKey getECKey() {
-        return currentAccount().getEcKey();
+        return currentAccount().getPublicKeyUncompressed();
     }
 
     /**
-     * Sign buf with ECDSA secp256k1. Message is hashed with SHA-256, then signed.
-     * Returns hex-encoded 64-byte compact signature (r || s).
+     * Return the underlying ECKey of the current account for low-level operations.
+     */
+    public ECKey getECKey() {
+        return currentAccount().getSecretKey();
+    }
+
+    /**
+     * Sign buf with ECDSA secp256k1 using the current account. Message is hashed
+     * with SHA-256, then signed. Returns hex-encoded 64-byte compact signature (r || s).
      */
     public String sign(byte[] buf) {
-        byte[] digest = Utils.hashSha256(buf);
-        Sha256Hash hash = Sha256Hash.wrap(digest);
-        ECKey.ECDSASignature sig = currentAccount().getEcKey().sign(hash);
-        byte[] r = bigIntegerToBytes32(sig.r);
-        byte[] s = bigIntegerToBytes32(sig.s);
-        byte[] compact = new byte[64];
-        System.arraycopy(r, 0, compact, 0, COMPACT_SIG_LEN);
-        System.arraycopy(s, 0, compact, COMPACT_SIG_LEN, COMPACT_SIG_LEN);
-        return Utils.bytesToHex(compact);
+        return currentAccount().sign(buf);
     }
+
+    // ── Internal helpers ─────────────────────────────────────────────────────
 
     private Account currentAccount() {
-        if (currentIndex.getType() == SelectedAccount.Type.DERIVED) {
-            return derivedAccounts.get(currentIndex.getIndex());
+        if ("derived".equals(currentIndex.kind())) {
+            return derivedAccounts.get(currentIndex.index());
         }
-        return addedAccounts.get(currentIndex.getIndex());
+        return addedAccounts.get(currentIndex.index());
     }
 
-    private static Account accountFromExportFile(Path path) throws IOException {
-        String raw = Files.readString(path);
-        Map<String, Object> data = JSON.readValue(raw, new TypeReference<Map<String, Object>>() {});
-        Object type = data.get("type");
-        if (type == null || !"account".equals(type.toString())) {
-            throw new IllegalArgumentException("expected export type 'account', got '" + type + "'");
+    /**
+     * Resolve the active org from the wallet JSON.
+     *
+     * <p>Priority:
+     * <ol>
+     *   <li>Per-account v2 {@code orgs[]} on the selected account entry.</li>
+     *   <li>Top-level v2 {@code orgs[]} with {@code active_org} index.</li>
+     *   <li>v1 single {@code org} object.</li>
+     * </ol>
+     */
+    private static OrgInfo resolveOrg(JsonNode root, String selectedKind, int selectedIndex) {
+        // 1. Per-account v2 orgs on the selected account entry.
+        String arrayField = "external".equals(selectedKind)
+            ? "external_accounts" : "derived_accounts";
+        JsonNode accountArray = root.path(arrayField);
+        if (accountArray.isArray() && selectedIndex < accountArray.size()) {
+            JsonNode entry = accountArray.get(selectedIndex);
+            JsonNode accountOrgs = entry.path("orgs");
+            if (accountOrgs.isArray() && accountOrgs.size() > 0) {
+                int activeIdx = entry.path("active_org").asInt(0);
+                if (activeIdx >= 0 && activeIdx < accountOrgs.size()) {
+                    return orgMembershipToOrgInfo(accountOrgs.get(activeIdx));
+                }
+            }
         }
-        Object accountObj = data.get("account");
-        if (!(accountObj instanceof Map)) {
-            throw new IllegalArgumentException("account export missing 'account' object");
+
+        // 2. Top-level v2 orgs.
+        JsonNode topOrgs = root.path("orgs");
+        if (topOrgs.isArray() && topOrgs.size() > 0) {
+            int activeIdx = root.path("active_org").asInt(0);
+            if (activeIdx >= 0 && activeIdx < topOrgs.size()) {
+                return orgMembershipToOrgInfo(topOrgs.get(activeIdx));
+            }
         }
-        @SuppressWarnings("unchecked")
-        Map<String, Object> account = (Map<String, Object>) accountObj;
-        String secretKeyHex = account.get("secret_key") != null ? account.get("secret_key").toString() : "";
-        String addr = account.get("account_address") != null ? account.get("account_address").toString() : "";
-        if (addr.isEmpty()) {
-            throw new IllegalArgumentException("account export missing account_address");
+
+        // 3. v1 single org field.
+        JsonNode orgNode = root.path("org");
+        if (!orgNode.isMissingNode() && orgNode.isObject()) {
+            String name = orgNode.path("name").asText(null);
+            if (name != null && !name.isEmpty()) {
+                String subgroup = orgNode.path("subgroup").isNull()
+                    ? null : orgNode.path("subgroup").asText(null);
+                String purpose = orgNode.path("purpose").asText("");
+                return new OrgInfo(name, subgroup, purpose);
+            }
         }
-        PrivateKey pk = new PrivateKey(secretKeyHex);
-        ECKey key = ECKey.fromPrivate(pk.toBytes());
-        return new Account(key, addr);
+
+        return null;
     }
 
-    private static byte[] bigIntegerToBytes32(BigInteger n) {
-        byte[] bytes = n.toByteArray();
-        if (bytes.length > COMPACT_SIG_LEN) {
-            return Arrays.copyOfRange(bytes, bytes.length - COMPACT_SIG_LEN, bytes.length);
-        }
-        if (bytes.length < COMPACT_SIG_LEN) {
-            byte[] padded = new byte[COMPACT_SIG_LEN];
-            System.arraycopy(bytes, 0, padded, COMPACT_SIG_LEN - bytes.length, bytes.length);
-            return padded;
-        }
-        return bytes;
+    /** Convert a v2 org membership JSON node to an {@link OrgInfo}. */
+    private static OrgInfo orgMembershipToOrgInfo(JsonNode node) {
+        String orgName = node.path("org").asText("");
+        String subgroup = node.path("subgroup").asText("");
+        return new OrgInfo(
+            orgName,
+            subgroup.isEmpty() ? null : subgroup,
+            "");
     }
 
     /**
@@ -293,28 +308,34 @@ public final class Wallet {
      *
      * <p>If deriving child 0 directly matches the first entry's stored
      * {@code public_key}, the xprv is already at account level. Otherwise
-     * traverse {@code m/44'/9345'/0'/0} first.</p>
+     * the method traverses {@code m/44'/9345'/0'/0} first.</p>
      */
-    private static DeterministicKey resolveAccountLevelKey(DeterministicKey master, JsonNode derivedNodes) {
+    private static DeterministicKey resolveAccountLevelKey(
+            DeterministicKey master, JsonNode derivedNodes) {
+
         if (!derivedNodes.isArray() || derivedNodes.size() == 0) {
             return master;
         }
+
         JsonNode first = derivedNodes.get(0);
         int firstIndex = first.path("index").asInt(0);
         String expectedPk = first.path("public_key").asText("");
 
-        DeterministicKey child = HDKeyDerivation.deriveChildKey(master, new ChildNumber(firstIndex, false));
+        DeterministicKey child = HDKeyDerivation.deriveChildKey(
+            master, new ChildNumber(firstIndex, false));
         byte[] compressedPub = child.getPubKeyPoint().getEncoded(true);
         String pkHex = Utils.bytesToHex(compressedPub);
+
         if (pkHex.equals(expectedPk)) {
             return master;
         }
 
+        // Root xprv — traverse m/44'/9345'/0'/0.
         DeterministicKey key = master;
-        key = HDKeyDerivation.deriveChildKey(key, new ChildNumber(44, true));
+        key = HDKeyDerivation.deriveChildKey(key, new ChildNumber(44,   true));
         key = HDKeyDerivation.deriveChildKey(key, new ChildNumber(9345, true));
-        key = HDKeyDerivation.deriveChildKey(key, new ChildNumber(0, true));
-        key = HDKeyDerivation.deriveChildKey(key, new ChildNumber(0, false));
+        key = HDKeyDerivation.deriveChildKey(key, new ChildNumber(0,    true));
+        key = HDKeyDerivation.deriveChildKey(key, new ChildNumber(0,    false));
         return key;
     }
 }

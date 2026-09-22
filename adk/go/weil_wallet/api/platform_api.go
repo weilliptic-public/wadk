@@ -54,7 +54,7 @@ func SubmitTransaction(httpClient *http.Client, payload SubmitTxnRequest, isNonB
 
 	// Build request
 	req, err := http.NewRequest(http.MethodPost,
-		fmt.Sprintf("https://%s/contracts/execute_smartcontract", constants.SENTINEL_HOST),
+		fmt.Sprintf("%s/contracts/execute_smartcontract", constants.SENTINEL_HOST),
 		body,
 	)
 

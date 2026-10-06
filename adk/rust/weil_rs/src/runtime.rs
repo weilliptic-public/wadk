@@ -76,6 +76,7 @@ extern "C" {
     fn get_applet_details(applet_id: i32) -> i32;
     fn attest(org: i32, wallet_addr: i32, txn_id: i32, claim_data: i32, webhook: i32) -> i32;
     fn get_txn_instantiator_addr() -> i32;
+    fn get_org() -> i32;
     fn get_txn_id() -> i32;
     fn get_txn_from_addr(txn_id: i32) -> i32;
     fn get_pod_id_from_address(wallet_addr: i32) -> i32;
@@ -807,6 +808,46 @@ impl MemorySegment {
     }
 }
 
+/// The organization context a transaction was signed under, as returned by
+/// [`Runtime::org`].
+///
+/// Carried in the signed transaction header rather than passed as a method
+/// argument, so every applet sees the same value without threading it through
+/// its API. See [`Runtime::org`] for why this is a claim, not authorization.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct OrgContext {
+    /// Organization identity name, e.g. `"weil"`.
+    pub org: String,
+    /// Subgroup within the organization, e.g. `"engg"`. `None` at org level.
+    pub subgroup: Option<String>,
+}
+
+impl OrgContext {
+    /// Dotted scope used as a storage row suffix: `"engg.weil"`, or `"weil"`
+    /// when there is no subgroup.
+    pub fn scope(&self) -> String {
+        match self.subgroup.as_deref().filter(|s| !s.is_empty()) {
+            Some(sg) => format!("{}.{}", sg, self.org),
+            None => self.org.clone(),
+        }
+    }
+
+    /// Fully-qualified WNS name of this org's Identity applet: `"identity::weil"`.
+    /// Pass to [`Runtime::contract_id_for_name`] to resolve an address.
+    pub fn identity_name(&self) -> String {
+        format!("identity::{}", self.org)
+    }
+
+    /// Identity key for a wallet under this context: `"engg_<wallet>"` for a
+    /// subgroup member, or the bare wallet address at org level.
+    pub fn qualified_key(&self, wallet_addr: &str) -> String {
+        match self.subgroup.as_deref().filter(|s| !s.is_empty()) {
+            Some(sg) => format!("{}_{}", sg, wallet_addr),
+            None => String::from(wallet_addr),
+        }
+    }
+}
+
 /// High-level runtime façade for Weil applets.
 ///
 /// Provides safe wrappers for contract state/args access, cross-contract calls,
@@ -916,6 +957,36 @@ impl Runtime {
         let addr = read_bytes_from_memory(ptr).unwrap();
 
         addr
+    }
+
+    /// Returns the organization context the signing wallet is acting under, or
+    /// `None` when the transaction carries no org.
+    ///
+    /// Follows [`Runtime::origin`] semantics, not [`Runtime::sender`]: the value
+    /// comes from the transaction header, so it stays the originating wallet's
+    /// org across cross-contract calls rather than shifting to the caller.
+    ///
+    /// # This is a claim, not proof of membership
+    ///
+    /// The platform holds no wallet → org mapping; the client supplies this from
+    /// its wallet and it is covered by the transaction signature. That makes it
+    /// authentic (the wallet really did assert it, and nobody altered it in
+    /// transit) but *not* authorization. Before granting org-scoped authority,
+    /// still verify the caller against this org's Identity applet:
+    ///
+    /// ```ignore
+    /// let org = Runtime::org().ok_or("no org context")?;
+    /// let identity = Runtime::contract_id_for_name(&org.identity_name())?;
+    /// // then check key_has_purpose for org.qualified_key(&Runtime::origin())
+    /// ```
+    ///
+    /// Note that query-kind methods are not signature-verified by the node, so
+    /// on a query this value is unauthenticated (as is `origin()`).
+    pub fn org() -> Option<OrgContext> {
+        let ptr = unsafe { get_org() };
+        let json = read_bytes_from_memory(ptr).ok()?;
+
+        serde_json::from_str(&json).ok()?
     }
 
     pub fn get_txn_id() -> String {

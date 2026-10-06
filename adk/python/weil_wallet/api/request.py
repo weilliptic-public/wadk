@@ -59,6 +59,10 @@ class SubmitTxnRequest:
                     "weilpod_counter": h.weilpod_counter,
                     "creation_time": h.creation_time,
                     "salt": h.salt,
+                    # Covered by the signature -- the node rebuilds the digest
+                    # from what actually arrives, so omitting this would make
+                    # every org-bearing transaction fail verification.
+                    "org": h.org.to_dict() if h.org else None,
                 },
                 "verifier": {"type": txn.verifier.ty},
                 "user_txn": {

@@ -20,6 +20,29 @@ class TransactionStatus(str, Enum):
 
 
 @dataclass
+class OrgContext:
+    """The organization a transaction is signed under.
+
+    Carried in the signed header and surfaced to applets as ``Runtime::org()``,
+    so an applet can scope itself to the caller's org without taking one as a
+    method argument.
+
+    The wire shape is load-bearing: it must serialize exactly as the node's
+    ``OrgContext`` does -- keys ``org``/``subgroup``, with ``subgroup: null``
+    when absent rather than omitted. The signature is a SHA-256 over key-sorted
+    JSON that both sides rebuild independently, so a renamed or dropped key
+    changes the digest and the node rejects the transaction.
+    """
+
+    org: str
+    subgroup: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Digest/wire representation. ``subgroup`` is always present."""
+        return {"org": self.org, "subgroup": self.subgroup}
+
+
+@dataclass
 class TransactionHeader:
     """Immutable transaction header (except optional signature)."""
 
@@ -34,6 +57,9 @@ class TransactionHeader:
     # mixed into the node's get_txn_id(), so two transactions never collide
     # on id even if nonce happens to match.
     salt: str = ""
+    # Organization the signing wallet is acting under, or None when it has no
+    # active org. Covered by the signature (see _sign_execute_args).
+    org: Optional[OrgContext] = None
 
     def __post_init__(self) -> None:
         if self.creation_time == 0:

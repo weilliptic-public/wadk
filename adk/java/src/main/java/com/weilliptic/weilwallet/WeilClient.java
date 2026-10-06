@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.weilliptic.weilwallet.api.*;
+import com.weilliptic.weilwallet.transaction.OrgContext;
 import com.weilliptic.weilwallet.transaction.TransactionHeader;
 import com.weilliptic.weilwallet.transaction.TransactionResult;
 
@@ -304,12 +305,16 @@ public class WeilClient implements AutoCloseable {
             String toAddr;
             String publicKeyHex;
             String signature;
+            OrgContext org;
 
             walletLock.lock();
             try {
                 fromAddr = wallet.getAddress();
                 toAddr = fromAddr;
                 publicKeyHex = Utils.bytesToHex(wallet.getPublicKeyUncompressed());
+                // Snapshot the wallet's active org under the same lock as the
+                // address it is paired with.
+                org = OrgContext.fromOrgInfo(wallet.org());
             } finally {
                 walletLock.unlock();
             }
@@ -319,7 +324,7 @@ public class WeilClient implements AutoCloseable {
             String salt = UUID.randomUUID().toString();
 
             TransactionHeader header = new TransactionHeader(
-                nonce, publicKeyHex, fromAddr, toAddr, null, weilpodCounter, 0, salt);
+                nonce, publicKeyHex, fromAddr, toAddr, null, weilpodCounter, 0, salt, org);
 
             Map<String, Object> args = new LinkedHashMap<>();
             args.put("contract_address", contractId.toString());
@@ -340,6 +345,19 @@ public class WeilClient implements AutoCloseable {
             payload.put("salt", salt);
             payload.put("to_addr", toAddr);
             payload.put("user_txn", userTxn);
+
+            // `org` is included **only when present**, mirroring the node's
+            // compute_verify_digest_for_execute. This conditionality preserves
+            // compatibility: a wallet with no active org produces exactly the
+            // bytes it did before org existed, so already-signed transactions
+            // still verify. Putting a null org in unconditionally would change
+            // the digest for every org-less transaction at once.
+            //
+            // The enclosing TreeMap places the key correctly regardless of
+            // where it is inserted here.
+            if (org != null) {
+                payload.put("org", org.toMap());
+            }
 
             String canonicalJson = JSON.writeValueAsString(payload);
 

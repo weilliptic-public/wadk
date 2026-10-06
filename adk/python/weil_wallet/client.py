@@ -13,8 +13,25 @@ from .api.request import SubmitTxnRequest, Transaction, UserTransaction, Verifie
 from .constants import DEFAULT_CONCURRENCY, SENTINEL_HOST
 from .contract import ContractId
 from .streaming import ByteStream
-from .transaction import BaseTransaction, TransactionHeader, TransactionResult
+from .transaction import BaseTransaction, OrgContext, TransactionHeader, TransactionResult
 from .utils import current_time_millis
+
+
+def _org_context(org_info: Any) -> Optional[OrgContext]:
+    """Map the wallet-file ``OrgInfo`` onto the wire shape the node expects.
+
+    ``purpose`` is intentionally dropped -- it is advisory metadata resolved
+    from the Identity contract at runtime, not part of the signed claim. An
+    empty subgroup is normalized to ``None`` so that org-level membership
+    always produces one digest, never two.
+    """
+    if org_info is None:
+        return None
+    subgroup = getattr(org_info, "subgroup", None)
+    return OrgContext(
+        org=org_info.name,
+        subgroup=subgroup if subgroup else None,
+    )
 from .wallet import SelectedAccount, Wallet
 
 AUDIT_APPLET_SVC_NAME = "auditor::weil"
@@ -527,6 +544,10 @@ class WeilClient:
             weilpod_counter=h.weilpod_counter,
             creation_time=int(current_time_millis()),
             salt=h.salt,
+            # Must be carried across verbatim: the signature covers this, so
+            # dropping it here would make the node recompute a different
+            # digest and reject the transaction.
+            org=h.org,
         )
         user_txn = UserTransaction(
             ty="SmartContractExecutor",
@@ -585,6 +606,9 @@ class WeilContractClient:
             from_addr=from_addr,
             to_addr=to_addr,
             weilpod_counter=weilpod_counter,
+            # Stamp the wallet's active org before signing -- org is part of
+            # the digest, so it must be set ahead of _sign_execute_args.
+            org=_org_context(self._client._wallet.org),
         )
 
         signature = await self._sign_execute_args(header, args)
@@ -611,6 +635,14 @@ class WeilContractClient:
             "to_addr": txn_header.to_addr,
             "user_txn": user_txn,
         }
+        # `org` is included **only when present**, mirroring the node's
+        # compute_verify_digest_for_execute. This conditionality preserves
+        # compatibility: a wallet with no active org produces exactly the bytes
+        # it did before org existed, so already-signed transactions still
+        # verify. Emitting "org": null unconditionally would change the digest
+        # for every org-less transaction at once.
+        if txn_header.org is not None:
+            payload["org"] = txn_header.org.to_dict()
         canonical = dict(sorted(payload.items()))
         json_str = json.dumps(canonical, separators=(",", ":"), sort_keys=True)
 

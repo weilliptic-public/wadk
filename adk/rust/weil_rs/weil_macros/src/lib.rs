@@ -6,12 +6,10 @@ use contract::{
 };
 use event::{check_trait_item_fn, impl_event_macro};
 use proc_macro::TokenStream;
-use syn::{
-    parse, parse_macro_input, DeriveInput, Ident, ImplItemFn, ItemImpl, LitStr, Meta, TraitItemFn,
-};
+use syn::{parse, parse_macro_input, DeriveInput, ImplItemFn, ItemImpl, Meta, TraitItemFn};
 use weil_type::impl_weil_type_derive;
 
-use crate::contract::{impl_smart_contract_secured_macro, QueryOpaqueKind};
+use crate::contract::{impl_smart_contract_secured_macro, QueryOpaqueKind, SecuredPurpose};
 
 mod contract;
 mod event;
@@ -71,21 +69,59 @@ pub fn query(attr: TokenStream, item: TokenStream) -> TokenStream {
     impl_smart_contract_query_macro(smart_contract_query_method, query_opaque_kind)
 }
 
+/// Gates a method on the caller holding `Execution` or `Management` purpose
+/// in their organization's Identity applet.
+///
+/// Takes no arguments: the organization is resolved at runtime from
+/// `Runtime::org()` — the org the calling wallet signed the transaction under
+/// — so no `org` parameter appears in the method signature or the WIDL, and
+/// one applet can serve many orgs, deciding per call.
+///
+/// That org is authenticated but self-declared, so it only selects *which*
+/// Identity applet to interrogate; membership itself is proven by the purpose
+/// check. A caller claiming an org or subgroup they do not belong to is
+/// denied. See [`impl_smart_contract_secured_macro`].
 #[proc_macro_attribute]
-pub fn secured(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let arg = match parse::<LitStr>(attr) {
-        Ok(syntax_tree) => syntax_tree,
-        Err(err) => return proc_macro::TokenStream::from(err.to_compile_error()),
-    };
-
-    //let arg_str = arg.to_string();
+pub fn secured_user(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return proc_macro::TokenStream::from(
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[secured_user] takes no arguments",
+            )
+            .to_compile_error(),
+        );
+    }
 
     let smart_contract_method = match parse::<ImplItemFn>(item) {
         Ok(syntax_tree) => syntax_tree,
         Err(err) => return proc_macro::TokenStream::from(err.to_compile_error()),
     };
 
-    impl_smart_contract_secured_macro(arg.value(), smart_contract_method)
+    impl_smart_contract_secured_macro(SecuredPurpose::Execution, smart_contract_method)
+}
+
+/// Requires `Management` only. Takes no arguments — same `Runtime::org()`
+/// based org resolution as [`secured_user`], just a stricter purpose check.
+/// See [`impl_smart_contract_secured_macro`].
+#[proc_macro_attribute]
+pub fn secured_admin(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return proc_macro::TokenStream::from(
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[secured_admin] takes no arguments",
+            )
+            .to_compile_error(),
+        );
+    }
+
+    let smart_contract_method = match parse::<ImplItemFn>(item) {
+        Ok(syntax_tree) => syntax_tree,
+        Err(err) => return proc_macro::TokenStream::from(err.to_compile_error()),
+    };
+
+    impl_smart_contract_secured_macro(SecuredPurpose::Management, smart_contract_method)
 }
 
 #[proc_macro_attribute]

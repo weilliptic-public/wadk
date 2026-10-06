@@ -47,7 +47,9 @@ use serde_json::{Value, json};
 use std::{future::Future, sync::Arc};
 use streaming::ByteStream;
 use tokio::sync::{Mutex, Semaphore};
-use transaction::{value_to_btreemap, BaseTransaction, TransactionHeader, TransactionResult};
+use transaction::{
+    value_to_btreemap, BaseTransaction, OrgContext, TransactionHeader, TransactionResult,
+};
 use utils::{current_time_millis, hash_sha256};
 use wallet::{S3Credentials, SelectedAccount, Wallet};
 
@@ -788,10 +790,12 @@ impl WeilContractClient {
             let from_addr = Arc::new(wallet.get_address().to_string());
             let to_addr = from_addr.clone();
             let public_key_hex = hex::encode(wallet.get_public_key().serialize());
-            (
-                wallet.clone(),
-                TransactionHeader::new(nonce, public_key_hex, from_addr, to_addr, weilpod_counter),
-            )
+            let mut header =
+                TransactionHeader::new(nonce, public_key_hex, from_addr, to_addr, weilpod_counter);
+            // Stamp the wallet's active org before signing — org is part of
+            // the digest, so this must happen ahead of `sign_execute_args`.
+            header.set_org(wallet.org().map(OrgContext::from));
+            (wallet.clone(), header)
         };
 
         let signature = if is_remote {
@@ -816,7 +820,7 @@ impl WeilContractClient {
         txn_header: &TransactionHeader,
         args: &ExecuteArgs,
     ) -> serde_json::Value {
-        json!({
+        let mut payload = json!({
             "nonce": txn_header.nonce,
             "from_addr": txn_header.from_addr,
             "to_addr": txn_header.to_addr,
@@ -828,7 +832,20 @@ impl WeilContractClient {
                 "contract_input_bytes": args.contract_input_bytes,
                 "should_hide_args": args.should_hide_args
             }
-        })
+        });
+
+        // `org` is included **only when present**, mirroring the node's
+        // `compute_verify_digest_for_execute`. This conditionality is what
+        // preserves compatibility: a wallet with no active org produces the
+        // exact bytes it did before org existed, so transactions signed by
+        // older clients still verify. Emitting `"org": null` unconditionally
+        // would change the digest for every org-less transaction and break
+        // them all at once.
+        if let Some(org) = &txn_header.org {
+            payload["org"] = json!(org);
+        }
+
+        payload
     }
 
     fn sign_execute_args(
@@ -891,6 +908,10 @@ impl WeilContractClient {
                     weilpod_counter: txn.header.weilpod_counter,
                     creation_time: current_time_millis() as u64,
                     salt: txn.header.salt.clone(),
+                    // Must be carried across verbatim: the signature covers
+                    // this, so dropping it here would make the node recompute
+                    // a different digest and reject the transaction.
+                    org: txn.header.org.clone(),
                 },
                 verifier: Verifier {
                     ty: "DefaultVerifier".to_string(),

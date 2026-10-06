@@ -9,6 +9,7 @@ import (
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/api"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/contract"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/wallet"
 )
 
 // WeilContractClient is a per-contract view over a WeilClient.
@@ -36,6 +37,28 @@ type NonceFailureResponse struct {
 	ReceivedNonce uint32 `json:"received_nonce"`
 	Message       string `json:"message"`
 	Status        string `json:"status"`
+}
+
+// orgContext maps the wallet-file OrgInfo onto the wire shape the node expects.
+//
+// Purpose is intentionally dropped — it is advisory metadata resolved from the
+// Identity contract at runtime, not part of the signed claim. An empty subgroup
+// is normalized to nil so org-level membership always produces one digest,
+// never two.
+func orgContext(info *wallet.OrgInfo) *transaction.OrgContext {
+	if info == nil {
+		return nil
+	}
+
+	subgroup := info.Subgroup
+	if subgroup != nil && *subgroup == "" {
+		subgroup = nil
+	}
+
+	return &transaction.OrgContext{
+		Org:      info.Name,
+		Subgroup: subgroup,
+	}
 }
 
 // Execute calls the named method on the bound contract and returns the
@@ -72,7 +95,9 @@ func (w *WeilContractClient) Execute(methodName string, methodArgs string, shoul
 	}
 
 	nonce := int(time.Now().UnixMilli())
-	txnHeader := transaction.NewTransactionHeader(nonce, publicKeyHex, fromAddr, toAddr, weilpodCounter)
+	// Stamp the wallet's active org before signing — org is part of the
+	// digest, so it must be set ahead of SignExecuteArgs.
+	txnHeader := transaction.NewTransactionHeader(nonce, publicKeyHex, fromAddr, toAddr, weilpodCounter, orgContext(w.client.wallet.Org()))
 
 	signature, err := w.SignExecuteArgs(txnHeader, args)
 
@@ -110,6 +135,20 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 		},
 	}
 
+	// `org` is included **only when present**, mirroring the node's
+	// compute_verify_digest_for_execute. This conditionality preserves
+	// compatibility: a wallet with no active org produces exactly the bytes it
+	// did before org existed, so already-signed transactions still verify.
+	// Writing a nil org unconditionally would change the digest for every
+	// org-less transaction at once.
+	//
+	// Key placement does not matter here — this stays a map[string]interface{},
+	// and encoding/json sorts map keys, which is what matches the node's
+	// BTreeMap. Promoting this literal to a struct would silently break that.
+	if txnHeader.Org != nil {
+		jsonPayload["org"] = txnHeader.Org
+	}
+
 	jsonPayloadBtreemap := transaction.ValueToBtreeMap(jsonPayload)
 	jsonPayloadJson, err := transaction.BtreeMapToJson(jsonPayloadBtreemap)
 
@@ -145,6 +184,7 @@ func (w WeilContractClient) SubmitSignedArgs(signature string, txn *transaction.
 				signature,
 				txn.Header.WeilpodCounter,
 				txn.Header.Salt,
+				txn.Header.Org,
 			),
 			Verifier: &api.Verifier{
 				Ty: "DefaultVerifier",

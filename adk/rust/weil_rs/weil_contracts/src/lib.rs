@@ -1,4 +1,3 @@
-pub mod claims_management;
 pub mod fungible;
 pub mod identity;
 pub mod non_fungible;

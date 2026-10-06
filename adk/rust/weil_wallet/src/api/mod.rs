@@ -38,7 +38,7 @@ impl PlatformApi {
         let response = request.send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::Error::msg("failed to submit the transaction"));
+            return Err(anyhow::Error::msg(format!("failed to submit the transaction: {:?}", response.text().await?)));
         }
 
         Ok(response)

@@ -1,0 +1,14 @@
+[package]
+name = "weilstream-sdk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+weilstream_core = { path = "../core" }
+weil_rs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+weil_wallet = { workspace = true }
+anyhow = { workspace = true }
+rustc-hash = { workspace = true }
+tokio = { workspace = true }

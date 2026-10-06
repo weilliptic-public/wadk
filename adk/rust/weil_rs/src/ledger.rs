@@ -7,6 +7,7 @@
 //! - [`Ledger::balance_for`] — fetch a single token balance by symbol
 //! - [`Ledger::transfer`] — transfer a token amount between addresses
 //! - [`Ledger::mint`] — mint new tokens to an address
+//! - [`Ledger::burn`] — burn tokens from an account
 //!
 //! Internally, each helper serializes its call arguments as JSON and invokes the
 //! appropriate Ledger method via [`Runtime::call_contract`], resolving the
@@ -140,6 +141,45 @@ impl Ledger {
         Runtime::call_contract::<()>(
             Runtime::ledger_contract_id(),
             "mint".to_string(),
+            Some(serialized_args),
+        )?;
+
+        Ok(())
+    }
+
+    /// Burn `amount` of token `symbol` from `account`.
+    ///
+    /// Decreases the balance of `account` for the given token by `amount`. This is a
+    /// side-effecting call; the Ledger contract performs the balance check and update.
+    /// Callers (e.g. the FT contract) should ensure the account has sufficient balance
+    /// before invoking this method.
+    ///
+    /// # Arguments
+    /// * `symbol` — token symbol (e.g., `"USDC"`)
+    /// * `account` — address whose balance to decrease
+    /// * `amount` — amount to burn
+    ///
+    /// # Returns
+    /// `Ok(())` on success. Returns an error if the Ledger call fails (e.g. insufficient
+    /// balance or invalid symbol).
+    pub fn burn(symbol: String, account: String, amount: u64) -> Result<()> {
+        #[derive(Debug, Serialize)]
+        struct LedgerBurnMethodArgs {
+            symbol: String,
+            account: String,
+            amount: u64,
+        }
+
+        let serialized_args = serde_json::to_string(&LedgerBurnMethodArgs {
+            symbol,
+            account,
+            amount,
+        })
+        .unwrap();
+
+        Runtime::call_contract::<()>(
+            Runtime::ledger_contract_id(),
+            "burn".to_string(),
             Some(serialized_args),
         )?;
 

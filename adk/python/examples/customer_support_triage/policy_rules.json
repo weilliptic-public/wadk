@@ -1,0 +1,45 @@
+{
+  "team_routing": {
+    "billing": "billing_team",
+    "technical": "tech_support",
+    "bug": "engineering",
+    "feature_request": "product_team",
+    "account": "account_management",
+    "how_to": "tech_support",
+    "other": "tech_support"
+  },
+  "escalation_triggers": [
+    "chargeback",
+    "lawsuit",
+    "legal",
+    "downtime",
+    "locked out",
+    "entire team",
+    "security breach",
+    "data loss",
+    "crash",
+    "cannot integrate"
+  ],
+  "agent_limits": {
+    "resolver": {
+      "max_refund": 500.0,
+      "max_credit": 200.0,
+      "max_fee_waiver": 50.0,
+      "min_confidence": 0.5,
+      "allowed_actions": ["issue_refund", "grant_credit", "waive_fee", "send_response", "escalate"],
+      "requires_human_above": {"refund": 500.0, "credit": 200.0, "fee_waiver": 50.0}
+    },
+    "router": {
+      "can_approve": false,
+      "can_route": true
+    },
+    "intake": {
+      "can_approve": false,
+      "can_route": false
+    },
+    "categorizer": {
+      "can_approve": false,
+      "can_route": false
+    }
+  }
+}

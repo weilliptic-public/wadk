@@ -39,6 +39,11 @@ public class SubmitTxnRequest {
         txnHeader.put("signature", h.getSignature());
         txnHeader.put("weilpod_counter", h.getWeilpodCounter());
         txnHeader.put("creation_time", h.getCreationTime());
+        txnHeader.put("salt", h.getSalt());
+        // Covered by the signature — the node rebuilds the digest from what
+        // actually arrives, so omitting this would make every org-bearing
+        // transaction fail verification.
+        txnHeader.put("org", h.getOrg() != null ? h.getOrg().toMap() : null);
 
         Map<String, Object> verifier = new LinkedHashMap<>();
         verifier.put("type", txn.getVerifier().getType());

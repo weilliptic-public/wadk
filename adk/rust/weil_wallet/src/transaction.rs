@@ -17,6 +17,42 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 
+/// The organization context a transaction is signed under.
+///
+/// Carried in the signed header and surfaced to applets as `Runtime::org()`,
+/// so an applet can scope itself to the caller's org without taking one as a
+/// method argument.
+///
+/// # Wire shape is load-bearing
+///
+/// This must serialize *exactly* as the node's `OrgContext` does — field names
+/// `org`/`subgroup`, and `subgroup: null` when absent rather than omitted.
+/// The signature is a SHA-256 over key-sorted JSON that both sides rebuild
+/// independently, so a skipped field or a renamed key changes the digest and
+/// the node rejects the transaction with "Verification failed".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OrgContext {
+    /// Organization identity name, e.g. `"weil"`.
+    pub org: String,
+    /// Subgroup within the organization, e.g. `"engg"`. `None` at org level.
+    /// Deliberately **not** `skip_serializing_if` — see the note above.
+    pub subgroup: Option<String>,
+}
+
+impl From<&crate::wallet::OrgInfo> for OrgContext {
+    /// Maps the wallet-file view of a membership onto the wire shape the node
+    /// expects. `purpose` is intentionally dropped — it is advisory metadata
+    /// resolved from the Identity contract at runtime, not part of the claim.
+    fn from(info: &crate::wallet::OrgInfo) -> Self {
+        OrgContext {
+            org: info.name.clone(),
+            // Normalize `Some("")` to `None`: an empty subgroup means
+            // org-level, and the two must not produce different digests.
+            subgroup: info.subgroup.clone().filter(|s| !s.is_empty()),
+        }
+    }
+}
+
 /// Immutable transaction header (except for the optional signature).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TransactionHeader {
@@ -34,6 +70,17 @@ pub(crate) struct TransactionHeader {
     pub weilpod_counter: i32,
     /// Creation timestamp in **ms** since UNIX epoch.
     pub creation_time: u64,
+    /// Random UUIDv4. Covered by the signature (see `sign_execute_args`) and
+    /// mixed into the node's `get_txn_id()`, so two transactions never
+    /// collide on id even if nonce happens to match.
+    pub salt: String,
+    /// Organization the signing wallet is acting under, or `None` when it has
+    /// no active org. Covered by the signature (see `execute_payload`).
+    ///
+    /// `serde(default)` keeps payloads from older nodes/clients — which omit
+    /// the key entirely — deserializable.
+    #[serde(default)]
+    pub org: Option<OrgContext>,
 }
 
 impl TransactionHeader {
@@ -55,7 +102,16 @@ impl TransactionHeader {
             signature: None,
             weilpod_counter,
             creation_time: current_time_millis() as u64,
+            salt: uuid::Uuid::new_v4().to_string(),
+            org: None,
         }
+    }
+
+    /// Sets the org context. Must be called **before** signing — org is part
+    /// of the signed digest, so changing it afterwards invalidates the
+    /// signature.
+    pub fn set_org(&mut self, org: Option<OrgContext>) {
+        self.org = org
     }
 
     /// Attach a hex-encoded signature to the header.

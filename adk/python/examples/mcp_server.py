@@ -26,7 +26,7 @@ mcp = FastMCP("my-server")
 
 
 @mcp.tool()
-@secured("engg.weil")
+@secured("engg::weil")
 async def search(query: str) -> str:
     """Search tool guarded by the ``engg.weil`` on-chain access policy.
 

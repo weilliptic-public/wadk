@@ -20,7 +20,7 @@ resolver = "2"
 weil_rs        = { path = "../../adk/rust/weil_rs/" }
 weil_contracts = { path = "../../adk/rust/weil_rs/weil_contracts" }
 weil_macros    = { path = "../../adk/rust/weil_rs/weil_macros" }
-weil_wallet    = { path = "../../adk/rust/weil_rs/weil_wallet" }
+weil_wallet    = { path = "../../adk/rust/weil_wallet" }
 
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["raw_value"] }

@@ -12,7 +12,8 @@ from .derived_wallet import (
 from .errors import InvalidContractIdError, WalletNotPermittedError
 from .streaming import ByteStream
 from .transaction import BaseTransaction, TransactionResult, TransactionStatus, TransactionHeader
-from .wallet import PrivateKey, Wallet, SelectedAccount
+from .wallet import OrgInfo, OrgMembership, SelectedAccount, Wallet
+from .secure_wallet import harden_process
 
 __all__ = [
     "WeilClient",
@@ -26,9 +27,11 @@ __all__ = [
     "TransactionResult",
     "TransactionStatus",
     "TransactionHeader",
-    "PrivateKey",
-    "Wallet",
+    "OrgInfo",
+    "OrgMembership",
     "SelectedAccount",
+    "Wallet",
+    "harden_process",
     "MnemonicWallet",
     "WalletAccount",
     "create_wallet",

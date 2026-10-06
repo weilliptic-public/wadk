@@ -1,0 +1,12 @@
+[package]
+name = "weilstream_core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+weil_macros = { workspace = true }
+weil_rs = { workspace = true }
+
+serde = { workspace = true }
+hex = { workspace = true }
+sha3 = { workspace = true }

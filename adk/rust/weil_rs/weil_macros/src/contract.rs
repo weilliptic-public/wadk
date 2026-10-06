@@ -730,28 +730,107 @@ pub fn impl_smart_contract_query_macro(
     impl_smart_contract_method_macro(smart_contract_query_method)
 }
 
+/// Which `KeyPurpose` `#[secured_user]`/`#[secured_admin]` requires.
+/// `Management` is treated as a superset of `Execution` (an org admin can
+/// do anything a regular member can), so there are only two distinct
+/// outcomes, not three: requiring `Execution` accepts either purpose;
+/// requiring `Management` accepts only `Management` and rejects an
+/// `Execution`-only caller.
+pub enum SecuredPurpose {
+    /// `#[secured_user]` — accepts `Execution` or `Management`.
+    Execution,
+    /// `#[secured_admin]` — accepts `Management` only.
+    Management,
+}
+
+/// `#[secured_user]`/`#[secured_admin]` take no arguments — the organization
+/// to check is resolved at runtime from `Runtime::org()`, never fixed at
+/// compile time, never read from deploy metadata, and never passed as a
+/// method argument.
+///
+/// `Runtime::org()` returns the org the calling wallet signed this
+/// transaction under, carried in the transaction header. One compiled `.wasm`
+/// therefore serves every org at once and decides which on each call — the
+/// multi-tenant case (e.g. `codensics`) — while a single-org applet needs no
+/// configuration at all. Nothing about the org appears in the method
+/// signature, the WIDL, the contract state, or the constructor.
+///
+/// # Why a signed claim is enough to select, but never to authorize
+///
+/// The org is covered by the transaction signature, so it cannot be forged or
+/// altered in transit — but the wallet holder chose it. It says which org the
+/// caller *intends* to act in, not that they belong to it.
+///
+/// That distinction is what keeps this safe: the claim only picks which
+/// Identity applet to interrogate, and the purpose check below is what
+/// actually grants access. Claiming an org you are not in resolves to an
+/// Identity applet holding no key for you; claiming a subgroup you are not in
+/// yields a `<sub_group>_<wallet>` key that does not exist. Either way you are
+/// denied, so a caller can never widen their reach by lying.
+///
+/// Hard error if the transaction carries no org — no silent fallback to a
+/// default org: an org-scoped check that resolves to nothing is a bug, not a
+/// default to paper over.
 pub fn impl_smart_contract_secured_macro(
-    arg_str: String,
+    purpose: SecuredPurpose,
     smart_contract_method: ImplItemFn,
 ) -> proc_macro::TokenStream {
     let mut curr_block = smart_contract_method.block.clone();
 
+    // Sets the `group`/`sub_group` locals every check below is written
+    // against. Both come from `Runtime::org()` — the organization the calling
+    // wallet signed this transaction under — and from nowhere else: not from a
+    // method argument, and not from this deployment's `--organization`
+    // metadata. One applet can therefore serve many orgs, deciding per call,
+    // without any org parameter appearing in its WIDL.
+    //
+    // `Runtime::org()` is authenticated but self-declared. It is covered by
+    // the transaction signature, so it cannot be forged or altered in transit,
+    // yet the wallet holder still chose the value — it states which org the
+    // caller *intends* to act in, not that they belong to it. That is exactly
+    // enough to pick which Identity applet to interrogate, and never enough to
+    // grant access on its own; the membership proof is the purpose check
+    // against `identity::<group>` further down.
+    //
+    // A caller cannot widen their reach by lying here. Claiming an org they
+    // are not in resolves to an Identity applet holding no key for them;
+    // claiming a subgroup they do not belong to yields a `<sub_group>_<wallet>`
+    // key that does not exist. Either way the purpose check denies them.
+    let group_sub_group_prelude: TokenStream = quote! {
+        let __secured_org = match weil_rs::runtime::Runtime::org() {
+            Some(org) => org,
+            None => {
+                return Err(
+                    "secured: no organization context on this transaction — the signing \
+                     wallet has no active org (run `wallet link-org`, then \
+                     `wallet select-org --org <org>`)"
+                        .to_string(),
+                )
+            }
+        };
+        let group: String = __secured_org.org.clone();
+        // `None` and `Some("")` both mean org-level, and both must land on the
+        // empty string: the branch below keys off `sub_group.is_empty()` to
+        // choose between the org-level and subgroup-scoped purpose checks.
+        let sub_group: String = __secured_org.subgroup.clone().unwrap_or_default();
+    };
+
+    let purpose_check: TokenStream = match purpose {
+        SecuredPurpose::Execution => quote! {
+            if !__secured_has_exec_purpose && !__secured_has_manager_purpose {
+                return Err("sender address not authorized".to_string());
+            }
+        },
+        SecuredPurpose::Management => quote! {
+            if !__secured_has_manager_purpose {
+                return Err("sender address not authorized: Management required".to_string());
+            }
+        },
+    };
+
     let stream = quote! {
         {
-            let items = #arg_str.split(".").collect::<Vec<&str>>();
-            /*
-            basically the last item in the above array will be the root group
-            we need to get the sub groups and make the subgroup prexix by concatenating with "_"
-            like if arg_str is devops.engg.weil
-            our root group will be weil and subgroup will be devops_engg
-            if there is no subdomain and arg_str is just weil then subgroup will be empty string and root group will be weil
-            */
-            let group = items.last().unwrap();
-            let sub_group = if items.len() > 1 {
-                items[..items.len() - 1].join("_")
-            } else {
-                "".to_string()
-            };
+            #group_sub_group_prelude
 
             let identity_contract_name = format!("identity::{}", group);
             let identity_addr = weil_rs::runtime::Runtime::contract_id_for_name(&identity_contract_name).map_err(|err| err.to_string())?;
@@ -778,44 +857,140 @@ pub fn impl_smart_contract_secured_macro(
             };
 
             let addr = weil_rs::runtime::Runtime::origin();
-            let qualified_addr = match sub_group.as_str() {
-                "" => addr,
-                _ => format!("{}_{}", sub_group, addr),
+
+            // Two modes, chosen by whether the caller's `Runtime::org()`
+            // named a subgroup:
+            //
+            // - Org level (`sub_group` empty — the wallet's active org has no
+            //   subgroup) — most such callers hold a plain, bare-org key
+            //   (`<wallet>`, no subgroup prefix), so try the cheap O(1)
+            //   `key_has_purpose` check against the bare wallet address
+            //   first, per purpose. Only a purpose that the bare key does NOT
+            //   already grant falls back to the O(N) `get_keys_by_purpose`
+            //   scan (already unpartitioned on `key_manager_addr` — same
+            //   address resolved above), which accepts the caller if their
+            //   wallet appears as a `_<wallet>` suffix of any entry, i.e. any
+            //   subgroup at all. This keeps the common bare-key case at O(1)
+            //   while still correctly authorizing a member who only holds a
+            //   subgroup key but is acting at org level.
+            // - Explicit subgroup (`sub_group` non-empty — the wallet's
+            //   active org selected one) — the caller is acting as that
+            //   subgroup specifically, so do the cheaper O(1) single-key
+            //   check against exactly that qualified key. A caller who names
+            //   a subgroup they do not hold a key for is rejected here, which
+            //   is what stops the self-declared subgroup from being a way to
+            //   claim access rather than merely scope it.
+            let (__secured_has_exec_purpose, __secured_has_manager_purpose) = if sub_group.is_empty() {
+                fn __secured_wallet_has_purpose(keys: &[String], wallet: &str) -> bool {
+                    let suffix = format!("_{}", wallet);
+                    keys.iter().any(|k| k == wallet || k.ends_with(&suffix))
+                }
+
+                #[derive(Serialize)]
+                struct KeyPurposeArgs {
+                    key: String,
+                    purpose: weil_contracts::key_management::KeyPurpose,
+                }
+
+                #[derive(Serialize)]
+                struct PurposeArgs {
+                    purpose: weil_contracts::key_management::KeyPurpose,
+                }
+
+                let bare_exec_args = KeyPurposeArgs {
+                    key: addr.clone(),
+                    purpose: weil_contracts::key_management::KeyPurpose::Execution,
+                };
+                let bare_has_exec = weil_rs::runtime::Runtime::call_contract::<bool>(
+                    key_manager_addr.clone(),
+                    "key_has_purpose".to_string(),
+                    Some(serde_json::to_string(&bare_exec_args).unwrap()),
+                )
+                .map_err(|err| err.to_string())?;
+
+                let bare_manager_args = KeyPurposeArgs {
+                    key: addr.clone(),
+                    purpose: weil_contracts::key_management::KeyPurpose::Management,
+                };
+                let bare_has_manager = weil_rs::runtime::Runtime::call_contract::<bool>(
+                    key_manager_addr.clone(),
+                    "key_has_purpose".to_string(),
+                    Some(serde_json::to_string(&bare_manager_args).unwrap()),
+                )
+                .map_err(|err| err.to_string())?;
+
+                let has_exec = if bare_has_exec {
+                    true
+                } else {
+                    let exec_keys = weil_rs::runtime::Runtime::call_contract::<Vec<String>>(
+                        key_manager_addr.clone(),
+                        "get_keys_by_purpose".to_string(),
+                        Some(
+                            serde_json::to_string(&PurposeArgs {
+                                purpose: weil_contracts::key_management::KeyPurpose::Execution,
+                            })
+                            .unwrap(),
+                        ),
+                    )
+                    .map_err(|err| err.to_string())?;
+                    __secured_wallet_has_purpose(&exec_keys, &addr)
+                };
+
+                let has_manager = if bare_has_manager {
+                    true
+                } else {
+                    let manager_keys = weil_rs::runtime::Runtime::call_contract::<Vec<String>>(
+                        key_manager_addr,
+                        "get_keys_by_purpose".to_string(),
+                        Some(
+                            serde_json::to_string(&PurposeArgs {
+                                purpose: weil_contracts::key_management::KeyPurpose::Management,
+                            })
+                            .unwrap(),
+                        ),
+                    )
+                    .map_err(|err| err.to_string())?;
+                    __secured_wallet_has_purpose(&manager_keys, &addr)
+                };
+
+                (has_exec, has_manager)
+            } else {
+                let qualified_addr = format!("{}_{}", sub_group, addr);
+
+                #[derive(Serialize)]
+                struct Args {
+                    key: String,
+                    purpose: weil_contracts::key_management::KeyPurpose,
+                }
+
+                let exec_args = Args {
+                    key: qualified_addr.clone(),
+                    purpose: weil_contracts::key_management::KeyPurpose::Execution,
+                };
+
+                let has_exec = weil_rs::runtime::Runtime::call_contract::<bool>(
+                    key_manager_addr.clone(),
+                    "key_has_purpose".to_string(),
+                    Some(serde_json::to_string(&exec_args).unwrap()),
+                )
+                .map_err(|err| err.to_string())?;
+
+                let manager_args = Args {
+                    key: qualified_addr,
+                    purpose: weil_contracts::key_management::KeyPurpose::Management,
+                };
+
+                let has_manager = weil_rs::runtime::Runtime::call_contract::<bool>(
+                    key_manager_addr,
+                    "key_has_purpose".to_string(),
+                    Some(serde_json::to_string(&manager_args).unwrap()),
+                )
+                .map_err(|err| err.to_string())?;
+
+                (has_exec, has_manager)
             };
 
-            #[derive(Serialize)]
-            struct Args {
-                key: String,
-                purpose: weil_contracts::key_management::KeyPurpose,
-            }
-
-            let exec_args = Args {
-                key: qualified_addr.clone(),
-                purpose: weil_contracts::key_management::KeyPurpose::Execution,
-            };
-
-            let has_exec_purpose = weil_rs::runtime::Runtime::call_contract::<bool>(
-                key_manager_addr.clone(),
-                "key_has_purpose".to_string(),
-                Some(serde_json::to_string(&exec_args).unwrap()),
-            )
-            .map_err(|err| err.to_string())?;
-
-            let manager_args = Args {
-                key: qualified_addr,
-                purpose: weil_contracts::key_management::KeyPurpose::Management,
-            };
-
-            let has_manager_purpose = weil_rs::runtime::Runtime::call_contract::<bool>(
-                key_manager_addr,
-                "key_has_purpose".to_string(),
-                Some(serde_json::to_string(&manager_args).unwrap()),
-            )
-            .map_err(|err| err.to_string())?;
-
-            if !has_exec_purpose && !has_manager_purpose {
-                return Err("sender address not authorized".to_string());
-            }
+            #purpose_check
         }
     };
 

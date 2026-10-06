@@ -1,0 +1,12 @@
+[package]
+name = "api_client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+weil_wallet = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+weilstream-sdk = { path = "../../weilstream-sdk" }

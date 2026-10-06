@@ -18,28 +18,26 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
-from weil_wallet import PrivateKey, Wallet, WeilClient
+from weil_wallet import Wallet, WeilClient
 from weil_ai.auth import build_auth_headers
 
 MCP_SERVER_URL = "http://localhost:8001/mcp"
 
 
-def create_weil_client() -> tuple[Wallet, WeilClient]:
-    """Load private key from .wc file and return the Wallet alongside a WeilClient."""
+def create_weil_client() -> WeilClient:
+    """Load wallet export file and return a WeilClient."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
     for candidate in (
-        os.path.join(script_dir, "private_key.wc"),
-        "private_key.wc",
-        os.path.join(os.path.dirname(script_dir), "private_key.wc"),
+        os.path.join(script_dir, "wallet.wc"),
+        "wallet.wc",
+        os.path.join(os.path.dirname(script_dir), "wallet.wc"),
     ):
         if os.path.isfile(candidate):
-            pk = PrivateKey.from_file(candidate)
-            wallet = Wallet(pk)
-
+            wallet = Wallet.from_account_export_file(candidate)
             return WeilClient(wallet)
     raise FileNotFoundError(
-        "private_key.wc not found. Place it in examples/, python/, or cwd."
+        "wallet.wc not found. Place it in examples/, python/, or cwd."
     )
 
 

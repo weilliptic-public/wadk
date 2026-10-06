@@ -9,6 +9,7 @@ import (
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/api"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/contract"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
+	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/wallet"
 )
 
 // WeilContractClient is a per-contract view over a WeilClient.
@@ -38,6 +39,28 @@ type NonceFailureResponse struct {
 	Status        string `json:"status"`
 }
 
+// orgContext maps the wallet-file OrgInfo onto the wire shape the node expects.
+//
+// Purpose is intentionally dropped — it is advisory metadata resolved from the
+// Identity contract at runtime, not part of the signed claim. An empty subgroup
+// is normalized to nil so org-level membership always produces one digest,
+// never two.
+func orgContext(info *wallet.OrgInfo) *transaction.OrgContext {
+	if info == nil {
+		return nil
+	}
+
+	subgroup := info.Subgroup
+	if subgroup != nil && *subgroup == "" {
+		subgroup = nil
+	}
+
+	return &transaction.OrgContext{
+		Org:      info.Name,
+		Subgroup: subgroup,
+	}
+}
+
 // Execute calls the named method on the bound contract and returns the
 // transaction result. It builds and signs the transaction header, then
 // submits it via the platform API.
@@ -48,8 +71,12 @@ type NonceFailureResponse struct {
 //   - isNonBlocking: when true the platform responds immediately without
 //     waiting for the transaction to be finalized.
 func (w *WeilContractClient) Execute(methodName string, methodArgs string, shouldHideArgs bool, isNonBlocking bool) (*transaction.TransactionResult, error) {
-	publicKey := w.client.activePublicKey()
-	fromAddr := w.client.activeAddress()
+	// Snapshot wallet state under the mutex so we don't hold it during network I/O.
+	w.client.walletMu.Lock()
+	publicKey := w.client.wallet.GetPublicKey()
+	fromAddr := w.client.wallet.GetAddress()
+	w.client.walletMu.Unlock()
+
 	toAddr := fromAddr
 	contractId := w.contractId
 	weilpodCounter, err := contract.PodCounter(contractId)
@@ -68,7 +95,9 @@ func (w *WeilContractClient) Execute(methodName string, methodArgs string, shoul
 	}
 
 	nonce := int(time.Now().UnixMilli())
-	txnHeader := transaction.NewTransactionHeader(nonce, publicKeyHex, fromAddr, toAddr, weilpodCounter)
+	// Stamp the wallet's active org before signing — org is part of the
+	// digest, so it must be set ahead of SignExecuteArgs.
+	txnHeader := transaction.NewTransactionHeader(nonce, publicKeyHex, fromAddr, toAddr, weilpodCounter, orgContext(w.client.wallet.Org()))
 
 	signature, err := w.SignExecuteArgs(txnHeader, args)
 
@@ -96,6 +125,7 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 		"nonce":     txnHeader.Nonce,
 		"from_addr": txnHeader.FromAddr,
 		"to_addr":   txnHeader.ToAddr,
+		"salt":      txnHeader.Salt,
 		"user_txn": map[string]any{
 			"type":                 "SmartContractExecutor",
 			"contract_address":     args.ContractAddress,
@@ -105,6 +135,20 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 		},
 	}
 
+	// `org` is included **only when present**, mirroring the node's
+	// compute_verify_digest_for_execute. This conditionality preserves
+	// compatibility: a wallet with no active org produces exactly the bytes it
+	// did before org existed, so already-signed transactions still verify.
+	// Writing a nil org unconditionally would change the digest for every
+	// org-less transaction at once.
+	//
+	// Key placement does not matter here — this stays a map[string]interface{},
+	// and encoding/json sorts map keys, which is what matches the node's
+	// BTreeMap. Promoting this literal to a struct would silently break that.
+	if txnHeader.Org != nil {
+		jsonPayload["org"] = txnHeader.Org
+	}
+
 	jsonPayloadBtreemap := transaction.ValueToBtreeMap(jsonPayload)
 	jsonPayloadJson, err := transaction.BtreeMapToJson(jsonPayloadBtreemap)
 
@@ -112,7 +156,9 @@ func (w WeilContractClient) SignExecuteArgs(txnHeader *transaction.TransactionHe
 		return nil, err
 	}
 
-	signature, err := w.client.sign(jsonPayloadJson)
+	w.client.walletMu.Lock()
+	signature, err := w.client.wallet.Sign(jsonPayloadJson)
+	w.client.walletMu.Unlock()
 
 	if err != nil {
 		return nil, err
@@ -137,6 +183,8 @@ func (w WeilContractClient) SubmitSignedArgs(signature string, txn *transaction.
 				txn.Header.ToAddr,
 				signature,
 				txn.Header.WeilpodCounter,
+				txn.Header.Salt,
+				txn.Header.Org,
 			),
 			Verifier: &api.Verifier{
 				Ty: "DefaultVerifier",

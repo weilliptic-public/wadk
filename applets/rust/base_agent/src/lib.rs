@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use weil_macros::{WeilType, constructor, mutate, query, secured, smart_contract};
+use weil_macros::{WeilType, constructor, query, smart_contract};
 use weil_rs::runtime::Runtime;
 use weil_rs::ai::agents::{base::BaseAgentHelper, Model};
 
@@ -53,12 +53,20 @@ impl BaseAgent for BaseAgentContractState {
             Runtime::contract_id_for_name(BASE_AGENT_HELPER_NAME).unwrap();
         let base_agent_helper = BaseAgentHelper::new(base_agent_helper_address);
 
+        // Argument order follows `BaseAgentHelper::run_task`: the MCP
+        // addresses and their server names come first, the prompt last.
+        // `mcp_contract_addresses` is a Vec, so the single address held in
+        // state is wrapped rather than passed bare.
         let res = base_agent_helper
             .run_task(
-                task_prompt,
-                self.mcp_contract_address.clone(),
+                vec![self.mcp_contract_address.clone()],
+                // No server names: this applet's state carries only an MCP
+                // address. If the helper requires a name per address, add a
+                // `server_names` field to the state and pass it here.
+                vec![],
                 Model::GPT_5POINT1,
                 Some("<api_key>".to_string()),
+                task_prompt,
             )
             .map_err(|e| e.to_string())?;
 

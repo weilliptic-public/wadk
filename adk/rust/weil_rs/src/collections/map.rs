@@ -16,7 +16,7 @@ pub struct WeilMap<K, V> {
 impl<K, V> WeilMap<K, V> {
     /// Constructs a new empty `WeilMap<K, V>`.
     pub fn new(id: WeilId) -> Self {
-        WeilMap {
+        Self {
             state_id: id,
             phantom: PhantomData,
         }

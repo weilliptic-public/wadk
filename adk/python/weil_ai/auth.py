@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from typing import Callable, Optional
 
 import coincurve
 
@@ -26,7 +27,10 @@ from weil_wallet.wallet import Wallet
 MAX_TIMESTAMP_AGE_SECONDS: int = 300  # 5 minutes
 
 
-def build_auth_headers(wallet: Wallet) -> dict:
+def build_auth_headers(
+    wallet: Wallet,
+    signer: Optional[Callable[[bytes], str]] = None,
+) -> dict:
     """Build the four auth headers required by weil_middleware().
 
     Signs a canonical JSON payload of ``{"timestamp": <ts>}`` with the wallet
@@ -34,6 +38,9 @@ def build_auth_headers(wallet: Wallet) -> dict:
 
     Args:
         wallet: Signing wallet (holds the private key).
+        signer: Optional callable that takes the message bytes and returns a
+            hex signature. Defaults to ``wallet.sign`` (local signing). Pass
+            a Sentinel-backed signer for API-key wallets.
 
     Returns:
         Dict with keys ``X-Wallet-Address``, ``X-Signature``, ``X-Message``,
@@ -42,7 +49,8 @@ def build_auth_headers(wallet: Wallet) -> dict:
     timestamp = str(int(time.time()))
     args = {"timestamp": timestamp}
     json_str = json.dumps(args, separators=(",", ":"), sort_keys=True)
-    signature = wallet.sign(json_str.encode("utf-8"))
+    sign = signer or wallet.sign
+    signature = sign(json_str.encode("utf-8"))
     address = get_address_from_public_key(wallet.get_public_key())
 
     return {

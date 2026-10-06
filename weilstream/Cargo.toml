@@ -1,0 +1,18 @@
+[workspace]
+members = ["core", "weilstream-sdk", "bin/api_client"]
+resolver = "3"
+
+[workspace.dependencies]
+anyhow = "1.0.103"
+thiserror = "2.0.19"
+rustc-hash = "2.1.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1" }
+weil_rs = { path = "../adk/rust/weil_rs" }
+weil_macros = { path = "../adk/rust/weil_rs/weil_macros" }
+weil_contracts = { path = "../adk/rust/weil_rs/weil_contracts" }
+weilstream_core = { path = "./core" }
+hex = "0.4.3"
+sha3 = "0.12.0"
+weil_wallet = { path = "../adk/rust/weil_wallet" }
+tokio = { version = "1.53.1", features = ["full"] }

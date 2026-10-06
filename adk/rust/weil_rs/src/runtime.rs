@@ -82,6 +82,8 @@ extern "C" {
     fn list_contract_transactions(ptr: i32) -> i32;
     fn aggregate_contract_transactions(ptr: i32) -> i32;
     fn audit(audit_params: i32) -> i32;
+    fn write_stream(topic: i32, key: i32, val: i32);
+    fn read_stream_block(topic: i32, key: i32, offset_lo: i32, offset_hi: i32) -> i32;
 }
 
 /// Wrapper for returning an optional state and a success value from a contract call.
@@ -229,6 +231,85 @@ pub(crate) fn get_length_prefixed_bytes_from_string(payload: &str, is_error: u8)
 
     buffer
 }
+
+
+
+/// A single record in a stream-backed collection: the collection key
+/// that produced it (the SDK's `state_tree_key(&k)`) and the serialized
+/// value. Layout matches `w_db::io::segment::StreamRecord` byte for
+/// byte -- the on-disk representation is `bincode(StreamRecord)` -- so
+/// keep the field order and types identical.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamRecord {
+    pub key: String,
+    pub val: String,
+}
+
+/// One block served back to a stream reader.
+///
+/// `block` is the raw segment-block bytes starting at the record for
+/// the caller's offset: a concatenation of `<u64 be length><bincode(StreamRecord)>`
+/// frames, straight off disk. The SDK walks the framing itself so the
+/// host stays out of the per-record deserialization path.
+///
+/// `next_offset` is what the caller feeds into the next `read_stream_block`
+/// call (== `offset + records_in_block`).
+///
+/// `eof` goes true once the reader has caught up to the writer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamBatch {
+    pub block: Vec<u8>,
+    pub next_offset: u64,
+    pub eof: bool,
+}
+
+impl StreamBatch {
+    /// Walk the block's length-prefix frames and decode each record.
+    /// Errors surface as a panic in `next()` so a schema drift between
+    /// writer and reader fails loud rather than silent.
+    pub fn iter_records(&self) -> BlockRecordIter<'_> {
+        BlockRecordIter {
+            bytes: &self.block,
+            cursor: 0,
+        }
+    }
+}
+
+/// Iterator that walks the raw block bytes of a [`StreamBatch`],
+/// decoding each `bincode(StreamRecord)` frame in order.
+pub struct BlockRecordIter<'a> {
+    bytes: &'a [u8],
+    cursor: usize,
+}
+
+impl<'a> Iterator for BlockRecordIter<'a> {
+    type Item = StreamRecord;
+
+    fn next(&mut self) -> Option<StreamRecord> {
+        const PREFIX: usize = std::mem::size_of::<u64>();
+        if self.cursor + PREFIX > self.bytes.len() {
+            return None;
+        }
+        let mut len_bytes = [0u8; PREFIX];
+        len_bytes.copy_from_slice(&self.bytes[self.cursor..self.cursor + PREFIX]);
+        // Outer framing: big-endian u64 length prefix, matches
+        // `Buffer::write_usize` on the writer side.
+        let len = u64::from_be_bytes(len_bytes) as usize;
+        let start = self.cursor + PREFIX;
+        let end = start + len;
+        if end > self.bytes.len() {
+            return None;
+        }
+        self.cursor = end;
+        // Inner record: bincode2 encoding, matches `w_utils::serialize!`
+        // on the writer side.
+        let record: StreamRecord = bincode2::deserialize(&self.bytes[start..end])
+            .expect("stream record: failed to bincode-decode a StreamRecord frame");
+        Some(record)
+    }
+}
+
+
 
 /// `Memory` is used to provide type-safe APIs for implementing `Weil` Collections.
 ///
@@ -627,6 +708,58 @@ impl Memory {
 
                 None
             }
+        }
+    }
+
+    /// Append `(key, val)` to the segment log for `(topic, contract_id)`.
+    /// Buffered on the host side and flushed to the segment writer at the
+    /// same commit boundary as [`Runtime::set_state_and_result`].
+    pub fn write_stream<V: Serialize>(
+        topic: &str,
+        key: String,
+        val: V,
+    ) -> Result<(), String> {
+        validate_collection_key(&key)?;
+
+        let raw_topic = get_length_prefixed_bytes_from_string(topic, 0);
+        let raw_key = get_length_prefixed_bytes_from_string(&key, 0);
+        let raw_val = get_length_prefixed_bytes_from_result(Ok(val));
+
+        // SAFETY: All three buffers are valid length-prefixed byte slices in WASM memory.
+        unsafe {
+            write_stream(
+                raw_topic.as_ptr() as _,
+                raw_key.as_ptr() as _,
+                raw_val.as_ptr() as _,
+            )
+        };
+
+        Ok(())
+    }
+
+    /// Fetch one block from the segment log for `(topic, contract_id)`
+    /// starting at global record offset `offset`. Returns the serialized
+    /// [`StreamBatch`] (records in the block from `offset` onward, plus
+    /// the next offset to feed back in).
+    ///
+    /// Returns `None` when the reader is caught up (empty block, `eof`).
+    pub fn read_stream_block(topic: &str, key: &str, offset: u64) -> Option<StreamBatch> {
+        let raw_topic = get_length_prefixed_bytes_from_string(topic, 0);
+        let raw_key = get_length_prefixed_bytes_from_string(key, 0);
+        // Split u64 across two i32s; the host recombines using u32-safe
+        // sign extension. Signature stays i32-only to match every other
+        // host fn.
+        let lo = (offset & 0xffff_ffff) as u32 as i32;
+        let hi = ((offset >> 32) & 0xffff_ffff) as u32 as i32;
+        // SAFETY: `raw_topic` is a valid length-prefixed buffer; host returns a status/result pointer.
+        let ptr =
+            unsafe { read_stream_block(raw_topic.as_ptr() as _, raw_key.as_ptr() as _, lo, hi) };
+        match read_bytes_from_memory(ptr) {
+            Ok(buffer) => Some(serde_json::from_str::<StreamBatch>(&buffer).unwrap()),
+            Err(err) => panic!(
+                "panic occured while reading stream block topic=`{}` offset={} => {}",
+                topic, offset, err
+            ),
         }
     }
 }

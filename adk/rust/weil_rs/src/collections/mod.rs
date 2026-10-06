@@ -8,8 +8,6 @@ pub mod plottable;
 pub mod set;
 pub mod trie;
 pub mod vec;
-pub mod stream;
-
 
 /// Unique Identifier for a particular Weil Collection.
 ///

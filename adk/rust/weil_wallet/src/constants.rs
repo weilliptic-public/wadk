@@ -5,4 +5,3 @@ pub(crate) const SENTINEL_HOST: &str = "https://sentinel-local.weilliptic.ai";
 pub(crate) const SENTINEL_HOST: &str = "https://sentinel-dev.weilliptic.ai";
 #[cfg(not(any(feature = "local", feature = "staging")))]
 pub(crate) const SENTINEL_HOST: &str = "https://sentinel.weilliptic.ai";
-pub(crate) const DEFAULT_CONCURRENCY: usize = 64;

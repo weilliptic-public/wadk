@@ -16,6 +16,7 @@ dist/
 # Environment
 .env
 .env.*
+!.env.example
 
 # Test / lint caches
 .pytest_cache/

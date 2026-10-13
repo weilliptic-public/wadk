@@ -72,6 +72,31 @@ fn is_eq(ty: &Type, other: &str) -> bool {
     path.to_string() == other
 }
 
+/// Finds a method parameter whose type satisfies `type_matches`, returning
+/// its identifier. Used by `impl_smart_contract_secured_macro` to detect a
+/// `SecuredOrg`-typed parameter — a *type*-based which the WIDL author
+/// fully controls and this macro can't rely on that a method is multi-tenant
+/// org should be resolved from this call's own arguments, no this deployment's
+/// `--organization` metadata.
+fn find_typed_param(
+    inputs: &Punctuated<FnArg, Comma>,
+    type_matches: impl Fn(&Type) -> bool,
+) -> Option<Ident> {
+    inputs.iter().find_map(|arg| {
+        let FnArg::Typed(pat_ty) = arg else {
+            return None;
+        };
+        let Pat::Ident(pat_ident) = &*pat_ty.pat else {
+            return None;
+        };
+        if type_matches(&pat_ty.ty) {
+            Some(pat_ident.ident.clone())
+        } else {
+            None
+        }
+    })
+}
+
 fn ok_err_ty_from_result(ty: &Type) -> Option<(&Type, &Type)> {
     let Type::Path(ty) = ty else {
         return None;
@@ -303,7 +328,7 @@ fn try_method_call_or_return_control_flow(
                 let result = match weil_rs::runtime::Runtime::spawn_task(#method_call_expr) {
                     Ok(val) => val,
                     Err(err) => {
-                        return Err(weil_rs::errors::WeilError::new_function_returned_with_error(#method_name_str_literal.to_string(), err))
+                        return Err(wadk_utils::errors::WeilError::new_function_returned_with_error(#method_name_str_literal.to_string(), err))
                     }
                 };
             },
@@ -315,7 +340,7 @@ fn try_method_call_or_return_control_flow(
                 let result = match #method_call_expr {
                     Ok(val) => val,
                     Err(err) => {
-                        return Err(weil_rs::errors::WeilError::new_function_returned_with_error(#method_name_str_literal.to_string(), err))
+                        return Err(wadk_utils::errors::WeilError::new_function_returned_with_error(#method_name_str_literal.to_string(), err))
                     }
                 };
             },
@@ -343,7 +368,7 @@ fn wasm_inteface_template(
         quote! {
             let args = match args {
                 Ok(args) => args,
-                Err(err) => return Err(weil_rs::errors::WeilError::new_method_argument_deserialization_error(#method_name_str_literal.to_string(), err))
+                Err(err) => return Err(wadk_utils::errors::WeilError::new_method_argument_deserialization_error(#method_name_str_literal.to_string(), err))
             };
         }
     } else {
@@ -363,7 +388,7 @@ fn wasm_inteface_template(
 
                 let args = match args {
                     Ok(args) => args,
-                    Err(err) => return Err(weil_rs::errors::WeilError::new_method_argument_deserialization_error(#method_name_str_literal.to_string(), err))
+                    Err(err) => return Err(wadk_utils::errors::WeilError::new_method_argument_deserialization_error(#method_name_str_literal.to_string(), err))
                 };
 
                 let xpod_id = args.xpod_id;
@@ -404,7 +429,7 @@ fn wasm_inteface_template(
             );
 
             Some(quote! {
-                fn #core_method_name() -> Result<weil_rs::runtime::WeilValue<#struct_path, #return_ty>, weil_rs::errors::WeilError> {
+                fn #core_method_name() -> Result<weil_rs::runtime::WeilValue<#struct_path, #return_ty>, wadk_utils::errors::WeilError> {
                     #state_and_args_snippet
 
                     #method_call_control_flow
@@ -433,7 +458,7 @@ fn wasm_inteface_template(
             );
 
             Some(quote! {
-                fn #core_method_name() -> Result<#return_ty, weil_rs::errors::WeilError> {
+                fn #core_method_name() -> Result<#return_ty, wadk_utils::errors::WeilError> {
                     #state_and_args_snippet
 
                     #method_call_control_flow
@@ -467,7 +492,7 @@ fn wasm_inteface_template(
             };
 
             Some(quote! {
-                fn core_init() -> Result<weil_rs::runtime::WeilValue<#struct_path, ()>, weil_rs::errors::WeilError> {
+                fn core_init() -> Result<weil_rs::runtime::WeilValue<#struct_path, ()>, wadk_utils::errors::WeilError> {
                     #args_snippet
 
                     #method_call_control_flow
@@ -608,7 +633,7 @@ pub fn impl_smart_contract_macro(impl_smart_contract: ItemImpl) -> proc_macro::T
     let new_func = quote! {
         #[derive(Debug, Deserialize)]
         struct CallbackArgs {
-            result: Result<String, weil_rs::errors::WeilError>,
+            result: Result<String, wadk_utils::errors::WeilError>,
             xpod_id: String,
         }
 
@@ -743,77 +768,18 @@ pub enum SecuredPurpose {
     Management,
 }
 
-/// `#[secured_user]`/`#[secured_admin]` take no arguments — the organization
-/// to check is resolved at runtime from `Runtime::org()`, never fixed at
-/// compile time, never read from deploy metadata, and never passed as a
-/// method argument.
-///
-/// `Runtime::org()` returns the org the calling wallet signed this
-/// transaction under, carried in the transaction header. One compiled `.wasm`
-/// therefore serves every org at once and decides which on each call — the
-/// multi-tenant case (e.g. `codensics`) — while a single-org applet needs no
-/// configuration at all. Nothing about the org appears in the method
-/// signature, the WIDL, the contract state, or the constructor.
-///
-/// # Why a signed claim is enough to select, but never to authorize
-///
-/// The org is covered by the transaction signature, so it cannot be forged or
-/// altered in transit — but the wallet holder chose it. It says which org the
-/// caller *intends* to act in, not that they belong to it.
-///
-/// That distinction is what keeps this safe: the claim only picks which
-/// Identity applet to interrogate, and the purpose check below is what
-/// actually grants access. Claiming an org you are not in resolves to an
-/// Identity applet holding no key for you; claiming a subgroup you are not in
-/// yields a `<sub_group>_<wallet>` key that does not exist. Either way you are
-/// denied, so a caller can never widen their reach by lying.
-///
-/// Hard error if the transaction carries no org — no silent fallback to a
-/// default org: an org-scoped check that resolves to nothing is a bug, not a
-/// default to paper over.
-pub fn impl_smart_contract_secured_macro(
+/// Shared by both [`impl_smart_contract_secured_macro`] (metadata mode) and
+/// [`impl_smart_contract_tenancy_macro`] (parameter mode): given `group`/
+/// `sub_group` already resolved by the caller into `group_sub_group_prelude`,
+/// resolves `identity::<group>`, checks `key_has_purpose` against the
+/// qualified key, and enforces `purpose`. Identical regardless of how
+/// `group`/`sub_group` were derived.
+fn build_secured_method(
     purpose: SecuredPurpose,
+    group_sub_group_prelude: TokenStream,
     smart_contract_method: ImplItemFn,
 ) -> proc_macro::TokenStream {
     let mut curr_block = smart_contract_method.block.clone();
-
-    // Sets the `group`/`sub_group` locals every check below is written
-    // against. Both come from `Runtime::org()` — the organization the calling
-    // wallet signed this transaction under — and from nowhere else: not from a
-    // method argument, and not from this deployment's `--organization`
-    // metadata. One applet can therefore serve many orgs, deciding per call,
-    // without any org parameter appearing in its WIDL.
-    //
-    // `Runtime::org()` is authenticated but self-declared. It is covered by
-    // the transaction signature, so it cannot be forged or altered in transit,
-    // yet the wallet holder still chose the value — it states which org the
-    // caller *intends* to act in, not that they belong to it. That is exactly
-    // enough to pick which Identity applet to interrogate, and never enough to
-    // grant access on its own; the membership proof is the purpose check
-    // against `identity::<group>` further down.
-    //
-    // A caller cannot widen their reach by lying here. Claiming an org they
-    // are not in resolves to an Identity applet holding no key for them;
-    // claiming a subgroup they do not belong to yields a `<sub_group>_<wallet>`
-    // key that does not exist. Either way the purpose check denies them.
-    let group_sub_group_prelude: TokenStream = quote! {
-        let __secured_org = match weil_rs::runtime::Runtime::org() {
-            Some(org) => org,
-            None => {
-                return Err(
-                    "secured: no organization context on this transaction — the signing \
-                     wallet has no active org (run `wallet link-org`, then \
-                     `wallet select-org --org <org>`)"
-                        .to_string(),
-                )
-            }
-        };
-        let group: String = __secured_org.org.clone();
-        // `None` and `Some("")` both mean org-level, and both must land on the
-        // empty string: the branch below keys off `sub_group.is_empty()` to
-        // choose between the org-level and subgroup-scoped purpose checks.
-        let sub_group: String = __secured_org.subgroup.clone().unwrap_or_default();
-    };
 
     let purpose_check: TokenStream = match purpose {
         SecuredPurpose::Execution => quote! {
@@ -858,137 +824,50 @@ pub fn impl_smart_contract_secured_macro(
 
             let addr = weil_rs::runtime::Runtime::origin();
 
-            // Two modes, chosen by whether the caller's `Runtime::org()`
-            // named a subgroup:
-            //
-            // - Org level (`sub_group` empty — the wallet's active org has no
-            //   subgroup) — most such callers hold a plain, bare-org key
-            //   (`<wallet>`, no subgroup prefix), so try the cheap O(1)
-            //   `key_has_purpose` check against the bare wallet address
-            //   first, per purpose. Only a purpose that the bare key does NOT
-            //   already grant falls back to the O(N) `get_keys_by_purpose`
-            //   scan (already unpartitioned on `key_manager_addr` — same
-            //   address resolved above), which accepts the caller if their
-            //   wallet appears as a `_<wallet>` suffix of any entry, i.e. any
-            //   subgroup at all. This keeps the common bare-key case at O(1)
-            //   while still correctly authorizing a member who only holds a
-            //   subgroup key but is acting at org level.
-            // - Explicit subgroup (`sub_group` non-empty — the wallet's
-            //   active org selected one) — the caller is acting as that
-            //   subgroup specifically, so do the cheaper O(1) single-key
-            //   check against exactly that qualified key. A caller who names
-            //   a subgroup they do not hold a key for is rejected here, which
-            //   is what stops the self-declared subgroup from being a way to
-            //   claim access rather than merely scope it.
-            let (__secured_has_exec_purpose, __secured_has_manager_purpose) = if sub_group.is_empty() {
-                fn __secured_wallet_has_purpose(keys: &[String], wallet: &str) -> bool {
-                    let suffix = format!("_{}", wallet);
-                    keys.iter().any(|k| k == wallet || k.ends_with(&suffix))
-                }
-
-                #[derive(Serialize)]
-                struct KeyPurposeArgs {
-                    key: String,
-                    purpose: weil_contracts::key_management::KeyPurpose,
-                }
-
-                #[derive(Serialize)]
-                struct PurposeArgs {
-                    purpose: weil_contracts::key_management::KeyPurpose,
-                }
-
-                let bare_exec_args = KeyPurposeArgs {
-                    key: addr.clone(),
-                    purpose: weil_contracts::key_management::KeyPurpose::Execution,
-                };
-                let bare_has_exec = weil_rs::runtime::Runtime::call_contract::<bool>(
-                    key_manager_addr.clone(),
-                    "key_has_purpose".to_string(),
-                    Some(serde_json::to_string(&bare_exec_args).unwrap()),
-                )
-                .map_err(|err| err.to_string())?;
-
-                let bare_manager_args = KeyPurposeArgs {
-                    key: addr.clone(),
-                    purpose: weil_contracts::key_management::KeyPurpose::Management,
-                };
-                let bare_has_manager = weil_rs::runtime::Runtime::call_contract::<bool>(
-                    key_manager_addr.clone(),
-                    "key_has_purpose".to_string(),
-                    Some(serde_json::to_string(&bare_manager_args).unwrap()),
-                )
-                .map_err(|err| err.to_string())?;
-
-                let has_exec = if bare_has_exec {
-                    true
-                } else {
-                    let exec_keys = weil_rs::runtime::Runtime::call_contract::<Vec<String>>(
-                        key_manager_addr.clone(),
-                        "get_keys_by_purpose".to_string(),
-                        Some(
-                            serde_json::to_string(&PurposeArgs {
-                                purpose: weil_contracts::key_management::KeyPurpose::Execution,
-                            })
-                            .unwrap(),
-                        ),
-                    )
-                    .map_err(|err| err.to_string())?;
-                    __secured_wallet_has_purpose(&exec_keys, &addr)
-                };
-
-                let has_manager = if bare_has_manager {
-                    true
-                } else {
-                    let manager_keys = weil_rs::runtime::Runtime::call_contract::<Vec<String>>(
-                        key_manager_addr,
-                        "get_keys_by_purpose".to_string(),
-                        Some(
-                            serde_json::to_string(&PurposeArgs {
-                                purpose: weil_contracts::key_management::KeyPurpose::Management,
-                            })
-                            .unwrap(),
-                        ),
-                    )
-                    .map_err(|err| err.to_string())?;
-                    __secured_wallet_has_purpose(&manager_keys, &addr)
-                };
-
-                (has_exec, has_manager)
+            let qualified_key = if sub_group.is_empty() {
+                addr.clone()
             } else {
-                let qualified_addr = format!("{}_{}", sub_group, addr);
+                format!("{}_{}", sub_group, addr)
+            };
 
-                #[derive(Serialize)]
-                struct Args {
-                    key: String,
-                    purpose: weil_contracts::key_management::KeyPurpose,
-                }
+            #[derive(Serialize)]
+            struct KeyPurposeArgs {
+                key: String,
+                purpose: weil_contracts::key_management::KeyPurpose,
+            }
 
-                let exec_args = Args {
-                    key: qualified_addr.clone(),
-                    purpose: weil_contracts::key_management::KeyPurpose::Execution,
-                };
+            let mut check_purpose = |key: String, purpose: weil_contracts::key_management::KeyPurpose| {
+                let args = KeyPurposeArgs { key, purpose };
 
-                let has_exec = weil_rs::runtime::Runtime::call_contract::<bool>(
+                weil_rs::runtime::Runtime::call_contract::<bool>(
                     key_manager_addr.clone(),
                     "key_has_purpose".to_string(),
-                    Some(serde_json::to_string(&exec_args).unwrap()),
+                    Some(serde_json::to_string(&args).unwrap()),
                 )
-                .map_err(|err| err.to_string())?;
-
-                let manager_args = Args {
-                    key: qualified_addr,
-                    purpose: weil_contracts::key_management::KeyPurpose::Management,
-                };
-
-                let has_manager = weil_rs::runtime::Runtime::call_contract::<bool>(
-                    key_manager_addr,
-                    "key_has_purpose".to_string(),
-                    Some(serde_json::to_string(&manager_args).unwrap()),
-                )
-                .map_err(|err| err.to_string())?;
-
-                (has_exec, has_manager)
+                .map_err(|err| err.to_string())
             };
+
+            let mut __secured_has_exec_purpose = check_purpose(
+                qualified_key.clone(),
+                weil_contracts::key_management::KeyPurpose::Execution,
+            )?;
+            if !sub_group.is_empty() && !__secured_has_exec_purpose {
+                __secured_has_exec_purpose = check_purpose(
+                    addr.clone(),
+                    weil_contracts::key_management::KeyPurpose::Execution,
+                )?;
+            }
+
+            let mut __secured_has_manager_purpose = check_purpose(
+                qualified_key,
+                weil_contracts::key_management::KeyPurpose::Management,
+            )?;
+            if !sub_group.is_empty() && !__secured_has_manager_purpose {
+                __secured_has_manager_purpose = check_purpose(
+                    addr,
+                    weil_contracts::key_management::KeyPurpose::Management,
+                )?;
+            }
 
             #purpose_check
         }
@@ -1004,6 +883,128 @@ pub fn impl_smart_contract_secured_macro(
         #new_func
     }
     .into()
+}
+
+/// Metadata mode: `group`/`sub_group` fixed at compile time from `literal`,
+/// split on `.` (last segment is `group`, the rest joined by `_` is
+/// `sub_group`; no `.` means org-level). See [`impl_smart_contract_tenancy_macro`]
+/// for the multi-tenant parameter-mode equivalent — the two never apply to
+/// the same method.
+pub fn impl_smart_contract_secured_macro(
+    purpose: SecuredPurpose,
+    literal: String,
+    smart_contract_method: ImplItemFn,
+) -> proc_macro::TokenStream {
+    let items: Vec<&str> = literal.split('.').collect();
+    let group = items.last().copied().unwrap_or_default().to_string();
+    let sub_group = if items.len() > 1 {
+        items[..items.len() - 1].join("_")
+    } else {
+        String::new()
+    };
+
+    let group_sub_group_prelude = quote! {
+        let group: String = #group.to_string();
+        let sub_group: String = #sub_group.to_string();
+    };
+
+    build_secured_method(purpose, group_sub_group_prelude, smart_contract_method)
+}
+
+/// Parameter mode: `group` resolved from this call's own `SecuredOrg`
+/// parameter, cross-checked against the caller's own `Runtime::org()` claim
+/// before being trusted — the org never relaxes: a caller can only ever act
+/// as the org they actually signed for.
+///
+/// `sub_group` is hierarchical, not just cross-checked. A caller whose claim
+/// names a subgroup is narrowly scoped to exactly that subgroup — the
+/// `SecuredSubgroup` parameter must match it exactly, checked against that
+/// subgroup's own qualified key. A caller whose claim is org-level (no
+/// subgroup) is checked against the bare org-level key instead, regardless
+/// of what the `SecuredSubgroup` parameter says — holding a bare org-level
+/// key is authority over the whole org, subgroups included. The parameter's
+/// value still reaches the method body unchanged for its own business logic
+/// (e.g. which ledger row to touch); it's only excluded from what gets
+/// authorized in the org-level case.
+///
+/// An explicit empty-string subgroup on the claim (`Some("")`, as opposed to
+/// the field being absent) is normalized to org-level before any of the
+/// above — some wallet-org link data stores `""` rather than omitting the
+/// field, and the two must mean the same thing here.
+pub fn impl_smart_contract_tenancy_macro(
+    purpose: SecuredPurpose,
+    smart_contract_method: ImplItemFn,
+) -> proc_macro::TokenStream {
+    let Some(org_ident) =
+        find_typed_param(&smart_contract_method.sig.inputs, |ty| is_eq(ty, "SecuredOrg"))
+    else {
+        return proc_macro::TokenStream::from(
+            syn::Error::new_spanned(
+                &smart_contract_method.sig,
+                "#[tenancy_user]/#[tenancy_admin] requires a `SecuredOrg`-typed parameter on this method",
+            )
+            .to_compile_error(),
+        );
+    };
+    let subgroup_ident = find_typed_param(&smart_contract_method.sig.inputs, |ty| {
+        is_eq(ty, "SecuredSubgroup")
+    });
+
+    let resolve: TokenStream = if let Some(sg_ident) = &subgroup_ident {
+        quote! {
+            match __secured_claim_subgroup {
+                Some(__secured_sg)
+                    if __secured_ctx.org == #org_ident && Some(__secured_sg.clone()) == #sg_ident =>
+                {
+                    (#org_ident.clone(), __secured_sg)
+                }
+                // Org-level claim: broader authority spans every subgroup
+                // beneath it, so it's checked against the bare org-level key
+                // regardless of what subgroup (if any) was passed — the
+                // parameter still reaches the method body for its own
+                // business logic, it just isn't part of what's authorized.
+                None if __secured_ctx.org == #org_ident => {
+                    (#org_ident.clone(), String::new())
+                }
+                _ => return Err(
+                    "secured: organization/subgroup argument does not match the caller's own org claim"
+                        .to_string(),
+                ),
+            }
+        }
+    } else {
+        quote! {
+            match __secured_claim_subgroup {
+                None if __secured_ctx.org == #org_ident => (#org_ident.clone(), String::new()),
+                _ => return Err(
+                    "secured: organization argument does not match the caller's own org claim, \
+                     or the caller claimed a subgroup this method has no `SecuredSubgroup` \
+                     parameter to confirm"
+                        .to_string(),
+                ),
+            }
+        }
+    };
+
+    let group_sub_group_prelude = quote! {
+        let (group, sub_group): (String, String) = {
+            let __secured_ctx = match weil_rs::runtime::Runtime::org() {
+                Some(ctx) => ctx,
+                None => return Err(
+                    "secured: no organization context on this transaction — the signing wallet \
+                     has no active org (run `wallet link-org`, then `wallet select-org --org <org>`)"
+                        .to_string(),
+                ),
+            };
+            // "" and no subgroup both mean org-level — some wallet-org link
+            // data stores an explicit empty string rather than omitting the
+            // field, and the two must be treated identically here.
+            let __secured_claim_subgroup = __secured_ctx.subgroup.clone().filter(|s| !s.is_empty());
+            #resolve
+        };
+    };
+
+    build_secured_method(purpose, group_sub_group_prelude, smart_contract_method)
 }
 
 fn type_is_bytestream(ty: &Type) -> bool {

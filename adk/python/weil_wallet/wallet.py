@@ -79,7 +79,7 @@ class SelectedAccount:
 class Account:
     """A single WeilChain account: secp256k1 keypair + address.
 
-    API-key accounts are public-only: no secret key, signing is delegated to
+    Agent identity accounts are public-only: no secret key, signing is delegated to
     the Sentinel.
     """
 
@@ -92,7 +92,7 @@ class Account:
         *,
         public_key_hex: str | None = None,
     ) -> None:
-        """Build from a secret key, or from a public key for API-key accounts.
+        """Build from a secret key, or from a public key for agent identity accounts.
 
         Args:
             secret_key_bytes: Raw 32-byte secp256k1 secret key.
@@ -192,7 +192,7 @@ class Wallet:
         self._current_account_index: SelectedAccount = SelectedAccount.Derived(0)
         self._org: Optional[OrgInfo] = None
         self._source_json: Optional[str] = None
-        self._secure_api_key: bool = False
+        self._secure_identity: bool = False
 
     # ── Constructors ──────────────────────────────────────────────────────────
 
@@ -264,7 +264,7 @@ class Wallet:
 
         Args:
             content: Wallet JSON (string, bytes, or dict).
-            masked: True when the wallet came from the Agent Registry API key
+            masked: True when the wallet came from an agent identity
                 flow — the xprv is a masked token that cannot be decoded
                 locally, so accounts are built public-only (no secret keys)
                 and signing is delegated to the Sentinel.
@@ -288,7 +288,7 @@ class Wallet:
             raise ValueError("wallet file contains no accounts")
 
         if masked:
-            # API-key wallets delegate signing to the Sentinel via /sign_payload.
+            # Agent identity wallets delegate signing to the Sentinel via /sign_payload.
             derived_accounts = []
             for entry in derived_entries:
                 derived_accounts.append(
@@ -408,9 +408,9 @@ class Wallet:
     backend — same as a wallet file with ``secure=True``. 
     """
     @classmethod
-    def from_secure_api_key(
+    def from_secure_identity(
         cls,
-        api_key: str,
+        identity: str,
         *,
         sentinel_host: str,
         verify: bool = True,
@@ -421,13 +421,13 @@ class Wallet:
         """Fetch the Agent Registry wallet using native HTTPS and secure memory.
 
         Args:
-            api_key: Agent Registry API key (masked wallet).
+            identity: Agent identity whose wallet should be fetched.
             sentinel_host: Base URL of the Sentinel host to fetch the wallet from.
             verify: Verify TLS certificates when fetching the wallet.
             require_lock: Fail if mlock cannot lock the secure page.
             harden_process: Disable core dumps process-wide before fetching the wallet.
             include_creds: Attach env-var AWS credentials to the fetch request.
-                Set True only for external wallets stored under those creds.
+                Set True only for external wallets stored under those credentials.
         """
 
         if not harden_process:
@@ -439,8 +439,8 @@ class Wallet:
         elif harden_process:
             apply_hardening()
 
-        account, (org_name, subgroup, purpose) = SecureAccount.from_api_key(
-            api_key,
+        account, (org_name, subgroup, purpose) = SecureAccount.from_identity(
+            identity,
             sentinel_host,
             verify=verify,
             require_lock=require_lock,
@@ -449,7 +449,7 @@ class Wallet:
         w = cls()
         w._added_accounts = [account]
         w._current_account_index = SelectedAccount.External(0)
-        w._secure_api_key = True
+        w._secure_identity = True
         if org_name:
             w._org = OrgInfo(
                 name=org_name,

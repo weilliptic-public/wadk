@@ -27,7 +27,7 @@ key_path = Path(os.environ.get("WEIL_PRIVATE_KEY_FILE", "wallet.wc"))
 # hardening happens before the file is opened or parsed.
 @weil_ai.agent(
     key_path,
-    secure_wallet=True,
+    secure=True,
     require_lock=True,
     harden_process=True,
 )

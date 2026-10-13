@@ -30,7 +30,7 @@ def _creds_from_env() -> Optional[dict]:
     secret_key = os.environ.get("WEIL_S3_SECRET_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
     if not access_key or not secret_key:
         return None
-    creds: dict = {
+    credentials: dict = {
         "access_key_id": access_key,
         "secret_access_key": secret_key,
     }
@@ -44,10 +44,10 @@ def _creds_from_env() -> Optional[dict]:
         or os.environ.get("AWS_BUCKET_NAME")
     )
     if region:
-        creds["region"] = region
+        credentials["region"] = region
     if bucket:
-        creds["bucket_name"] = bucket
-    return creds
+        credentials["bucket_name"] = bucket
+    return credentials
 
 def _sentinel_host_from_env() -> Optional[str]:
     """Sentinel base URL from ``SENTINEL_HOST``, or None to use the SDK default.
@@ -62,8 +62,8 @@ async def _create_clients(specs: list[tuple[str, str, Optional[dict]]]) -> dict[
     """Resolve all agent wallets concurrently (one RTT instead of N)."""
     sentinel_host = _sentinel_host_from_env()
     clients = await asyncio.gather(*[
-        WeilClient.from_api_key(key, creds=creds, sentinel_host=sentinel_host)
-        for _, key, creds in specs
+        WeilClient.from_identity(identity, credentials=credentials, sentinel_host=sentinel_host)
+        for _, identity, credentials in specs
     ])
     out = {}
     for (name, _, _), client in zip(specs, clients):
@@ -425,25 +425,25 @@ def create_resolver_agent(client: WeilClient):
     return ResolverAgent
 
 
-async def build_agents(policy, api_keys=None, credentials=None):
-    api_keys = api_keys or {}
+async def build_agents(policy, identities=None, credentials=None):
+    identities = identities or {}
 
     def _spec(name):
-        # Key errors surface here, before any network I/O.
-        key = (
-            api_keys.get(name)
-            or os.environ.get(f"WEIL_API_KEY_{name.upper()}")
+        # Missing identities surface here, before any network I/O.
+        identity = (
+            identities.get(name)
+            or os.environ.get(f"WEIL_IDENTITY_{name.upper()}")
         )
-        if not key:
+        if not identity:
             raise RuntimeError(
-                f"No Weil API key for agent '{name}': pass api_keys['{name}'] "
-                f"or set WEIL_API_KEY_{name.upper()} (or WEIL_API_KEY)."
+                f"No Weil identity for agent '{name}': pass identities['{name}'] "
+                f"or set WEIL_IDENTITY_{name.upper()}."
             )
         # Per-agent dict wins, then explicit global, then WEIL_S3_*/AWS_* env.
-        creds = (
+        credentials = (
             credentials if credentials is not None else _creds_from_env()
         )
-        return (name, key, creds)
+        return (name, identity, credentials)
 
     names = ("intake", "categorizer", "router", "resolver")
     clients = await _create_clients([_spec(n) for n in names])

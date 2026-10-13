@@ -10,7 +10,12 @@ from typing import Any, AsyncIterator, Callable, Optional
 import httpx
 from .api.platform_api import PlatformApi
 from .api.request import SubmitTxnRequest, Transaction, UserTransaction, Verifier
-from .constants import DEFAULT_CONCURRENCY, SENTINEL_HOST
+from .constants import (
+    AUDIT_APPLET_SVC_NAME,
+    DEFAULT_CONCURRENCY,
+    PUBLISHER_APPLET_SVC_NAME,
+    SENTINEL_HOST,
+)
 from .contract import ContractId
 from .streaming import ByteStream
 from .transaction import BaseTransaction, OrgContext, TransactionHeader, TransactionResult
@@ -33,8 +38,6 @@ def _org_context(org_info: Any) -> Optional[OrgContext]:
         subgroup=subgroup if subgroup else None,
     )
 from .wallet import SelectedAccount, Wallet
-
-AUDIT_APPLET_SVC_NAME = "auditor::weil"
 
 class WeilClient:
     """High-level client for WeilChain applet methods.
@@ -72,6 +75,8 @@ class WeilClient:
         )
         self._audit_contract_id: Optional[ContractId] = None
         self._audit_contract_id_lock = asyncio.Lock()
+        self._publisher_contract_id: Optional[ContractId] = None
+        self._publisher_contract_id_lock = asyncio.Lock()
         self._remote_signing = False
         self._credentials: Optional[dict] = None
 
@@ -118,45 +123,45 @@ class WeilClient:
         return cls(wallet, concurrency, sentinel_host=sentinel_host, verify=verify)
 
     @classmethod
-    async def from_api_key(
+    async def from_identity(
         cls,
-        api_key: str,
+        identity: str,
         concurrency: Optional[int] = None,
         *,
         sentinel_host: Optional[str] = SENTINEL_HOST,
-        creds: Optional[dict] = None,
+        credentials: Optional[dict] = None,
         verify: bool = True,
         secure: bool = False,
         require_lock: bool = True,
         harden_process: bool = True,
         include_creds: bool = False,
     ) -> "WeilClient":
-        """Create a WeilClient from an Agent Registry API key.
+        """Create a WeilClient from an agent identity.
 
         The endpoint always returns a masked wallet, so signing is delegated to
         the Sentinel. ``secure=True`` fetches the unmasked wallet over native
         HTTPS into secure memory — the secret key is derived in mlocked memory
         and signing is done locally, same as a wallet file with ``secure=True``.
-        ``creds`` must not be passed in that case (AWS credentials are read from
+        ``credentials`` must not be passed in that case (AWS credentials are read from
         environment variables natively).
 
         Args:
             include_creds: With ``secure=True``, attach env-var AWS credentials
                 to the wallet fetch. Set True only for external wallets stored
-                under those creds.
+                under those credentials.
         """
         if secure:
-            if creds is not None:
+            if credentials is not None:
                 warnings.warn(
-                    "creds= is ignored with secure=True; the secure native "
+                    "credentials= is ignored with secure=True; the secure native "
                     "backend reads AWS credentials from the environment. "
-                    "Attaching env-var creds to the request.",
+                    "Attaching env-var credentials to the request.",
                     stacklevel=2,
                 )
                 include_creds = True
             wallet = await asyncio.to_thread(
-                Wallet.from_secure_api_key,
-                api_key,
+                Wallet.from_secure_identity,
+                identity,
                 sentinel_host=sentinel_host or SENTINEL_HOST,
                 verify=verify,
                 require_lock=require_lock,
@@ -165,15 +170,15 @@ class WeilClient:
             )
         else:
             wallet = await cls.get_agent_wallet(
-                api_key,
+                identity,
                 sentinel_host=sentinel_host,
-                creds=creds,
+                credentials=credentials,
                 verify=verify,
             )
         client = cls(wallet, concurrency, sentinel_host=sentinel_host, verify=verify)
         if not secure:
             client._remote_signing = True
-            client._credentials = creds
+            client._credentials = credentials
         return client
 
     # ── Multi-account management ───────────────────────────────────────────────
@@ -192,6 +197,8 @@ class WeilClient:
         self._wallet.set_index(selected)
         async with self._audit_contract_id_lock:
             self._audit_contract_id = None
+        async with self._publisher_contract_id_lock:
+            self._publisher_contract_id = None
 
     async def derived_account_count(self) -> int:
         """Return the number of BIP32 HD-derived accounts in the wallet."""
@@ -207,14 +214,18 @@ class WeilClient:
 
     @staticmethod
     async def get_applet_id_for_name(
-        http_client: httpx.AsyncClient, name: str
+        http_client: httpx.AsyncClient,
+        name: str,
+        *,
+        wallet_address: Optional[str] = None,
     ) -> ContractId:
         """Resolve a service name to its ContractId via the Sentinel API.
 
         Args:
             name: The registered applet service name (e.g. ``"auditor"``).
-            verify: Whether to verify TLS certificates. Pass False only for
-                self-signed / development Sentinel nodes.
+            wallet_address: Optional wallet address used to route resolution to
+                its home pod.
+
 
         Returns:
             The ContractId for the named applet.
@@ -222,9 +233,12 @@ class WeilClient:
         Raises:
             RuntimeError: If the Sentinel API returns an error response.
         """
+        payload = {"svc_name": name}
+        if wallet_address is not None:
+            payload["wallet_address"] = wallet_address
         resp = await http_client.post(
             "/get_applet_address",
-            json={"svc_name": name},
+            json=payload,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -235,15 +249,15 @@ class WeilClient:
     @classmethod
     async def get_agent_wallet(
         cls,
-        api_key: str,
+        identity: str,
         *,
         sentinel_host: Optional[str] = SENTINEL_HOST,
-        creds: Optional[dict] = None,
+        credentials: Optional[dict] = None,
         verify: bool = True,
     ) -> Wallet:
-        """Fetch the masked wallet registered for an Agent Registry API key.
+        """Fetch the masked wallet registered for an agent identity.
 
-        POSTs ``{"api_key", "unmasked": false, "credentials"}`` to Sentinel's
+        POSTs ``{"identity", "unmasked": false, "credentials"}`` to Sentinel's
         ``/get_agent_wallet`` endpoint and returns the resulting public-only
         :class:`Wallet` (signing is delegated to Sentinel).
 
@@ -252,16 +266,16 @@ class WeilClient:
         so the wallet cannot leak through an exception.
 
         Args:
-            api_key: Agent Registry API key identifying the wallet.
+            identity: Agent identity whose wallet should be resolved.
             sentinel_host: Base URL of the Sentinel node.
-            creds: Storage credentials (e.g. AWS S3 keys) for wallets stored
+            credentials: Storage credentials (e.g. AWS S3 keys) for wallets stored
                 in a caller-owned bucket.
             verify: Whether to verify TLS certificates.
         """
-        payload: dict[str, Any] = {"api_key": api_key}
+        payload: dict[str, Any] = {"identity": identity}
         payload["unmasked"] = False
-        if creds:
-            payload["credentials"] = creds
+        if credentials:
+            payload["credentials"] = credentials
 
         async with cls._http_client(sentinel_host, verify) as http_client:
             resp = await http_client.post(
@@ -296,7 +310,7 @@ class WeilClient:
         if isinstance(result, str):
             wallet_json = result.strip()
             if not wallet_json:
-                raise RuntimeError("agent wallet not found for API key")
+                raise RuntimeError("agent wallet not found for identity")
             return Wallet.from_wallet_json(wallet_json, masked=True)
 
         raise RuntimeError(
@@ -311,11 +325,11 @@ class WeilClient:
         """Sign a canonical JSON message via the Sentinel.
 
         Used for transaction and MCP auth-header signing on non-secure
-        API-key clients. Secure clients sign locally and use sign() directly.
+        agent identity clients. Secure clients sign locally and use sign() directly.
         """
         if not self._remote_signing:
             raise RuntimeError(
-                "sign_message requires an API-key client (from_api_key)"
+                "sign_message requires an agent identity client (from_identity)"
             )
 
         if not self._wallet._source_json:
@@ -327,7 +341,8 @@ class WeilClient:
         if self._credentials:
             req["credentials"] = self._credentials
 
-        resp = await self._http_client.post("/sign_payload", json=req)
+        async with type(self)._http_client(self._sentinel_host, self._verify) as http_client:
+            resp = await http_client.post("/sign_payload", json=req)
         resp.raise_for_status()
         try:
             data = resp.json()
@@ -404,6 +419,18 @@ class WeilClient:
                 self._audit_contract_id = ContractId(data["Ok"])
                 return self._audit_contract_id
             raise RuntimeError(f"get_applet_address failed: {data.get('Err', data)}")
+
+    async def _get_publisher_contract_id(self) -> ContractId:
+        """Resolve and cache the publisher applet contract address."""
+        async with self._publisher_contract_id_lock:
+            if self._publisher_contract_id is not None:
+                return self._publisher_contract_id
+            self._publisher_contract_id = await self.get_applet_id_for_name(
+                self._http_client,
+                PUBLISHER_APPLET_SVC_NAME,
+                wallet_address=self.wallet_addr(),
+            )
+            return self._publisher_contract_id
 
     async def get_receipt_for_commit(self, commit_hash: str) -> Optional[str]:
         """Read back the receipt content currently persisted for ``commit_hash``.
@@ -513,6 +540,37 @@ class WeilClient:
             return wrapper
 
         return decorator
+
+    async def create_topic(
+        self,
+        topic: str,
+        description: str,
+        retention_in_bytes: int,
+    ) -> TransactionResult:
+        """Create a publisher topic through ``publisher::weil``.
+
+        """
+        contract_id = await self._get_publisher_contract_id()
+        method_args = json.dumps(
+            {
+                "topic": topic,
+                "description": description,
+                "retention_in_bytes": retention_in_bytes,
+            }
+        )
+        return await self.to_contract_client(contract_id).execute(
+            "create_topic", method_args, False, False
+        )
+
+    async def publish(self, topic: str, payload: str) -> TransactionResult:
+        """Publish a payload through ``publisher::weil``.
+
+        """
+        contract_id = await self._get_publisher_contract_id()
+        method_args = json.dumps({"topic": topic, "payload": payload})
+        return await self.to_contract_client(contract_id).execute(
+            "publish", method_args, False, False
+        )
 
     async def close(self) -> None:
         """Close the HTTP client."""
@@ -657,21 +715,7 @@ class WeilContractClient:
         should_hide_args: bool = True,
         is_non_blocking: bool = False,
     ) -> TransactionResult:
-        """Execute an exported applet method and return the transaction result.
-
-        Builds and signs the transaction, then submits it to the platform API.
-        Concurrency is bounded by the parent client's semaphore.
-
-        Args:
-            method_name:      The exported method to invoke.
-            method_args:      JSON-encoded argument payload.
-            should_hide_args: When True the arguments are encrypted before submission.
-            is_non_blocking:  When True the platform responds immediately without
-                              waiting for transaction finalization.
-
-        Returns:
-            TransactionResult with status, block height, and application result.
-        """
+        """Execute an exported method (non-streaming)."""
         base_txn, signature, args = await self._sign_and_construct_txn(
             method_name, method_args, should_hide_args
         )
@@ -687,18 +731,7 @@ class WeilContractClient:
         method_name: str,
         method_args: str,
     ) -> ByteStream:
-        """Execute an exported applet method and return an async streaming response.
-
-        Suitable for methods that produce incremental output (e.g. LLM inference).
-        Iterate the returned ByteStream with ``async for chunk in stream``.
-
-        Args:
-            method_name: The exported method to invoke.
-            method_args: JSON-encoded argument payload.
-
-        Returns:
-            ByteStream that yields ``bytes`` chunks as they arrive.
-        """
+        """Execute an exported method and return a streaming response."""
         base_txn, signature, args = await self._sign_and_construct_txn(
             method_name, method_args, False
         )

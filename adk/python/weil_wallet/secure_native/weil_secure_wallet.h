@@ -44,8 +44,8 @@ WEIL_SECURE_API int weil_secure_wallet_from_wallet_fd(
     int fd, int require_lock, weil_secure_wallet **out,
     char error[WEIL_SECURE_ERROR_SIZE]);
 
-WEIL_SECURE_API int weil_secure_wallet_from_api(
-    const char *api_key, const char *endpoint, int verify_tls, int require_lock,
+WEIL_SECURE_API int weil_secure_wallet_from_identity(
+    const char *identity, const char *endpoint, int verify_tls, int require_lock,
     int include_creds, weil_secure_wallet **out,
     char error[WEIL_SECURE_ERROR_SIZE]);
 

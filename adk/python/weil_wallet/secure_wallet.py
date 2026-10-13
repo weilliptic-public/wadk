@@ -32,7 +32,7 @@ def _native() -> Any:
 class SecureAccount:
     """An account whose private key is owned by opaque native secure memory.
 
-    For masked API-key wallets the handle retains the masked wallet JSON (no
+    For masked agent identity wallets the handle retains the masked wallet JSON (no
     local key); the public key comes from the JSON's stored compressed hex.
     """
 
@@ -49,13 +49,13 @@ class SecureAccount:
         Args:
             native_key: Opaque native key handle.
             address: Sentinel-minted account address.
-            public_key_hex: Hex public key for masked API-key handles, which
+            public_key_hex: Hex public key for masked agent identity handles, which
                 hold no local secret key.
         """
         self._native_key = native_key
         self._address = address
         if public_key_hex is not None:
-            # Masked API-key handle: no local key; pubkey parsed from JSON hex.
+            # Masked agent identity handle: no local key; pubkey parsed from JSON hex.
             self._public_key = Secp256k1PublicKey(bytes.fromhex(public_key_hex))
         else:
             # File/key handle: derive the public key from the native secret.
@@ -121,9 +121,9 @@ class SecureAccount:
         return cls(key, address), (org, subgroup, purpose)
 
     @classmethod
-    def from_api_key(
+    def from_identity(
         cls,
-        api_key: str,
+        identity: str,
         sentinel_host: str,
         *,
         verify: bool = True,
@@ -142,8 +142,8 @@ class SecureAccount:
                 Set True only for external wallets stored under those creds.
         """
         endpoint = sentinel_host.rstrip("/") + "/get_agent_wallet"
-        key, address, org, subgroup, purpose = _native().SecureKey.from_api(
-            api_key,
+        key, address, org, subgroup, purpose = _native().SecureKey.from_identity(
+            identity,
             endpoint,
             verify=verify,
             require_lock=require_lock,

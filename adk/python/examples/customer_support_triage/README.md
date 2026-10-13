@@ -69,17 +69,27 @@ predicate, not by any naming convention.
 
 ## Setup
 
+Create an environment and install the published SDK packages plus this example's dependencies:
+
 ```bash
-pip install -r requirements.txt   # langchain, langgraph, pydantic, python-dotenv
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
-Create `.env` in this directory (gitignored):
+`requirements.txt` pulls `weil-wallet` and `weil-ai` from PyPI, so no `PYTHONPATH` setup is needed. Then:
+
+```bash
+cp .env.example .env
+```
+
+Create or edit `.env` in this directory (gitignored):
 
 | Variable | Required | Purpose |
 |---|---|---|
 | `OPENAI_API_KEY` | yes | live LLM for categorizer / router / resolver |
-| `WEIL_API_KEY_{INTAKE,CATEGORIZER,ROUTER,RESOLVER}` | yes | one Agent Registry key per agent, so each wallet identity is distinct |
-| `WEIL_S3_ACCESS_KEY`, `WEIL_S3_SECRET_KEY` | if externally stored | sent with the API key on wallet lookup; `AWS_*` names also accepted |
+| `WEIL_IDENTITY_{INTAKE,CATEGORIZER,ROUTER,RESOLVER}` | yes | one Agent identity per agent, so each wallet identity is distinct |
+| `WEIL_S3_ACCESS_KEY`, `WEIL_S3_SECRET_KEY` | if externally stored | sent with the agent identity on wallet lookup; `AWS_*` names also accepted |
 | `WEIL_S3_REGION`, `WEIL_S3_BUCKET` | no | optional S3 location for the same lookup |
 | `SENTINEL_HOST` | no | Sentinel base URL; defaults to `weil_wallet.constants.SENTINEL_HOST` |
 | `OPENAI_MODEL` | no | defaults to `gpt-4o-mini` |
@@ -87,7 +97,7 @@ Create `.env` in this directory (gitignored):
 `SENTINEL_HOST` configures the client's base URL, so it covers wallet lookup,
 audit-contract resolution, and signing alike.
 
-Nothing falls back silently: a missing key, or a wallet lookup that fails, raises before
+Nothing falls back silently: a missing identity , or a wallet lookup that fails, raises before
 any work is done.
 
 ## Run
@@ -98,7 +108,7 @@ python main.py --ticket TKT-01          # duplicate charge → $120 refunded
 python main.py --ticket test_tickets.json:TKT-09
 python main.py --demo                  # all 12 tickets
 python main.py --adversarial           # only requests the evidence can't justify
-pytest tests/test_triage.py -q         # 25 tests; 16 need keys + network
+pytest tests/test_triage.py -q         # 25 tests; 16 need identities, `OPENAI_API_KEY` + network
 ```
 
 `--demo` and `--adversarial` exit non-zero if any ticket misbehaved.

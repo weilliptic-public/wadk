@@ -52,6 +52,8 @@ extern "C" {
     fn delete_collection_with_suffix(key: i32, row_suffix: i32) -> i32;
     fn read_collection_with_suffix(key: i32, row_suffix: i32) -> i32;
     fn read_bulk_collection_with_suffix(prefix: i32, row_suffix: i32) -> i32;
+    fn read_collection_keys(prefix: i32) -> i32;
+    fn read_collection_keys_with_suffix(prefix: i32, row_suffix: i32) -> i32;
     fn read_items_with_suffix(
         items_json: i32,
         row_suffix: i32,
@@ -566,6 +568,57 @@ impl Memory {
         }
     }
 
+    /// Read every logical key for a `WeilMap` whose stored column name
+    /// starts with `prefix`. The host returns trimmed key payloads
+    /// (`serde_json::to_string(K)`) so this wrapper deserializes each
+    /// entry back into `K`.
+    pub fn read_keys_for_map<K: DeserializeOwned>(prefix: String) -> Option<Vec<K>> {
+        let raw_prefix = get_length_prefixed_bytes_from_string(&prefix, 0);
+        // SAFETY: `raw_prefix` is a valid length-prefixed buffer; host returns a status/result pointer.
+        let ptr = unsafe { read_collection_keys(raw_prefix.as_ptr() as _) };
+
+        match read_bytes_from_memory(ptr) {
+            Ok(buffer) => parse_keys_as_vec(&buffer),
+            Err(err) => {
+                let WeilError::EntriesNotFoundInCollectionForKeysWithPrefix(_) = err else {
+                    panic!(
+                        "panic occured while reading keys for map prefix `{}` => {}",
+                        prefix, err
+                    )
+                };
+
+                None
+            }
+        }
+    }
+
+    /// Partitioned-row variant of [`read_keys_for_map`].
+    pub fn read_keys_for_map_with_suffix<K: DeserializeOwned>(
+        prefix: String,
+        row_suffix: &str,
+    ) -> Option<Vec<K>> {
+        let raw_prefix = get_length_prefixed_bytes_from_string(&prefix, 0);
+        let raw_suffix = get_length_prefixed_bytes_from_string(row_suffix, 0);
+        // SAFETY: Both buffers are valid length-prefixed buffers; host returns a status/result pointer.
+        let ptr = unsafe {
+            read_collection_keys_with_suffix(raw_prefix.as_ptr() as _, raw_suffix.as_ptr() as _)
+        };
+
+        match read_bytes_from_memory(ptr) {
+            Ok(buffer) => parse_keys_as_vec(&buffer),
+            Err(err) => {
+                let WeilError::EntriesNotFoundInCollectionForKeysWithPrefix(_) = err else {
+                    panic!(
+                        "panic occured while reading keys for map prefix `{}` (with suffix) => {}",
+                        prefix, err
+                    )
+                };
+
+                None
+            }
+        }
+    }
+
     /// Range variant of [`read_bulk_collection_with_suffix`]. Scans
     /// the partition row's columns over the closed byte-lex interval
     /// `[start_key, end_key]` in a single underlying SQL call.
@@ -653,6 +706,17 @@ fn parse_items_as_map<V: DeserializeOwned>(
         }
     }
     Some(out)
+}
+
+/// Parse the host key-list response into typed `WeilMap` keys.
+fn parse_keys_as_vec<K: DeserializeOwned>(buffer: &str) -> Option<Vec<K>> {
+    let raw_keys: Vec<String> = serde_json::from_str(buffer).ok()?;
+    Some(
+        raw_keys
+            .into_iter()
+            .filter_map(|key| serde_json::from_str::<K>(&key).ok())
+            .collect(),
+    )
 }
 
 /// Arguments envelope for cross-contract calls over FFI.

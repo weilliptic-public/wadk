@@ -1,0 +1,12 @@
+- Calculate 19 + 23 using one tool call only.
+- Calculate 144 / 12 using one tool call only.
+- Calculate 7 * 8 using one tool call only.
+- Report this machine's operating system and Python version using one tool call only.
+- Report free disk space for the current directory using one tool call only.
+- Find running processes whose names contain python using one tool call only.
+- Search the examples directory for Python files containing the text secured using one tool call only.
+- Look up DNS information for chatgpt.com .
+- Check whether google.com port 443 is reachable using one tool call only.
+- List environment variable names beginning with PATH.
+- Run the safe command pwd.
+- Fetch https://weilliptic.ai using one tool call only.

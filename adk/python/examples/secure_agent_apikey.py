@@ -2,7 +2,7 @@
 """Resolve an Agent Registry wallet through native HTTPS and secure memory.
 
 Required environment:
-    WEIL_API_KEY
+    WEIL_IDENTITY
 
 Optional external-storage environment:
     AWS_ACCESS_KEY_ID
@@ -28,9 +28,9 @@ class MyAgent:
 
 
 @weil_ai.agent(
-    api_key=os.environ["WEIL_API_KEY"],
+    identity=os.environ["WEIL_IDENTITY"],
     sentinel_host=os.environ.get("SENTINEL_HOST", "https://sentinel.weilliptic.ai"),
-    secure_wallet=True,
+    secure=True,
     require_lock=True,
     harden_process=True,
 )

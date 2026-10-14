@@ -23,7 +23,7 @@ The ABI uses an opaque `weil_secure_wallet *`. A binding should:
 
 1. Call `weil_secure_harden_process` before loading secrets.
 2. Construct a handle with `weil_secure_wallet_from_wallet_fd`,
-   `weil_secure_wallet_from_key_fd`, or `weil_secure_wallet_from_api`.
+   `weil_secure_wallet_from_key_fd`, or `weil_secure_wallet_from_identity`.
 3. Use `weil_secure_wallet_sign_digest` and
    `weil_secure_wallet_public_key` without exposing the handle address as an
    application-level value.

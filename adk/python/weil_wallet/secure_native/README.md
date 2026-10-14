@@ -24,8 +24,8 @@ external wallet storage with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 
 ```python
 @weil_ai.agent(
-    api_key=os.environ["WEIL_API_KEY"],
-    secure_wallet=True,
+    identity=os.environ["WEIL_IDENTITY"],
+    secure=True,
     require_lock=True,
     harden_process=True,
 )

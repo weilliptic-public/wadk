@@ -135,6 +135,25 @@ where
         }
     }
 
+    /// Returns all keys currently present in the map.
+    pub fn get_keys(&self) -> Vec<K> {
+        self.do_get_keys(None)
+    }
+
+    /// Returns all keys currently present in the partitioned row for this map.
+    pub fn get_keys_with_suffix(&self, suffix: String) -> Vec<K> {
+        self.do_get_keys(Some(suffix))
+    }
+
+    fn do_get_keys(&self, suffix: Option<String>) -> Vec<K> {
+        let prefix = format!("{}_", self.state_id);
+        match suffix {
+            Some(suffix) => Memory::read_keys_for_map_with_suffix(prefix, suffix.as_str()),
+            None => Memory::read_keys_for_map(prefix),
+        }
+        .unwrap_or_default()
+    }
+
     /// Batch exact-key multi-get. ONE host call returns a `HashMap`
     /// of every requested key present on the target row.
     ///
@@ -153,11 +172,7 @@ where
     /// `KeyManager` (one host call returns both purpose buckets), or
     /// `records.getN(None, &owned_namehashes)` on Registry for
     /// `get_owner_summary`.
-    pub fn getN<Q>(
-        &self,
-        suffix: Option<String>,
-        keys: &[Q],
-    ) -> std::collections::HashMap<K, V>
+    pub fn getN<Q>(&self, suffix: Option<String>, keys: &[Q]) -> std::collections::HashMap<K, V>
     where
         K: Borrow<Q> + Clone,
         Q: Hash + Eq + Serialize,
@@ -170,15 +185,16 @@ where
         // not by the full state_tree_key. See
         // `w_scruntime/src/collection_manager.rs::trim_state_id` and the
         // `read_items_*_from_db` helpers.
-        let storage_keys: Vec<String> =
-            keys.iter().map(|q| self.state_tree_key(q)).collect();
+        let storage_keys: Vec<String> = keys.iter().map(|q| self.state_tree_key(q)).collect();
 
         let raw: Option<std::collections::HashMap<String, V>> = match suffix {
             Some(s) => Memory::read_items_for_map_with_suffix(&storage_keys, s.as_str()),
             None => Memory::read_items_for_map(&storage_keys),
         };
 
-        let Some(raw) = raw else { return std::collections::HashMap::new(); };
+        let Some(raw) = raw else {
+            return std::collections::HashMap::new();
+        };
 
         // Reproject (trimmed column name → V) → (K → V).
         // The lookup key in `raw` is the trimmed form, not the full
@@ -189,8 +205,7 @@ where
             .filter_map(|q| {
                 let trimmed_key = serde_json::to_string(q).ok()?;
                 let v = raw.get(&trimmed_key)?.clone();
-                let owned_k: K =
-                    serde_json::from_value(serde_json::to_value(q).ok()?).ok()?;
+                let owned_k: K = serde_json::from_value(serde_json::to_value(q).ok()?).ok()?;
                 Some((owned_k, v))
             })
             .collect()

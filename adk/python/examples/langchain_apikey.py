@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LangChain agent with a Weil identity, using an API key."""
+"""LangChain agent with a Weil agent identity."""
 
 import json
 import os
@@ -70,15 +70,15 @@ class MyAgent:
 
         return response.content or ""
 
-# Optional: Put your S3 Credentials here
+# Put your S3 Credentials here
 creds = {
   "access_key_id": os.environ["AWS_ACCESS_KEY_ID"],
   "secret_access_key": os.environ["AWS_SECRET_ACCESS_KEY"],
   "region": os.environ["AWS_REGION"],
-  "bucket_name": os.environ["AWS_S3_BUCKET"],
+  "bucket_name": os.environ["AWS_BUCKET_NAME"],
 }
 
-@weil_ai.agent(api_key=os.environ["WEIL_AGENT_API_KEY"], credentials=creds, verify=True)
+@weil_ai.agent(identity=os.environ["WEIL_IDENTITY"], credentials=creds, verify=True)
 def create_agent():
     return MyAgent()
 

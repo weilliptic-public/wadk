@@ -43,7 +43,7 @@ use constants::{DEFAULT_CONCURRENCY, SENTINEL_HOST};
 use contract::ContractId;
 use reqwest::Client;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{future::Future, sync::Arc};
 use streaming::ByteStream;
 use tokio::sync::{Mutex, Semaphore};
@@ -77,7 +77,7 @@ pub struct WeilClient {
     wallet: Arc<std::sync::Mutex<Wallet>>,
     semaphore: Arc<Semaphore>,
     audit_contract_id: Arc<Mutex<Option<ContractId>>>,
-    creds: Option<S3Credentials>,
+    credentials: Option<S3Credentials>,
     sentinel_host: String,
 }
 
@@ -103,30 +103,30 @@ impl WeilClient {
                 None => DEFAULT_CONCURRENCY,
             })),
             audit_contract_id: Arc::new(Mutex::new(None)),
-            creds: None,
+            credentials: None,
             sentinel_host: SENTINEL_HOST.to_string(),
         })
     }
 
-    /// Construct a [`WeilClient`] from an **Agent Registry API key**.
+    /// Construct a [`WeilClient`] from an **agent identity**.
     ///
-    /// Resolves the key's wallet via Sentinel's `/get_agent_wallet` endpoint.
+    /// Resolves the identity's wallet via Sentinel's `/get_agent_wallet` endpoint.
     /// The wallet is masked (no local secret key), so executions must use the
     /// remote-signing path ([`WeilClient::execute_remotely`]), which delegates
     /// signing to Sentinel's `/sign_payload` endpoint.
     ///
     /// # Arguments
-    /// - `api_key`: Agent Registry API key identifying the wallet.
-    /// - `creds`: optional S3 credentials for caller-owned wallet storage.
+    /// - `identity`: agent identity whose wallet should be resolved.
+    /// - `credentials`: optional S3 credentials for caller-owned wallet storage.
     /// - `concurrency`: max concurrent HTTP submissions (defaults to [`DEFAULT_CONCURRENCY`]).
     /// - `sentinel_host`: Sentinel base URL (defaults to [`SENTINEL_HOST`]).
-    pub async fn with_api_key(
-        api_key: &str,
-        creds: Option<S3Credentials>,
+    pub async fn from_identity(
+        identity: &str,
+        credentials: Option<S3Credentials>,
         concurrency: Option<usize>,
         sentinel_host: Option<String>,
     ) -> Result<Self, anyhow::Error> {
-        let wallet = Wallet::from_api_key(api_key, creds.clone(), sentinel_host.clone()).await?;
+        let wallet = Wallet::from_identity(identity, credentials.clone(), sentinel_host.clone()).await?;
         Ok(Self {
             http_client: Client::builder()
                 .danger_accept_invalid_certs(true)
@@ -137,7 +137,7 @@ impl WeilClient {
                 None => DEFAULT_CONCURRENCY,
             })),
             audit_contract_id: Arc::new(Mutex::new(None)),
-            creds,
+            credentials,
             sentinel_host: sentinel_host.unwrap_or_else(|| SENTINEL_HOST.to_string()),
         })
     }
@@ -264,7 +264,7 @@ impl WeilClient {
     /// (non-streaming) result.
     ///
     /// Signs via Sentinel's `/sign_payload` endpoint instead of a local secret
-    /// key; use this for API-key clients ([`WeilClient::with_api_key`]).
+    /// key; use this for agent identity clients ([`WeilClient::from_identity`]).
     /// Convenience wrapper around [`WeilContractClient::execute_remotely`].
     pub async fn execute_remotely(
         &self,
@@ -460,9 +460,8 @@ impl WeilClient {
         // *content* was our `CommitReceiptPayload` text, not the object
         // itself). So this needs two decode passes: unwrap the envelope, then
         // parse the resulting string to reach the actual `Option<String>`.
-        let envelope: Value = serde_json::from_str(&resp.txn_result).map_err(|e| {
-            anyhow::anyhow!("failed to parse get_receipt_for_commit response: {e}")
-        })?;
+        let envelope: Value = serde_json::from_str(&resp.txn_result)
+            .map_err(|e| anyhow::anyhow!("failed to parse get_receipt_for_commit response: {e}"))?;
 
         if let Some(err) = envelope.get("Err") {
             anyhow::bail!("get_receipt_for_commit returned an error: {err}");
@@ -480,9 +479,7 @@ impl WeilClient {
         match inner {
             Value::Null => Ok(None),
             Value::String(s) => Ok(Some(s)),
-            other => anyhow::bail!(
-                "unexpected get_receipt_for_commit payload shape: {other}"
-            ),
+            other => anyhow::bail!("unexpected get_receipt_for_commit payload shape: {other}"),
         }
     }
 
@@ -799,7 +796,8 @@ impl WeilContractClient {
         };
 
         let signature = if is_remote {
-            self.remote_sign_execute_args(&wallet, &txn_header, &args).await?
+            self.remote_sign_execute_args(&wallet, &txn_header, &args)
+                .await?
         } else {
             self.sign_execute_args(&wallet, &txn_header, &args)?
         };
@@ -870,7 +868,7 @@ impl WeilContractClient {
             .remote_sign(
                 &json_payload,
                 &self.client.sentinel_host,
-                self.client.creds.clone(),
+                self.client.credentials.clone(),
                 &self.client.http_client,
             )
             .await

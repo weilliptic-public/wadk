@@ -18,14 +18,13 @@
 //! wallet.set_index(&SelectedAccount::Derived(1)).unwrap();
 //! ```
 
+use crate::constants::SENTINEL_HOST;
 use crate::utils::hash_sha256;
 use bip32::{ChildNumber, ExtendedPrivateKey};
 use libsecp256k1::{Message, PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{fs::File, io::Read, path::Path, str::FromStr};
-
-const SENTINEL_HOST: &str = "https://sentinel.weilliptic.ai";
 
 // ── Organization info ─────────────────────────────────────────────────────────
 
@@ -167,17 +166,17 @@ impl Account {
     ///
     /// `pk_hex` is decoded into raw SEC1 point bytes and parsed by `secp256k1`;                                                                      
     /// both the compressed (33-byte) and uncompressed (65-byte) encodings are                                                                        
-    /// accepted. 
+    /// accepted.
     ///
     /// # Why this exists
-    /// Wallets loaded through [`Wallet::from_api_key`] have masked xprv: So
-    /// we have only public keys and cant derive the secret keys from 
+    /// Wallets loaded through [`Wallet::from_identity`] have masked xprv: So
+    /// we have only public keys and cant derive the secret keys from
     /// masked xprv. Accounts built here therefore hold `secret_key: None` and
     /// cannot sign locally — [`Account::get_secret_key`] panics on them by
     /// design, and signing must be routed through [`Wallet::remote_sign`].
     fn from_public_key_hex(pk_hex: &str, address: String) -> anyhow::Result<Self> {
-        let pk_bytes = hex::decode(pk_hex)
-            .map_err(|e| anyhow::anyhow!("invalid public_key hex: {}", e))?;
+        let pk_bytes =
+            hex::decode(pk_hex).map_err(|e| anyhow::anyhow!("invalid public_key hex: {}", e))?;
         let public_key = PublicKey::parse_slice(&pk_bytes, None)
             .map_err(|e| anyhow::anyhow!("invalid public key: {}", e))?;
         Ok(Account {
@@ -199,7 +198,7 @@ impl Account {
 
     /// Returns the account's secp256k1 secret key.
     ///
-    /// Panics for API-key accounts: they are public-only and sign remotely.
+    /// Panics for agent identity accounts: they are public-only and sign remotely.
     pub fn get_secret_key(&self) -> &SecretKey {
         self.secret_key.as_ref().expect("secret key is missing")
     }
@@ -359,16 +358,16 @@ impl Wallet {
         })
     }
 
-    /// Load a [`Wallet`] using an Agent Registry API key.
+    /// Load a [`Wallet`] using an agent identity.
     ///
     /// Fetches the wallet JSON from the sentinel `/get_agent_wallet` endpoint,
     /// then parses and constructs the wallet.
-    pub async fn from_api_key(
-        api_key: &str,
-        creds: Option<S3Credentials>,
+    pub async fn from_identity(
+        identity: &str,
+        credentials: Option<S3Credentials>,
         sentinel_host: Option<String>,
     ) -> anyhow::Result<Self> {
-        let wallet_json = Self::get_agent_wallet(api_key, creds, false, sentinel_host).await?;
+        let wallet_json = Self::get_agent_wallet(identity, credentials, false, sentinel_host).await?;
         let wf: Value = serde_json::from_str(&wallet_json)
             .map_err(|e| anyhow::anyhow!("failed to parse wallet JSON from sentinel: {}", e))?;
 
@@ -381,25 +380,36 @@ impl Wallet {
         let derived_accounts: Vec<Account> = derived_account_values
             .iter()
             .map(|entry| {
-                let addr = entry.get("account_address")
-                    .and_then(Value::as_str).unwrap_or("").to_string();
-                let pk = entry.get("public_key")
+                let addr = entry
+                    .get("account_address")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let pk = entry
+                    .get("public_key")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow::anyhow!("derived account missing public_key"))?;
                 Account::from_public_key_hex(pk, addr)
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        let added_accounts: Vec<Account> = wf.get("external_accounts")
+        let added_accounts: Vec<Account> = wf
+            .get("external_accounts")
             .and_then(Value::as_array)
             .map(|v| v.iter())
             .into_iter()
             .flatten()
             .map(|entry| {
-                let addr = entry.get("account_address")
-                    .and_then(Value::as_str).unwrap_or("").to_string();
-                let sk = entry.get("secret_key")
-                    .and_then(Value::as_str).unwrap_or("").to_string();
+                let addr = entry
+                    .get("account_address")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let sk = entry
+                    .get("secret_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
                 let secret_bytes = hex::decode(&sk)
                     .map_err(|e| anyhow::anyhow!("invalid external secret_key hex: {}", e))?;
                 Account::from_secret_bytes_and_address(&secret_bytes, addr)
@@ -422,7 +432,8 @@ impl Wallet {
             })
         });
 
-        let sel: WalletSelectedAccount = wf.get("selected_account")
+        let sel: WalletSelectedAccount = wf
+            .get("selected_account")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or(WalletSelectedAccount {
                 account_type: "derived".into(),
@@ -445,19 +456,19 @@ impl Wallet {
         })
     }
 
-    /// Fetch the wallet JSON for an Agent Registry API key from sentinel.
+    /// Fetch the wallet JSON for an agent identity from sentinel.
     ///
-    /// POSTs `{ "api_key": ..., "credentials": ... }` to `/get_agent_wallet`.
+    /// POSTs `{ "identity": ..., "credentials": ... }` to `/get_agent_wallet`.
     /// The endpoint returns either a JSON string (the wallet file contents) or
     /// an error object. Non-JSON responses are treated as error messages.
     async fn get_agent_wallet(
-        api_key: &str,
-        creds: Option<S3Credentials>,
+        identity: &str,
+        credentials: Option<S3Credentials>,
         unmasked: bool,
         sentinel_host: Option<String>,
     ) -> anyhow::Result<String> {
-        let mut payload = serde_json::json!({ "api_key": api_key });
-        if let Some(c) = creds {
+        let mut payload = serde_json::json!({ "identity": identity });
+        if let Some(c) = credentials {
             payload["credentials"] = serde_json::to_value(c)?;
         }
         payload["unmasked"] = serde_json::to_value(unmasked)?;
@@ -475,12 +486,14 @@ impl Wallet {
             .map_err(|e| anyhow::anyhow!("agent wallet lookup request failed: {}", e))?;
 
         let status = resp.status();
-        let body = resp.text().await
+        let body = resp
+            .text()
+            .await
             .map_err(|e| anyhow::anyhow!("failed to read agent wallet response: {}", e))?;
 
         let result: Value = match serde_json::from_str(&body) {
             Ok(v) => v,
-            Err(_) if body.trim().is_empty() => anyhow::bail!("agent wallet not found for API key"),
+            Err(_) if body.trim().is_empty() => anyhow::bail!("agent wallet not found for identity"),
             Err(_) => anyhow::bail!("agent wallet lookup failed: {}", body.trim()),
         };
 
@@ -488,15 +501,22 @@ impl Wallet {
             anyhow::bail!("agent wallet lookup failed: HTTP {} {}", status, result);
         }
 
-        let wallet_json = result.as_str()
-            .ok_or_else(|| anyhow::anyhow!("agent wallet lookup failed: unexpected response: {:?}", result))?
-            .trim();
+        // Sentinel may return the wallet double-encoded as a JSON string or as
+        // a direct JSON object; normalize both to the wallet JSON text.
+        let wallet_json = match &result {
+            Value::String(s) => s.trim().to_string(),
+            Value::Object(_) => serde_json::to_string(&result)?,
+            other => anyhow::bail!(
+                "agent wallet lookup failed: unexpected response: {:?}",
+                other
+            ),
+        };
 
         if wallet_json.is_empty() {
-            anyhow::bail!("agent wallet not found for API key");
+            anyhow::bail!("agent wallet not found for identity");
         }
 
-        Ok(wallet_json.to_string())
+        Ok(wallet_json)
     }
     // ── Account management ────────────────────────────────────────────────────
 
@@ -574,9 +594,9 @@ impl Wallet {
 
     /// Signs a canonical JSON payload via Sentinel's `/sign_payload` endpoint.
     ///
-    /// Used by API-key wallets, which hold no local secret key. Sends the
+    /// Used by agent identity wallets, which hold no local secret key. Sends the
     /// payload, the masked wallet file, and optional S3 credentials; returns
-    /// the hex signature. Errors if the wallet was not created from an API key,
+    /// the hex signature. Errors if the wallet was not created from an identity,
     /// or on a non-2xx / signature-less response.
     pub(crate) async fn remote_sign(
         &self,
@@ -586,8 +606,10 @@ impl Wallet {
         client: &reqwest::Client,
     ) -> anyhow::Result<String> {
         let url = format!("{}/sign_payload", sentinel_host);
-        let wallet_file = self.wallet_file.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("remote signing requires an API-key wallet"))?;
+        let wallet_file = self
+            .wallet_file
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("remote signing requires an agent identity wallet"))?;
         let body = serde_json::json!({ "payload": buf, "wallet": wallet_file, "credentials": credentials });
 
         let resp = client.post(&url).json(&body).send().await?;

@@ -108,6 +108,7 @@ class WeilAgent:
             "get_auth_headers",
             "aget_auth_headers",
             "audit",
+            "stream_audit",
             "pensieve",
             "weil_wallet",
             "inner_agent",
@@ -364,6 +365,10 @@ class WeilAgent:
         Safe to call from both sync and async contexts.
         """
         return _run_sync(self._audit_async(log))
+
+    def stream_audit(self, topic: str = "audits") -> Callable[[Callable], Callable]:
+        """Return a decorator that publishes wrapped calls to a stream topic."""
+        return self._get_client().stream_audit(topic)
 
     def pensieve(self, **kwargs: Any) -> Any:
         """Return a Pensieve graph-memory client for this agent."""

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 import asyncio
+import concurrent.futures
+import contextvars
+import dataclasses
 import functools
 import inspect
 import json
+import threading
 import warnings
+from collections.abc import Mapping
 from typing import Any, AsyncIterator, Callable, Optional
 import httpx
 from .api.platform_api import PlatformApi
@@ -38,6 +43,123 @@ def _org_context(org_info: Any) -> Optional[OrgContext]:
         subgroup=subgroup if subgroup else None,
     )
 from .wallet import SelectedAccount, Wallet
+
+_sync_loop: Optional[asyncio.AbstractEventLoop] = None
+_sync_loop_lock = threading.Lock()
+_NO_REQUEST_PAYLOAD = object()
+
+
+def _get_sync_loop() -> asyncio.AbstractEventLoop:
+    global _sync_loop
+    with _sync_loop_lock:
+        if _sync_loop is None or _sync_loop.is_closed():
+            loop = asyncio.new_event_loop()
+            threading.Thread(
+                target=loop.run_forever, name="weil-wallet-sync-loop", daemon=True
+            ).start()
+            _sync_loop = loop
+        return _sync_loop
+
+
+def _run_sync(coro: Any) -> Any:
+    loop = _get_sync_loop()
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+
+    if running is loop:
+        ctx = contextvars.copy_context()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(ctx.run, asyncio.run, coro).result()
+
+    return asyncio.run_coroutine_threadsafe(coro, loop).result()
+
+
+def _jsonable(value: Any) -> Any:
+    try:
+        from fastapi.encoders import jsonable_encoder
+    except Exception:
+        jsonable_encoder = None
+
+    if jsonable_encoder is not None:
+        try:
+            return jsonable_encoder(value)
+        except Exception:
+            pass
+
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return _jsonable(dataclasses.asdict(value))
+
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return model_dump(mode="json")
+        except TypeError:
+            return model_dump()
+
+    dict_method = getattr(value, "dict", None)
+    if callable(dict_method):
+        try:
+            return dict_method()
+        except Exception:
+            pass
+
+    if isinstance(value, Mapping):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(v) for v in value]
+
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+
+    return repr(value)
+
+
+def _decode_body_bytes(body: bytes) -> Any:
+    if not body:
+        return {}
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return body.hex()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def _is_starlette_request(value: Any) -> bool:
+    try:
+        from starlette.requests import Request
+    except Exception:
+        Request = None
+
+    if Request is not None and isinstance(value, Request):
+        return True
+
+    return (
+        value.__class__.__module__ == "starlette.requests"
+        and value.__class__.__name__ == "Request"
+    )
+
+
+async def _extract_fastapi_request_payload(request: Any) -> Any:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+
+    if content_type == "application/json" or content_type.endswith("+json"):
+        try:
+            return _jsonable(await request.json())
+        except Exception:
+            return _decode_body_bytes(await request.body())
+
+    if content_type in ("application/x-www-form-urlencoded", "multipart/form-data"):
+        form = await request.form()
+        return {key: _jsonable(value) for key, value in form.multi_items()}
+
+    return _decode_body_bytes(await request.body())
+
 
 class WeilClient:
     """High-level client for WeilChain applet methods.
@@ -76,6 +198,7 @@ class WeilClient:
         self._audit_contract_id: Optional[ContractId] = None
         self._audit_contract_id_lock = asyncio.Lock()
         self._publisher_contract_id: Optional[ContractId] = None
+        self._publisher_contract_ids: dict[str, ContractId] = {}
         self._publisher_contract_id_lock = asyncio.Lock()
         self._remote_signing = False
         self._credentials: Optional[dict] = None
@@ -199,6 +322,7 @@ class WeilClient:
             self._audit_contract_id = None
         async with self._publisher_contract_id_lock:
             self._publisher_contract_id = None
+            self._publisher_contract_ids.clear()
 
     async def derived_account_count(self) -> int:
         """Return the number of BIP32 HD-derived accounts in the wallet."""
@@ -420,17 +544,29 @@ class WeilClient:
                 return self._audit_contract_id
             raise RuntimeError(f"get_applet_address failed: {data.get('Err', data)}")
 
-    async def _get_publisher_contract_id(self) -> ContractId:
-        """Resolve and cache the publisher applet contract address."""
+    def _publisher_svc_name_for_wallet_org(self) -> str:
+        org = self._wallet.org
+        if org is None or not org.name:
+            raise RuntimeError("stream_audit requires a wallet linked to an organization")
+        return f"publisher::{org.name}"
+
+    async def _get_publisher_contract_id(
+        self,
+        svc_name: str = PUBLISHER_APPLET_SVC_NAME,
+    ) -> ContractId:
+        """Resolve and cache a publisher applet contract address."""
         async with self._publisher_contract_id_lock:
-            if self._publisher_contract_id is not None:
-                return self._publisher_contract_id
-            self._publisher_contract_id = await self.get_applet_id_for_name(
+            if svc_name in self._publisher_contract_ids:
+                return self._publisher_contract_ids[svc_name]
+            contract_id = await self.get_applet_id_for_name(
                 self._http_client,
-                PUBLISHER_APPLET_SVC_NAME,
+                svc_name,
                 wallet_address=self.wallet_addr(),
             )
-            return self._publisher_contract_id
+            self._publisher_contract_ids[svc_name] = contract_id
+            if svc_name == PUBLISHER_APPLET_SVC_NAME:
+                self._publisher_contract_id = contract_id
+            return contract_id
 
     async def get_receipt_for_commit(self, commit_hash: str) -> Optional[str]:
         """Read back the receipt content currently persisted for ``commit_hash``.
@@ -541,6 +677,74 @@ class WeilClient:
 
         return decorator
 
+    async def _stream_audit_payload(
+        self,
+        sig: inspect.Signature,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> str:
+        bound = sig.bind(*args, **kwargs)
+        payload = {
+            name: value
+            for name, value in bound.arguments.items()
+            if name not in ("self", "cls")
+        }
+
+        request_payload = await self._extract_request_payload(payload.values())
+        if request_payload is not _NO_REQUEST_PAYLOAD:
+            return json.dumps(_jsonable(request_payload), default=repr)
+        return json.dumps(_jsonable(payload), default=repr)
+
+    @staticmethod
+    async def _extract_request_payload(values: Any) -> Any:
+        for value in values:
+            if _is_starlette_request(value):
+                return await _extract_fastapi_request_payload(value)
+
+        return _NO_REQUEST_PAYLOAD
+
+    def stream_audit(self, topic: str) -> Callable[[Callable], Callable]:
+        """Publish wrapped-call arguments to ``publisher::<wallet org>``.
+
+        The wrapped function may be sync or async. The publisher applet address
+        is resolved from the wallet's organization and cached per service name.
+        """
+        if not topic:
+            raise ValueError("stream_audit topic must be non-empty")
+
+        def decorator(func: Callable) -> Callable:
+            sig = inspect.signature(func)
+
+            if inspect.iscoroutinefunction(func):
+
+                @functools.wraps(func)
+                async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    payload = await self._stream_audit_payload(sig, args, kwargs)
+                    await self.publish(
+                        topic,
+                        payload,
+                        svc_name=self._publisher_svc_name_for_wallet_org(),
+                    )
+                    return await func(*args, **kwargs)
+
+                return async_wrapper
+
+            @functools.wraps(func)
+            def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+                payload = _run_sync(self._stream_audit_payload(sig, args, kwargs))
+                _run_sync(
+                    self.publish(
+                        topic,
+                        payload,
+                        svc_name=self._publisher_svc_name_for_wallet_org(),
+                    )
+                )
+                return func(*args, **kwargs)
+
+            return sync_wrapper
+
+        return decorator
+
     async def create_topic(
         self,
         topic: str,
@@ -562,11 +766,17 @@ class WeilClient:
             "create_topic", method_args, False, False
         )
 
-    async def publish(self, topic: str, payload: str) -> TransactionResult:
+    async def publish(
+        self,
+        topic: str,
+        payload: str,
+        *,
+        svc_name: str = PUBLISHER_APPLET_SVC_NAME,
+    ) -> TransactionResult:
         """Publish a payload through ``publisher::weil``.
 
         """
-        contract_id = await self._get_publisher_contract_id()
+        contract_id = await self._get_publisher_contract_id(svc_name)
         method_args = json.dumps({"topic": topic, "payload": payload})
         return await self.to_contract_client(contract_id).execute(
             "publish", method_args, False, False

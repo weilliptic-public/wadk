@@ -58,7 +58,7 @@ _weil_verify_tls: contextvars.ContextVar[bool] = contextvars.ContextVar(
 # is the replay-protection mechanism: captured headers cannot be replayed
 # more than 5 minutes after they were issued.
 _ALLOWED_TIMESTAMP_DRIFT: int = 300  # 5 minutes
-_SECURED_CHECK_TOPIC = "weilliptic_secured"
+_SECURED_CHECK_TOPIC = "security"
 # Set on @secured wrappers so framework audit hooks can tell a guarded tool
 # apart and record its arguments and response.
 _SECURED_ATTR = "__weil_secured__"
@@ -287,49 +287,48 @@ async def wallet_has_execution_permission(
         from_addr = wallet_addr
         to_addr = from_addr
         weilpod_counter = applet_id.pod_counter()
-        # Keys are registered on the identity applet as "<subgroup>_<address>".
-        key = f"{subgroup}_{wallet_addr}" if subgroup else wallet_addr
-        method_args = json.dumps({"key": key, "purpose": "Execution"})
+        # Org-level keys span every subgroup, so a subgroup tool accepts the
+        # bare org-level address or "<subgroup>_<addr>".
+        keys = [wallet_addr]
+        if subgroup:
+            keys.append(f"{subgroup}_{wallet_addr}")
+        for key in keys:
+            method_args = json.dumps({"key": key, "purpose": "Execution"})
 
-        final_args = {
-            "contract_address": applet_id,
-            "contract_method": "key_has_purpose",
-            "contract_input_bytes": method_args,
-            "should_hide_args": True,
-        }
+            final_args = {
+                "contract_address": applet_id,
+                "contract_method": "key_has_purpose",
+                "contract_input_bytes": method_args,
+                "should_hide_args": True,
+            }
 
-        nonce = int(current_time_millis())
-        header = TransactionHeader(
-            nonce=nonce,
-            public_key="",
-            from_addr=from_addr,
-            to_addr=to_addr,
-            weilpod_counter=weilpod_counter,
-        )
+            nonce = int(current_time_millis())
+            header = TransactionHeader(
+                nonce=nonce,
+                public_key="",
+                from_addr=from_addr,
+                to_addr=to_addr,
+                weilpod_counter=weilpod_counter,
+            )
 
-        base_txn = BaseTransaction(header=header)
-        payload = WeilClient._build_submit_payload("", base_txn, final_args)
+            base_txn = BaseTransaction(header=header)
+            payload = WeilClient._build_submit_payload("", base_txn, final_args)
 
-        resp = await PlatformApi.submit_transaction(
-            payload,
-            http_client,
-            is_non_blocking=False,
-        )
+            resp = await PlatformApi.submit_transaction(
+                payload,
+                http_client,
+                is_non_blocking=False,
+            )
 
-    txn_result = json.loads(resp.txn_result)
-    if "Ok" not in txn_result:
+            txn_result = json.loads(resp.txn_result)
+            if "Ok" not in txn_result:
+                continue
+
+            flag = txn_result["Ok"]
+            if flag is True or flag == "true":
+                return True
+
         return False
-
-    flag = txn_result["Ok"]
-    if flag is True:
-        return True
-    if flag is False:
-        return False
-    if flag == "false":
-        return False
-    if flag == "true":
-        return True
-    return False
 
 async def _call_secured_contract(
     http_client: httpx.AsyncClient,
@@ -416,49 +415,48 @@ async def wallet_has_management_permission(
         from_addr = wallet_addr
         to_addr = from_addr
         weilpod_counter = applet_id.pod_counter()
-        # Keys are registered on the identity applet as "<subgroup>_<address>".
-        key = f"{subgroup}_{wallet_addr}" if subgroup else wallet_addr
-        method_args = json.dumps({"key": key, "purpose": "Management"})
+        # Org-level keys span every subgroup, so a subgroup tool accepts the
+        # bare org-level address or "<subgroup>_<addr>".
+        keys = [wallet_addr]
+        if subgroup:
+            keys.append(f"{subgroup}_{wallet_addr}")
+        for key in keys:
+            method_args = json.dumps({"key": key, "purpose": "Management"})
 
-        final_args = {
-            "contract_address": applet_id,
-            "contract_method": "key_has_purpose",
-            "contract_input_bytes": method_args,
-            "should_hide_args": True,
-        }
+            final_args = {
+                "contract_address": applet_id,
+                "contract_method": "key_has_purpose",
+                "contract_input_bytes": method_args,
+                "should_hide_args": True,
+            }
 
-        nonce = int(current_time_millis())
-        header = TransactionHeader(
-            nonce=nonce,
-            public_key="",
-            from_addr=from_addr,
-            to_addr=to_addr,
-            weilpod_counter=weilpod_counter,
-        )
+            nonce = int(current_time_millis())
+            header = TransactionHeader(
+                nonce=nonce,
+                public_key="",
+                from_addr=from_addr,
+                to_addr=to_addr,
+                weilpod_counter=weilpod_counter,
+            )
 
-        base_txn = BaseTransaction(header=header)
-        payload = WeilClient._build_submit_payload("", base_txn, final_args)
+            base_txn = BaseTransaction(header=header)
+            payload = WeilClient._build_submit_payload("", base_txn, final_args)
 
-        resp = await PlatformApi.submit_transaction(
-            payload,
-            http_client,
-            is_non_blocking=False,
-        )
+            resp = await PlatformApi.submit_transaction(
+                payload,
+                http_client,
+                is_non_blocking=False,
+            )
 
-    txn_result = json.loads(resp.txn_result)
-    if "Ok" not in txn_result:
+            txn_result = json.loads(resp.txn_result)
+            if "Ok" not in txn_result:
+                continue
+
+            flag = txn_result["Ok"]
+            if flag is True or flag == "true":
+                return True
+
         return False
-
-    flag = txn_result["Ok"]
-    if flag is True:
-        return True
-    if flag is False:
-        return False
-    if flag == "false":
-        return False
-    if flag == "true":
-        return True
-    return False
 
 
 def secured_user(svc_name: str) -> Callable:
@@ -536,29 +534,29 @@ def _secured(svc_name: str, *, allow_execution: bool) -> Callable:
                     return _permission_denied(wallet_addr, svc_name)
 
                 key_manager_id = ContractId(str(key_manager_addr))
-                scoped_key = scope.key_for_wallet(wallet_addr)
 
-                # Management first: it satisfies both decorators, so an admin
-                # key costs one round trip instead of two.
-                if await _secured_key_has_purpose(
-                    http_client, key_manager_id, wallet_addr,
-                    scoped_key, "Management",
-                ):
-                    await _publish_secured_check(
-                        http_client, wallet_addr, svc_name, True)
-                    return None
-
-                if allow_execution and await _secured_key_has_purpose(
-                    http_client, key_manager_id, wallet_addr,
-                    scoped_key, "Execution",
-                ):
-                    await _publish_secured_check(
-                        http_client, wallet_addr, svc_name, True)
-                    return None
-
+                # Org-level keys span every subgroup, so a subgroup tool
+                # accepts the bare org-level address or "<subgroup>_<addr>".
+                keys = [wallet_addr]
+                if scope.subgroup:
+                    keys.append(scope.key_for_wallet(wallet_addr))
+                purposes = ["Management"]
+                if allow_execution:
+                    purposes.append("Execution")
+                passed = False
+                for key in keys:
+                    for purpose in purposes:
+                        if await _secured_key_has_purpose(
+                            http_client, key_manager_id, wallet_addr,
+                            key, purpose,
+                        ):
+                            passed = True
+                            break
+                    if passed:
+                        break
                 await _publish_secured_check(
-                    http_client, wallet_addr, svc_name, False)
-                return _permission_denied(wallet_addr, svc_name)
+                    http_client, wallet_addr, svc_name, passed)
+                return None if passed else _permission_denied(wallet_addr, svc_name)
 
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)

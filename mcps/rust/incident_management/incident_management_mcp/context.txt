@@ -1,0 +1,141 @@
+MULTI-STEP INCIDENT RESPONSE (IMMEDIATE LOGGING MODE)
+
+When handling complex incident scenarios with multiple steps, follow these rules:
+
+CRITICAL RULES
+
+Execute actions ONE AT A TIME in strict order
+
+Wait for each action to complete successfully
+
+Extract and store important fields from each response (URLs, engineer name, phone, email, etc.)
+
+Immediately log the event after each successful action
+
+Reuse stored data in subsequent steps
+
+Never start the next step until:
+
+The previous action is complete
+
+Its log entry has been written
+
+EXECUTION PATTERN (INLINE LOGGING)
+
+When user says:
+"incident id INC-123. Production latency spike. 1. create warroom 2. get oncall 3. notify via sms and email 4. post to discord"
+
+Execute like this:
+
+STEP 1: Create War Room
+
+Call:
+
+create_war_room("INC-123", "critical")
+
+
+Extract:
+
+join_url
+
+host_url
+
+Store:
+
+war_room_join_url
+war_room_host_url
+
+
+Immediately log:
+
+log_incident_event(
+  "INC-123",
+  "WAR_ROOM_CREATED",
+  "War room created successfully",
+  "{\"join_url\":\"<join>\",\"host_url\":\"<host>\"}"
+)
+
+STEP 2: Get Oncall Engineer
+
+Call:
+
+page_oncall("INC-123", "Production latency spike", "critical")
+
+
+Extract:
+
+engineer_name
+
+engineer_phone
+
+engineer_email
+
+Store them.
+
+Immediately log:
+
+log_incident_event(
+  "INC-123",
+  "ONCALL_ASSIGNED",
+  "Oncall engineer assigned",
+  "{\"name\":\"<name>\",\"phone\":\"<phone>\",\"email\":\"<email>\"}"
+)
+
+STEP 3: Notify via SMS
+
+Call:
+
+notify_sms("INC-123", "<phone>", "War room: <join_url>")
+
+
+On success, log:
+
+log_incident_event(
+  "INC-123",
+  "SMS_SENT",
+  "SMS sent to oncall engineer",
+  "{\"phone\":\"<phone>\"}"
+)
+
+STEP 4: Notify via Email
+
+Call:
+
+notify_email("INC-123", "<email>", "URGENT: Incident INC-123", "Join: <join_url>", "critical")
+
+
+On success, log:
+
+log_incident_event(
+  "INC-123",
+  "EMAIL_SENT",
+  "Email sent to oncall engineer",
+  "{\"email\":\"<email>\"}"
+)
+
+STEP 5: Post to Discord
+
+Call:
+
+notify_discord("INC-123", "War Room: <join_url>\nEngineer: <name>", "critical")
+
+
+On success, log:
+
+log_incident_event(
+  "INC-123",
+  "DISCORD_NOTIFIED",
+  "Discord channel notified",
+  "{\"severity\":\"critical\"}"
+)
+
+FINAL STEP: User Summary
+
+Only after all steps and logs succeed, respond:
+
+Incident INC-123 handled:
+- War room created
+- Oncall engineer assigned
+- SMS & Email sent
+- Discord notified
+- All actions logged in real time

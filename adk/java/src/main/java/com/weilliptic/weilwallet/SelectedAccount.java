@@ -5,8 +5,8 @@ import java.util.Objects;
 /**
  * Identifies which account in the wallet is currently active.
  *
- * <p>Supports both {@code Derived} (HD-derived from the wallet xprv) and
- * {@code External} (externally imported) accounts.</p>
+ * <p>Only {@code External} accounts are supported — these are externally imported
+ * accounts loaded from sentinel-issued account export files.</p>
  */
 public final class SelectedAccount {
 

@@ -12,12 +12,55 @@
     <description>WeilChain wallet, client, and agent with audit capabilities</description>
 
     <properties>
-        <maven.compiler.source>11</maven.compiler.source>
-        <maven.compiler.target>11</maven.compiler.target>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- What a bare `mvn exec:java` runs; pick another with -Dexec.mainClass=... -->
+        <exec.mainClass>com.weilliptic.weilwallet.examples.AuditExample</exec.mainClass>
     </properties>
 
     <dependencies>
+        <!-- Google ADK for Java: agents, tools, and the Plugin hook interface -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk</artifactId>
+            <version>1.11.0</version>
+        </dependency>
+        <!-- A2A: ADK's executor and remote agent, over the a2a-java SDK -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-a2a</artifactId>
+            <version>1.11.0</version>
+        </dependency>
+        <!-- OpenAI, or any OpenAI-compatible server, as an ADK model: ADK's
+             LangChain4j adapter over LangChain4j's OpenAI client. Used when
+             MODEL_PROVIDER=openai; see WeilAgentSetup.model(). -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-langchain4j</artifactId>
+            <version>1.11.0</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+            <version>1.12.2</version>
+        </dependency>
+        <!-- A2A server side: request handling and the JSON-RPC transport -->
+        <dependency>
+            <groupId>io.github.a2asdk</groupId>
+            <artifactId>a2a-java-sdk-server-common</artifactId>
+            <version>0.3.2.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a2asdk</groupId>
+            <artifactId>a2a-java-sdk-transport-jsonrpc</artifactId>
+            <version>0.3.2.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a2asdk</groupId>
+            <artifactId>a2a-java-sdk-client-transport-jsonrpc</artifactId>
+            <version>0.3.2.Final</version>
+        </dependency>
         <!-- secp256k1, BIP32, BIP39 -->
         <dependency>
             <groupId>org.bitcoinj</groupId>
@@ -70,9 +113,10 @@
                         </goals>
                     </execution>
                 </executions>
-                <configuration>
-                    <mainClass>com.weilliptic.weilwallet.examples.AuditExample</mainClass>
-                </configuration>
+                <!-- No <configuration><mainClass> here: a value set in the plugin's
+                     configuration beats -Dexec.mainClass on the command line, so
+                     every example would run AuditExample. The default lives in
+                     the exec.mainClass property instead, which -D overrides. -->
             </plugin>
         </plugins>
     </build>

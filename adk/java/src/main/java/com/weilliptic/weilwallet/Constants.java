@@ -5,6 +5,7 @@ package com.weilliptic.weilwallet;
  */
 public final class Constants {
 
+    // local sentinel; change to https://sentinel.weilliptic.ai if using the prod
     public static final String SENTINEL_HOST = "https://sentinel.weilliptic.ai";
     public static final int DEFAULT_CONCURRENCY = 64;
 

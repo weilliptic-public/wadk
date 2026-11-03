@@ -79,8 +79,21 @@ public final class Wallet {
      */
     public static Wallet fromWalletFile(Path path) throws IOException {
         String content = new String(Files.readAllBytes(path));
-        JsonNode root = JSON.readTree(content);
+        return fromWalletJson(content, false);
+    }
 
+    /**
+     * Load a Wallet from serialized wallet.wc JSON content.
+     *
+     * @param content Serialized wallet JSON.
+     * @param masked  True when the wallet came from the Agent Registry API-key flow.
+     *                Masked wallets are public-only and sign through Sentinel.
+     */
+    public static Wallet fromWalletJson(String content, boolean masked) throws IOException {
+        return fromWalletJson(JSON.readTree(content), masked);
+    }
+
+    public static Wallet fromWalletJson(JsonNode root, boolean masked) {
         String type = root.path("type").asText("");
         if (!"wallet".equals(type)) {
             throw new IllegalArgumentException(
@@ -96,25 +109,39 @@ public final class Wallet {
         }
 
         String xprvStr = root.path("xprv").asText();
-        DeterministicKey masterKey = DeterministicKey.deserializeB58(xprvStr, MainNetParams.get());
-        DeterministicKey accountKey = resolveAccountLevelKey(masterKey, derivedNodes);
-
         Wallet w = new Wallet();
 
-        for (JsonNode entry : derivedNodes) {
-            int index = entry.path("index").asInt();
-            String address = entry.path("account_address").asText();
-            DeterministicKey childKey = HDKeyDerivation.deriveChildKey(
-                accountKey, new ChildNumber(index, false));
-            ECKey ecKey = ECKey.fromPrivate(childKey.getPrivKeyBytes());
-            w.derivedAccounts.add(new Account(ecKey, address));
-        }
+        if (masked) {
+            for (JsonNode entry : derivedNodes) {
+                String address = entry.path("account_address").asText();
+                byte[] publicKey = Utils.hexToBytes(entry.path("public_key").asText());
+                w.derivedAccounts.add(new Account(publicKey, address));
+            }
 
-        for (JsonNode entry : externalNodes) {
-            String secretKeyHex = entry.path("secret_key").asText();
-            String address = entry.path("account_address").asText();
-            PrivateKey pk = new PrivateKey(secretKeyHex);
-            w.addedAccounts.add(Account.fromPrivateKeyAndAddress(pk, address));
+            for (JsonNode entry : externalNodes) {
+                String address = entry.path("account_address").asText();
+                byte[] publicKey = Utils.hexToBytes(entry.path("public_key").asText());
+                w.addedAccounts.add(new Account(publicKey, address));
+            }
+        } else {
+            DeterministicKey masterKey = DeterministicKey.deserializeB58(xprvStr, MainNetParams.get());
+            DeterministicKey accountKey = resolveAccountLevelKey(masterKey, derivedNodes);
+
+            for (JsonNode entry : derivedNodes) {
+                int index = entry.path("index").asInt();
+                String address = entry.path("account_address").asText();
+                DeterministicKey childKey = HDKeyDerivation.deriveChildKey(
+                    accountKey, new ChildNumber(index, false));
+                ECKey ecKey = ECKey.fromPrivate(childKey.getPrivKeyBytes());
+                w.derivedAccounts.add(new Account(ecKey, address));
+            }
+
+            for (JsonNode entry : externalNodes) {
+                String secretKeyHex = entry.path("secret_key").asText();
+                String address = entry.path("account_address").asText();
+                PrivateKey pk = new PrivateKey(secretKeyHex);
+                w.addedAccounts.add(Account.fromPrivateKeyAndAddress(pk, address));
+            }
         }
 
         // Resolve selected_account (default: derived index 0).

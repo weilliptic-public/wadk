@@ -1,0 +1,7 @@
+# JitPack builds the Java SDK, which lives in adk/java rather than at the
+# repository root. The version is the tag, branch or commit JitPack was asked
+# for ($VERSION), so the jar is not labelled with the pom's SNAPSHOT version.
+jdk:
+  - openjdk17
+install:
+  - cd adk/java && mvn -B -q versions:set -DnewVersion=$VERSION -DgenerateBackupPoms=false && mvn -B install -DskipTests

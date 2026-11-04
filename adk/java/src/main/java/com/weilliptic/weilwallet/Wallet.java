@@ -23,7 +23,7 @@ import java.util.List;
  *   <li><b>derivedAccounts</b> — HD-derived from the {@code xprv} stored in the file.</li>
  *   <li><b>addedAccounts</b> — externally imported accounts with their own secret keys.</li>
  * </ul>
- * All signing and address operations act on the currently selected account.
+ * <p>All signing and address operations act on the currently selected account.
  * Use {@link #setIndex(SelectedAccount)} to switch accounts at runtime.</p>
  */
 public final class Wallet {

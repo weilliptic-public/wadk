@@ -308,7 +308,7 @@ public final class WeilAgentServer {
      * The port to serve on: {@code PORT} from the environment, as containers
      * and cloud platforms set it, else {@code fallback}.
      */
-    public static int portFromEnv(int fallback) {
+    private static int portFromEnv(int fallback) {
         String port = System.getenv("PORT");
         if (port == null || port.isBlank()) {
             return fallback;

@@ -66,7 +66,8 @@ public final class WeilTravelFlights {
         // Wallet and audit trail from the env file, the searchFlights gate from
         // its annotation; callers need Execution or Management in AGENT_SERVICE
         // to reach the agent. Serves on PORT if set, else 8001.
-        Weil.toSecureA2a(agent, Weil.port(8001), AGENT_SERVICE);
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8001"));
+        Weil.toSecureA2a(agent, port, AGENT_SERVICE);
     }
 
 }

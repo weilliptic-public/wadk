@@ -61,7 +61,8 @@ public final class Agent {
         // @WeilSecured on checkPrime; callers need Execution or
         // Management in AGENT_SERVICE to reach the agent. Serves on PORT if
         // set, else 8003.
-        Weil.toSecureA2a(agent, Weil.port(8003), AGENT_SERVICE);
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8003"));
+        Weil.toSecureA2a(agent, port, AGENT_SERVICE);
     }
 
     @WeilSecured(DICE_SERVICE)

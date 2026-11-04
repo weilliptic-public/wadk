@@ -155,16 +155,6 @@ public final class Weil {
             .plugins(new ArrayList<Plugin>(plugins(extra)));
     }
 
-    /**
-     * The port an agent serves on: {@code PORT} from the environment, as
-     * containers and cloud platforms set it, else {@code fallback}. The
-     * address it listens on and the URL its card names come from
-     * {@code WEIL_A2A_BIND} and {@code WEIL_A2A_PUBLIC_URL}.
-     */
-    public static int port(int fallback) {
-        return WeilAgentServer.portFromEnv(fallback);
-    }
-
     /** Serve {@code agent} over A2A on {@code port}, callers checked on WEIL_SERVICE. */
     public static void toSecureA2a(BaseAgent agent, int port, WeilAction... extra)
         throws IOException {

@@ -202,7 +202,7 @@ container without code changes:
 
 | Setting | Builder | Environment | Default |
 |---|---|---|---|
-| Port | `port(...)` | `PORT` (read by `Weil.port(fallback)` and by the builder) | 8001 |
+| Port | `port(...)` | `PORT`, when code sets no port | 8001; the examples read `PORT` themselves, with their own port as the default |
 | Address it listens on | `bindAddress(...)` | `WEIL_A2A_BIND` | `127.0.0.1`: only this machine can call. A container sets `0.0.0.0` |
 | URL in the agent card | `publicUrl(...)` | `WEIL_A2A_PUBLIC_URL` | `http://<bind address>:<port>/`, or `127.0.0.1` when listening on all interfaces |
 

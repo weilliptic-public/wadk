@@ -13,6 +13,7 @@ import com.google.genai.types.Content;
 import com.google.genai.types.Part;
 
 import com.weilliptic.weilwallet.TraceAction;
+import com.weilliptic.weilwallet.WeilClient;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -34,6 +35,7 @@ import java.util.function.Supplier;
  * Weil.toSecureA2a(agent, 8001);               // callers checked on WEIL_SERVICE
  * Weil.toSecureA2a(agent, 8001, "engg.weil");  // or on the service given here
  * Weil.chat(agent, args, "a question");        // or ask it at the terminal
+ * Weil.web(agent, args);                       // or in ADK's dev UI, on PORT
  * }</pre>
  *
  * <p>Calling other Weil agents and remembering, with the same wallet:</p>
@@ -78,8 +80,9 @@ public final class Weil {
 
     /**
      * The agent's wallet, from WEIL_AGENT_KEY (with SENTINEL_HOST when set)
-     * or WEIL_WALLET_FILE, loaded on first use. Stopping the process flushes
-     * and closes it.
+     * or WEIL_WALLET_FILE. The wallet itself is loaded the first time it is
+     * used, not here: plugins, servers and the web UI can be set up, and
+     * start, before it is reachable. Stopping the process flushes and closes it.
      */
     public static synchronized WeilIdentity identity() {
         if (identity == null) {
@@ -240,6 +243,33 @@ public final class Weil {
     }
 
     /**
+     * Serve {@code agent} in ADK's dev UI, the web page {@code adk web} opens,
+     * with the Weil plugin on every run: at http://localhost:8080, or on
+     * {@code PORT} and {@code SERVER_ADDRESS} when set, as a container sets
+     * them ({@code 0.0.0.0}). {@code args} go to Spring Boot, so
+     * {@code --server.port=9000} works too. Returns once the server is up; it
+     * keeps serving until the process stops.
+     *
+     * <p>Needs {@code com.google.adk:google-adk-dev}, the same version as
+     * {@code google-adk}, which the SDK does not bring itself, so agents that
+     * never open the UI do not carry it.</p>
+     */
+    public static void web(BaseAgent agent, String[] args, WeilAction... extra) {
+        WeilWeb.requireDevUi();
+        WeilWeb.serve(args, plugins(extra), agent);
+    }
+
+    /**
+     * As {@link #web(BaseAgent, String[], WeilAction...)}, for an ADK
+     * {@link App}: the App's settings (context caching, event compaction,
+     * resumability) and plugins are kept, with the Weil plugin run first.
+     */
+    public static void web(App app, String[] args, WeilAction... extra) {
+        WeilWeb.requireDevUi();
+        WeilWeb.serve(args, plugins(extra), app);
+    }
+
+    /**
      * {@code app} renamed {@code name}, with {@code first} run before its own
      * plugins and every other setting kept.
      */
@@ -364,26 +394,26 @@ public final class Weil {
         }
     }
 
+    /**
+     * The env's wallet, deferred: nothing is read from Sentinel or disk until
+     * something needs it, so a server starts, and answers a health check, even
+     * when the key is a placeholder. A missing or bad key fails that first use.
+     */
     private static WeilIdentity loadIdentity() {
         String apiKey = System.getenv("WEIL_AGENT_KEY");
         String host = System.getenv("SENTINEL_HOST");
-        try {
-            if (apiKey != null && !apiKey.isBlank()) {
-                return host != null && !host.isBlank()
-                    ? WeilIdentity.fromApiKey(apiKey, host)
-                    : WeilIdentity.fromApiKey(apiKey);
-            }
-            String walletFile = System.getenv("WEIL_WALLET_FILE");
+        if (apiKey != null && !apiKey.isBlank()) {
+            return host != null && !host.isBlank()
+                ? WeilIdentity.deferred(() -> WeilClient.fromApiKey(apiKey, null, host), host)
+                : WeilIdentity.deferred(() -> WeilClient.fromApiKey(apiKey), null);
+        }
+        String walletFile = System.getenv("WEIL_WALLET_FILE");
+        return WeilIdentity.deferred(() -> {
             if (walletFile == null || walletFile.isBlank()) {
                 throw new IllegalStateException(
                     "set WEIL_AGENT_KEY (Agent Registry API key) or WEIL_WALLET_FILE");
             }
-            return WeilIdentity.fromWalletFile(walletFile);
-        } catch (IOException e) {
-            throw new IllegalStateException("cannot load the agent's wallet: " + e.getMessage(), e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("interrupted loading the agent's wallet", e);
-        }
+            return WeilClient.fromWalletFile(walletFile);
+        }, null);
     }
 }

@@ -117,6 +117,9 @@ public final class WeilAgentServer {
     /** The card's path before protocol 0.3, still asked for by older clients. */
     public static final String LEGACY_AGENT_CARD_PATH = "/.well-known/agent.json";
 
+    /** Answers 200 while the server is up; see {@link #handleHealth}. */
+    public static final String HEALTH_PATH = "/health";
+
     /** Identifies the Weil signing scheme in the agent card's extensions. */
     public static final String WEIL_EXTENSION_URI = "https://weilliptic.ai/a2a/extensions/wallet-auth/v1";
 
@@ -135,7 +138,7 @@ public final class WeilAgentServer {
     private static final String A2A_METADATA = "a2a_metadata";
 
     /** The A2A protocol version this server implements. */
-    private static final String A2A_PROTOCOL_VERSION = "0.3.0";
+    static final String A2A_PROTOCOL_VERSION = "0.3.0";
 
     /** The a2a SDK's own mapper, which knows its types' JSON shapes. */
     private static final ObjectMapper A2A_JSON = Utils.OBJECT_MAPPER;
@@ -197,7 +200,9 @@ public final class WeilAgentServer {
     private final boolean publishPermissionChecks;
 
     private final String publicUrl;
-    private final AgentCard agentCard;
+    /** Rebuilt, with the wallet, once a wallet that failed to load at start loads. */
+    private volatile AgentCard agentCard;
+    private volatile boolean cardHasWallet;
     private final InMemoryTaskStore taskStore;
     private final JSONRPCHandler rpc;
     private final ExecutorService workers;
@@ -234,7 +239,9 @@ public final class WeilAgentServer {
 
         String url = b.publicUrl != null ? b.publicUrl : System.getenv("WEIL_A2A_PUBLIC_URL");
         this.publicUrl = url != null && !url.isBlank() ? url.trim() : localUrl(bindAddress, port);
-        this.agentCard = buildAgentCard();
+        String wallet = walletOrNull();
+        this.agentCard = buildAgentCard(wallet);
+        this.cardHasWallet = wallet != null;
         this.workers = Executors.newCachedThreadPool();
         this.taskStore = new InMemoryTaskStore();
         InMemoryPushNotificationConfigStore pushConfigs = new InMemoryPushNotificationConfigStore();
@@ -278,9 +285,32 @@ public final class WeilAgentServer {
         return identity.address();
     }
 
-    /** The A2A agent card this server publishes. */
+    /**
+     * The A2A agent card this server publishes. A wallet that could not be
+     * loaded at start is retried here, and the card gains it once it loads.
+     */
     public AgentCard agentCard() {
+        if (!cardHasWallet) {
+            String wallet = walletOrNull();
+            if (wallet != null) {
+                agentCard = buildAgentCard(wallet);
+                cardHasWallet = true;
+            }
+        }
         return agentCard;
+    }
+
+    /**
+     * The wallet's address, or null when it cannot be loaded yet: a bad or
+     * placeholder key, or Sentinel out of reach. The server still starts, so
+     * a health check passes; calls that need the wallet fail until it loads.
+     */
+    private String walletOrNull() {
+        try {
+            return identity.address();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     public void start() throws IOException {
@@ -288,11 +318,14 @@ public final class WeilAgentServer {
         http.createContext("/", this::handleA2A);
         http.createContext(AGENT_CARD_PATH, this::handleAgentCard);
         http.createContext(LEGACY_AGENT_CARD_PATH, this::handleAgentCard);
+        http.createContext(HEALTH_PATH, this::handleHealth);
         http.setExecutor(Executors.newCachedThreadPool());
         http.start();
         System.out.println(agent.name() + " serving A2A at " + publicUrl);
         System.out.println("  agent card: " + publicUrl.replaceAll("/$", "") + AGENT_CARD_PATH);
-        System.out.println("  wallet: " + identity.address());
+        String wallet = walletOrNull();
+        System.out.println("  wallet: " + (wallet != null ? wallet
+            : "not loaded yet; what needs it fails until it loads (check WEIL_AGENT_KEY or WEIL_WALLET_FILE)"));
         if (isWildcard(bindAddress) && publicUrl.equals(localUrl(bindAddress, port))) {
             System.out.println("  warning: listening on " + bindAddress + ", but the card names "
                 + publicUrl + ", which callers on other hosts cannot reach; set WEIL_A2A_PUBLIC_URL");
@@ -377,11 +410,13 @@ public final class WeilAgentServer {
     /**
      * The card A2A clients read before calling: who the agent is, where to
      * reach it, and, in a Weil extension, which wallet serves it and what a
-     * caller must hold.
+     * caller must hold. {@code wallet} null leaves the wallet out, until it loads.
      */
-    private AgentCard buildAgentCard() {
+    private AgentCard buildAgentCard(String wallet) {
         Map<String, Object> weil = new LinkedHashMap<>();
-        weil.put("wallet", identity.address());
+        if (wallet != null) {
+            weil.put("wallet", wallet);
+        }
         if (requiredService != null) {
             weil.put("requires", requiredService);
             weil.put("purpose", "Execution or Management");
@@ -428,13 +463,25 @@ public final class WeilAgentServer {
             .build();
     }
 
+    /**
+     * {@code GET /health}: 200 once the server is serving, for container and
+     * load-balancer checks. It says nothing of the wallet, which may load later.
+     */
+    private void handleHealth(HttpExchange exchange) throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            respondText(exchange, 405, "method not allowed");
+            return;
+        }
+        respondText(exchange, 200, "ok");
+    }
+
     /** Unauthenticated, as A2A discovery is: the card holds nothing secret. */
     private void handleAgentCard(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
             respondText(exchange, 405, "method not allowed");
             return;
         }
-        respondBytes(exchange, 200, A2A_JSON.writeValueAsBytes(agentCard));
+        respondBytes(exchange, 200, A2A_JSON.writeValueAsBytes(agentCard()));
     }
 
     /** {@code POST /}: one A2A JSON-RPC call, after the Weil checks pass. */

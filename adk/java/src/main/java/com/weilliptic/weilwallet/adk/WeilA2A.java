@@ -20,7 +20,9 @@ import io.a2a.client.transport.jsonrpc.JSONRPCTransportConfigBuilder;
 import io.a2a.client.transport.spi.interceptors.ClientCallContext;
 import io.a2a.client.transport.spi.interceptors.ClientCallInterceptor;
 import io.a2a.client.transport.spi.interceptors.PayloadAndHeaders;
+import io.a2a.spec.AgentCapabilities;
 import io.a2a.spec.AgentCard;
+import io.a2a.spec.TransportProtocol;
 import io.a2a.util.Utils;
 
 import io.reactivex.rxjava3.core.Single;
@@ -65,8 +67,9 @@ import java.util.function.Consumer;
  * authorised ..."}} rather than failing the turn, so the model can explain
  * the refusal to its user.</p>
  *
- * <p>The agent card is fetched when the remote agent is built, so the remote
- * server must already be up.</p>
+ * <p>The agent card is fetched when the remote agent is built. When the remote
+ * server is not up yet, a stand-in card naming only its URL is used, so the
+ * calling agent still starts; its calls fail until the server is up.</p>
  */
 public final class WeilA2A {
 
@@ -121,7 +124,7 @@ public final class WeilA2A {
         Objects.requireNonNull(url, "url");
         Objects.requireNonNull(identity, "identity");
 
-        AgentCard card = fetchCard(url);
+        AgentCard card = cardOrStandIn(name, url, description);
         return RemoteA2AAgent.builder()
             .name(name)
             .description(description != null ? description : card.description())
@@ -183,6 +186,17 @@ public final class WeilA2A {
      * card path is added, or the card's own URL.
      */
     public static AgentCard fetchCard(String url) {
+        String base = cardBase(url);
+        try {
+            return new A2ACardResolver(new JdkA2AHttpClient(), base).getAgentCard();
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                "could not read the A2A agent card at " + base + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** {@code url} without a trailing agent card path: the agent's base URL. */
+    private static String cardBase(String url) {
         String base = url.trim();
         for (String path : List.of(
             WeilAgentServer.AGENT_CARD_PATH, WeilAgentServer.LEGACY_AGENT_CARD_PATH)) {
@@ -190,11 +204,38 @@ public final class WeilA2A {
                 base = base.substring(0, base.length() - path.length());
             }
         }
+        return base;
+    }
+
+    /**
+     * The remote agent's card, or, when it cannot be read yet, a stand-in
+     * naming only its URL. The agent that calls it can then start, and answer
+     * a health check, before the remote server is up; calls go to that URL
+     * and fail, as tool errors the model can report, until it is.
+     */
+    private static AgentCard cardOrStandIn(String name, String url, String description) {
         try {
-            return new A2ACardResolver(new JdkA2AHttpClient(), base).getAgentCard();
-        } catch (Exception e) {
-            throw new IllegalStateException(
-                "could not read the A2A agent card at " + base + ": " + e.getMessage(), e);
+            return fetchCard(url);
+        } catch (IllegalStateException e) {
+            String base = cardBase(url);
+            System.err.println("[weil-a2a] " + e.getMessage()
+                + "; calling " + base + " anyway, which fails until it is up");
+            return new AgentCard.Builder()
+                .name(name)
+                .description(description != null ? description : "The A2A agent at " + base)
+                .url(base)
+                .version("unknown")
+                .protocolVersion(WeilAgentServer.A2A_PROTOCOL_VERSION)
+                .preferredTransport(TransportProtocol.JSONRPC.asString())
+                .capabilities(new AgentCapabilities.Builder()
+                    .streaming(false)
+                    .pushNotifications(false)
+                    .stateTransitionHistory(false)
+                    .build())
+                .defaultInputModes(List.of("text"))
+                .defaultOutputModes(List.of("text"))
+                .skills(List.of())
+                .build();
         }
     }
 

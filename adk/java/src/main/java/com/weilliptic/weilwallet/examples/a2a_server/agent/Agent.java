@@ -40,8 +40,6 @@ public final class Agent {
     static final String AGENT_SERVICE = "engg.weil";
 
     public static void main(String[] args) throws Exception {
-        System.out.println("prime agent wallet: " + Weil.identity().address());
-
         LlmAgent agent = LlmAgent.builder()
             .name("check_prime_agent")
             .model(WeilAgentSetup.model())

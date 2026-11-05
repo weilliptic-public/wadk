@@ -6,7 +6,7 @@
 
     <groupId>ai.weilliptic</groupId>
     <artifactId>weil-wallet</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <packaging>jar</packaging>
     <name>Weil Wallet SDK for Java</name>
     <description>WeilChain wallet, client, and agent with audit capabilities</description>
@@ -54,6 +54,16 @@
             <groupId>com.google.adk</groupId>
             <artifactId>google-adk-a2a</artifactId>
             <version>1.11.0</version>
+        </dependency>
+        <!-- ADK's dev UI, for Weil.web only: compiled against, never shipped
+             or passed on. An agent that serves the UI declares it itself, so
+             one that never does carries no Spring Boot. -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-dev</artifactId>
+            <version>1.11.0</version>
+            <scope>provided</scope>
+            <optional>true</optional>
         </dependency>
         <!-- OpenAI, or any OpenAI-compatible server, as an ADK model: ADK's
              LangChain4j adapter over LangChain4j's OpenAI client. Used when
@@ -217,7 +227,7 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.8.0</version>
+                        <version>0.12.0</version>
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>

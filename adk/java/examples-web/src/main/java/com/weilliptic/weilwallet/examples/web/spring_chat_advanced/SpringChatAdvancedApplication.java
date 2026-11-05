@@ -1,6 +1,5 @@
 package com.weilliptic.weilwallet.examples.web.spring_chat_advanced;
 
-import com.weilliptic.weilwallet.adk.Weil;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -36,8 +35,6 @@ import java.util.Map;
 public class SpringChatAdvancedApplication {
 
     public static void main(String[] args) {
-        System.out.println("agent wallet: " + Weil.identity().address());
-
         SpringApplication app = new SpringApplication(SpringChatAdvancedApplication.class);
         app.setDefaultProperties(Map.of(
             // This module holds several web apps, so each serves its own page.

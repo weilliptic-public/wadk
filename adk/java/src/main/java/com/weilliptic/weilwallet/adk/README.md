@@ -119,8 +119,7 @@ cp "$(java -XshowSettings:properties -version 2>&1 | awk -F'= ' '/java.home/{pri
 keytool -importcert -noprompt -alias weil-sentinel -file ~/.weilliptic/sentinel-chain.pem -keystore ~/.weilliptic/weil-truststore.p12 -storepass changeit
 ```
 
-`run.sh` uses `~/.weilliptic/weil-truststore.p12` on its own (another path with
-`WEIL_TRUSTSTORE`). A command that runs Java directly needs it named:
+Then name it in each terminal before running an agent:
 
 ```bash
 export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=$HOME/.weilliptic/weil-truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit"
@@ -408,8 +407,8 @@ mvn exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.WeilTravelPlan
 Give each specialist its own `WEIL_AGENT_KEY`, or they sign as the same wallet
 and the demo authorizes itself. Each specialist checks its callers on the
 service its code names (`AGENT_SERVICE`, `engg.weil`), and each search tool on
-its `@WeilSecured` service. `./run.sh flights`, `./run.sh hotels` and
-`./run.sh web` start them with their env files.
+its `@WeilSecured` service. `ADK_EXAMPLES.md` has the commands with their env
+files.
 
 **ADK's own samples**, ported with a wallet, in ADK's layout under `examples/`:
 `helloworld`, `a2a_basic` with `a2a_server`, `mcpfilesystem`,

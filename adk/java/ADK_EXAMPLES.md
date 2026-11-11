@@ -108,11 +108,11 @@ Pick `root_agent`.
 Start the two specialists, each in its own terminal (ports 8001 and 8002):
 
 ```bash
-./run.sh flights
+(set -a; source .env.flights; set +a; mvn -q compile exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.WeilTravelFlights)
 ```
 
 ```bash
-./run.sh hotels
+(set -a; source .env.hotels; set +a; mvn -q compile exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.WeilTravelHotels)
 ```
 
 Then the planner, which calls both as tools at `FLIGHTS_URL` and `HOTELS_URL`:
@@ -136,10 +136,11 @@ mvn -q install -DskipTests
 
 ### WeilTravelPlannerWeb: the travel planner, from its own module
 
-Builds and runs everything, the SDK install included:
+The same planner as `WeilTravelPlanner`; start the flights and hotels agents
+first.
 
 ```bash
-./run.sh web
+(set -a; source .env.web; set +a; cd examples-web && mvn -q compile exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.WeilTravelPlannerWeb)
 ```
 
 ### spring_chat: a chat page backed by an agent with memory

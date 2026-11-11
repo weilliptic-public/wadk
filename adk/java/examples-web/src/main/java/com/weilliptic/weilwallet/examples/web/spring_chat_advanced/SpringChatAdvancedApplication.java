@@ -24,7 +24,8 @@ import java.util.Map;
  * {@code returnDirect} is ADK's own skip-summarization.</p>
  *
  * <pre>
- *   ./run.sh spring-chat-advanced
+ *   cd examples-web && mvn -q compile exec:java \
+ *       -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.spring_chat_advanced.SpringChatAdvancedApplication
  * </pre>
  *
  * <p>Then open <a href="http://localhost:8080">http://localhost:8080</a> and

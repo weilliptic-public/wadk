@@ -19,7 +19,8 @@ import java.util.Map;
  * reloads, where ADK's forgets everything with the session.</p>
  *
  * <pre>
- *   ./run.sh spring-chat
+ *   cd examples-web && mvn -q compile exec:java \
+ *       -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.spring_chat.SpringChatApplication
  * </pre>
  *
  * <p>Then open <a href="http://localhost:8080">http://localhost:8080</a>.

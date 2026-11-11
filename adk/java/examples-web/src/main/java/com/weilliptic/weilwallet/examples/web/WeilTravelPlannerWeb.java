@@ -17,8 +17,8 @@ import com.weilliptic.weilwallet.adk.WeilAgentSetup;
  * <p>Start the two specialists first, then:</p>
  *
  * <pre>
- *   java -cp "target/classes:$(cat /tmp/cp.txt)" \
- *       com.weilliptic.weilwallet.examples.web.WeilTravelPlannerWeb
+ *   cd examples-web && mvn -q compile exec:java \
+ *       -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.WeilTravelPlannerWeb
  * </pre>
  *
  * <p>Then open <a href="http://127.0.0.1:8080">http://127.0.0.1:8080</a> and

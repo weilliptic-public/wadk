@@ -42,9 +42,9 @@ What changes for Weil:
 Copy `.env.example` to `.env.financial` and fill in `WEIL_AGENT_KEY`,
 `SENTINEL_HOST` and the model's key. Then, from `java/`:
 
-This runs Java through Maven rather than `run.sh`, so point it at the
-truststore that trusts a dev Sentinel's certificate first, once per terminal
-(see "Local Sentinel certificate" in `adk/README.md`):
+Against a dev Sentinel, first point Java at the truststore that trusts its
+certificate, once per terminal (see "Local Sentinel certificate" in
+`adk/README.md`):
 
 ```bash
 export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=$HOME/.weilliptic/weil-truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit"

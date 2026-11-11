@@ -46,7 +46,7 @@ optional. This project's `pom.xml` runs `exec:java` on the test classpath, the
 only scope with both it and ADK's runtime-only jars.
 
 **Examples:** every agent in `examples/` except the A2A servers, and
-`examples-web/.../WeilTravelPlannerWeb.java` (`./run.sh web`).
+`examples-web/.../WeilTravelPlannerWeb.java`.
 
 ### 1.2 Terminal: `Weil.chat`
 
@@ -82,8 +82,7 @@ signature is checked (401), then the caller's permission (403, §3.1), and only
 then does the agent run. Callers can be in any language with the Weil signer.
 
 **Examples:** `examples/a2a_server/agent/Agent.java`,
-`examples/WeilTravelFlights.java`, `examples/WeilTravelHotels.java`
-(`./run.sh flights`, `./run.sh hotels`).
+`examples/WeilTravelFlights.java`, `examples/WeilTravelHotels.java`.
 
 ### 1.5 Serve with more options: `Weil.secureA2aServer`
 

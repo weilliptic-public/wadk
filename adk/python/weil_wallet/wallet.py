@@ -17,11 +17,14 @@ import hmac as _hmac
 import json
 import struct
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from coincurve import PrivateKey as Secp256k1PrivateKey, PublicKey as Secp256k1PublicKey
+from coincurve import (
+    PrivateKey as Secp256k1PrivateKey,
+    PublicKey as Secp256k1PublicKey,
+)
 from .secure_wallet import SecureAccount, harden_process as apply_hardening
 from .utils import hash_sha256
 
@@ -87,10 +90,10 @@ class Account:
 
     def __init__(
         self,
-        secret_key_bytes: bytes | None = None,
+        secret_key_bytes: Optional[bytes] = None,
         address: str = "",
         *,
-        public_key_hex: str | None = None,
+        public_key_hex: Optional[str] = None,
     ) -> None:
         """Build from a secret key, or from a public key for agent identity accounts.
 
@@ -118,7 +121,7 @@ class Account:
         """Return the sentinel-minted 72-char hex address."""
         return self._address
 
-    def get_secret_key(self) -> Secp256k1PrivateKey:
+    def get_secret_key(self) -> Optional[Secp256k1PrivateKey]:
         """Return the secret key, or ``None`` for public-only accounts."""
         return self._secret_key
 
@@ -229,8 +232,6 @@ class Wallet:
         """
         if not secure:
             return cls.from_wallet_json(Path(path).read_text())
-
-        from .secure_wallet import SecureAccount, harden_process as apply_hardening
 
         if not harden_process:
             warnings.warn(
@@ -400,13 +401,6 @@ class Wallet:
             )
         return w
 
-    """ AWS credentials are read natively from ``AWS_ACCESS_KEY_ID``,
-    ``AWS_SECRET_ACCESS_KEY``, ``AWS_REGION``, and ``AWS_BUCKET_NAME``.
-    The wallet response is received into mlocked memory and never exposed to
-    HTTPX. The wallet is fetched with ``unmasked: true``, so the secret key
-    is derived in secure memory and signing is done locally via the native
-    backend — same as a wallet file with ``secure=True``. 
-    """
     @classmethod
     def from_secure_identity(
         cls,
@@ -419,6 +413,14 @@ class Wallet:
         include_creds: bool = False,
     ) -> "Wallet":
         """Fetch the Agent Registry wallet using native HTTPS and secure memory.
+
+        AWS credentials are read natively from ``AWS_ACCESS_KEY_ID``,
+        ``AWS_SECRET_ACCESS_KEY``, ``AWS_REGION``, and ``AWS_BUCKET_NAME``.
+        The wallet response is received into mlocked memory and is never
+        exposed to HTTPX. The wallet is fetched with ``unmasked: true``, so
+        the secret key is derived in secure memory and signing is done locally
+        through the native backend, matching ``from_wallet_file(...,
+        secure=True)``.
 
         Args:
             identity: Agent identity whose wallet should be fetched.
@@ -500,8 +502,6 @@ class Wallet:
             harden_process: Also disable core dumps process-wide. This cannot be
                 reversed, so it is opt-in.
         """
-        from .secure_wallet import SecureAccount, harden_process as apply_hardening
-
         if harden_process:
             apply_hardening()
         account = SecureAccount.from_private_key_file(
@@ -539,7 +539,7 @@ class Wallet:
     # ── Accessors ─────────────────────────────────────────────────────────────
 
     @property
-    def secret_key(self) -> Secp256k1PrivateKey:
+    def secret_key(self) -> Optional[Secp256k1PrivateKey]:
         """Return the current account's secp256k1 secret key. Handle with care."""
         return self._current_account().get_secret_key()
 

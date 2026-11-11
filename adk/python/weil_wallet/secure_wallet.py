@@ -11,7 +11,7 @@ import os
 import stat
 import sys
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 from coincurve import PublicKey as Secp256k1PublicKey
 
@@ -42,7 +42,7 @@ class SecureAccount:
         self,
         native_key: Any,
         address: str,
-        public_key_hex: str | None = None,
+        public_key_hex: Optional[str] = None,
     ) -> None:
         """Wrap a native secure-memory key handle.
 
@@ -96,7 +96,7 @@ class SecureAccount:
         path: Union[str, Path],
         *,
         require_lock: bool = True,
-    ) -> tuple["SecureAccount", tuple[str | None, str | None, str | None]]:
+    ) -> tuple["SecureAccount", tuple[Optional[str], Optional[str], Optional[str]]]:
         """Parse a full wallet file natively and expose only public metadata."""
         flags = os.O_RDONLY
         if hasattr(os, "O_CLOEXEC"):
@@ -129,7 +129,7 @@ class SecureAccount:
         verify: bool = True,
         require_lock: bool = True,
         include_creds: bool = False,
-    ) -> tuple["SecureAccount", tuple[str | None, str | None, str | None]]:
+    ) -> tuple["SecureAccount", tuple[Optional[str], Optional[str], Optional[str]]]:
         """Fetch an agent wallet over native HTTPS and retain it in secure memory.
 
         The wallet response is received into mlocked memory and never exposed to
@@ -150,8 +150,12 @@ class SecureAccount:
             include_creds=include_creds,
         )
         if include_creds:
-            for _k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-                        "AWS_REGION", "AWS_BUCKET_NAME"):
+            for _k in (
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_REGION",
+                "AWS_BUCKET_NAME",
+            ):
                 os.environ.pop(_k, None)
         return cls(key, address), (org, subgroup, purpose)
 
@@ -188,4 +192,3 @@ class SecureAccount:
 def harden_process() -> None:
     """Disable core dumps for this process using RLIMIT_CORE and PR_SET_DUMPABLE."""
     _native().harden_process()
-

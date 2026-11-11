@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent))
 
 import weil_ai
+from weil_ai.mcp import AUDIT_FIELD
 from langchain_core.messages import HumanMessage
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_openai import ChatOpenAI
@@ -97,6 +98,14 @@ class FleetAgent:
                         )
                     except Exception as error:
                         return tool_name, "error", str(error)
+                    # The server returns the audit entry for the call; submit it
+                    # from this agent's own wallet.
+                    audit_entry = (result.meta or {}).get(AUDIT_FIELD)
+                    if audit_entry:
+                        try:
+                            await asyncio.to_thread(agent.audit, audit_entry)
+                        except Exception as error:
+                            print(f"Audit submission failed: {error}")
                     text = "\n".join(
                         item.text
                         for item in result.content

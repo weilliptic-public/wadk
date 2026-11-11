@@ -6,7 +6,7 @@ import asyncio
 import json
 from typing import Any, Mapping, Optional, Union
 
-from .client import WeilClient
+from .client import WeilClient, _BridgeLocal, _on_bridge
 from .constants import PENSIEVE_APPLET_SVC_NAME
 from .contract import ContractId
 from .transaction import TransactionResult
@@ -34,25 +34,30 @@ class Pensieve:
             ContractId(contract_id) if isinstance(contract_id, str) else contract_id
         )
         self._contract_wallet_addr: Optional[str] = None
-        self._contract_id_lock = asyncio.Lock()
+        # Pensieve tools may run on several event loops; the lookup, and the
+        # lock guarding it, run on the client's bridge loop.
+        self._contract_id_lock: _BridgeLocal[asyncio.Lock] = _BridgeLocal(asyncio.Lock)
 
     async def _get_contract_id(self) -> ContractId:
-        async with self._contract_id_lock:
-            if self._contract_id_explicit and self._contract_id is not None:
+        async def on_bridge() -> ContractId:
+            async with self._contract_id_lock.get():
+                if self._contract_id_explicit and self._contract_id is not None:
+                    return self._contract_id
+                wallet_addr = self._client.wallet_addr()
+                if (
+                    self._contract_id is not None
+                    and self._contract_wallet_addr == wallet_addr
+                ):
+                    return self._contract_id
+                self._contract_id = await WeilClient.get_applet_id_for_name(
+                    self._client._http_client,
+                    self._svc_name,
+                    wallet_address=wallet_addr,
+                )
+                self._contract_wallet_addr = wallet_addr
                 return self._contract_id
-            wallet_addr = self._client.wallet_addr()
-            if (
-                self._contract_id is not None
-                and self._contract_wallet_addr == wallet_addr
-            ):
-                return self._contract_id
-            self._contract_id = await WeilClient.get_applet_id_for_name(
-                self._client._http_client,
-                self._svc_name,
-                wallet_address=wallet_addr,
-            )
-            self._contract_wallet_addr = wallet_addr
-            return self._contract_id
+
+        return await _on_bridge(on_bridge())
 
     async def _execute(
         self,
@@ -74,6 +79,7 @@ class Pensieve:
         entity_type: str,
         observations: list[str],
     ) -> TransactionResult:
+        """Create or update an entity with typed observations."""
         return await self._execute(
             "remember_entity",
             {
@@ -91,6 +97,7 @@ class Pensieve:
         relation: str,
         target: str,
     ) -> TransactionResult:
+        """Create or update a directed relation between two entities."""
         return await self._execute(
             "remember_relation",
             {
@@ -106,6 +113,7 @@ class Pensieve:
         agent_id: str,
         graph_json: Union[str, Mapping[str, Any]],
     ) -> TransactionResult:
+        """Store a graph-memory batch from JSON text or a mapping."""
         if not isinstance(graph_json, str):
             graph_json = json.dumps(graph_json)
         return await self._execute(
@@ -119,6 +127,7 @@ class Pensieve:
         entity: str,
         observations: list[str],
     ) -> TransactionResult:
+        """Append observations to an existing entity."""
         return await self._execute(
             "add_observations",
             {
@@ -134,6 +143,7 @@ class Pensieve:
         entity: str,
         observations: list[str],
     ) -> TransactionResult:
+        """Remove selected observations from an entity."""
         return await self._execute(
             "forget_observations",
             {
@@ -148,6 +158,7 @@ class Pensieve:
         agent_id: str,
         names: list[str],
     ) -> TransactionResult:
+        """Delete entities by name."""
         return await self._execute(
             "forget_entities",
             {"agent_id": agent_id, "names": names},
@@ -160,6 +171,7 @@ class Pensieve:
         relation: str,
         target: str,
     ) -> TransactionResult:
+        """Delete a directed relation between two entities."""
         return await self._execute(
             "forget_relation",
             {
@@ -175,6 +187,7 @@ class Pensieve:
         agent_id: str,
         name: str,
     ) -> TransactionResult:
+        """Fetch a stored entity by name."""
         return await self._execute(
             "recall_entity",
             {"agent_id": agent_id, "name": name},
@@ -186,6 +199,7 @@ class Pensieve:
         text: str,
         limit: Optional[int] = None,
     ) -> TransactionResult:
+        """Search graph memory by text, optionally limiting result count."""
         return await self._execute(
             "search_memory",
             {"agent_id": agent_id, "text": text, "limit": limit},
@@ -199,6 +213,7 @@ class Pensieve:
         direction: Optional[str] = None,
         depth: Optional[int] = None,
     ) -> TransactionResult:
+        """Traverse memory graph edges from a starting entity."""
         return await self._execute(
             "traverse",
             {
@@ -215,6 +230,7 @@ class Pensieve:
         agent_id: str,
         name: str,
     ) -> TransactionResult:
+        """List relation types attached to an entity."""
         return await self._execute(
             "list_relation_types",
             {"agent_id": agent_id, "name": name},
@@ -225,6 +241,7 @@ class Pensieve:
         agent_id: str,
         limit: Optional[int] = None,
     ) -> TransactionResult:
+        """Fetch the stored graph, optionally limiting returned entities."""
         return await self._execute(
             "recall_graph",
             {"agent_id": agent_id, "limit": limit},

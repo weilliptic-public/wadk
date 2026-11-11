@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -26,9 +26,12 @@ strands = [
     "strands-agents[a2a]>=1.62.0",
 ]
 
-[tool.setuptools.packages.find]
-where = [".."]
-include = ["weil_ai*"]
+[tool.setuptools]
+packages = ["weil_ai", "weil_ai.agents"]
+
+[tool.setuptools.package-dir]
+weil_ai = "."
+"weil_ai.agents" = "agents"
 
 [tool.setuptools.package-data]
 weil_ai = ["py.typed"]

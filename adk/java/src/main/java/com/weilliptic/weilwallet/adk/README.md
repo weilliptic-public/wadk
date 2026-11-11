@@ -386,15 +386,6 @@ so identity, auditing and gating behave the same whichever you pick.
 
 ## Examples
 
-**Single agent** — `examples/WeilAdkPluginExample.java`: auditing plus a
-blocking spend cap read from on-chain state.
-
-```bash
-export WEIL_AGENT_KEY=weil_...      # or WEIL_WALLET_FILE
-export ANTHROPIC_API_KEY=...
-mvn exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.WeilAdkPluginExample
-```
-
 **Three agents** — a planner that calls a flights and a hotels specialist, each
 in its own process with its own wallet. Three terminals:
 

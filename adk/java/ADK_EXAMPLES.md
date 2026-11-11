@@ -74,17 +74,6 @@ The wallet needs `engg.weil` for the search and each specialist's subgroup.
 
 Pick `financial_coordinator`.
 
-### WeilAdkPluginExample: a treasurer with a spending cap
-
-A plugin built by hand: digest-only audits and a cap on payments, read from the
-`wusd` applet. Paying needs Management in `engg.weil`.
-
-```bash
-(set -a; source .env.hello; set +a; mvn -q compile exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.WeilAdkPluginExample)
-```
-
-Pick `treasurer`.
-
 ### a2a_server and a2a_basic: dice locally, primes over A2A
 
 Start the prime agent first. It serves on `PORT` (default 8003) and admits only
@@ -125,22 +114,17 @@ Pick `travel_planner`. Give each agent its own `WEIL_AGENT_KEY`: with one key
 they all sign as the same wallet, so the specialists' permission check always
 passes.
 
-## Apps in `examples-web/`
+## Web apps in `examples/web/`
 
-A separate module that uses the SDK from the local Maven repository, so install
-the SDK first, and again after changing it:
+They build with the SDK's own source, like every example here.
 
-```bash
-mvn -q install -DskipTests
-```
-
-### WeilTravelPlannerWeb: the travel planner, from its own module
+### WeilTravelPlannerWeb: the travel planner in the dev UI
 
 The same planner as `WeilTravelPlanner`; start the flights and hotels agents
 first.
 
 ```bash
-(set -a; source .env.web; set +a; cd examples-web && mvn -q compile exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.WeilTravelPlannerWeb)
+(set -a; source .env.web; set +a; mvn -q compile exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.WeilTravelPlannerWeb)
 ```
 
 ### spring_chat: a chat page backed by an agent with memory
@@ -149,7 +133,7 @@ ADK's `examples/spring_chat`. Each page load is a new session; graph memory
 carries what the user said across reloads.
 
 ```bash
-(set -a; source .env.hello; set +a; cd examples-web && mvn -q compile exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.spring_chat.SpringChatApplication)
+(set -a; source .env.hello; set +a; mvn -q compile exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.spring_chat.SpringChatApplication)
 ```
 
 ### spring_chat_advanced: streaming order support with secured tools
@@ -159,7 +143,7 @@ arrive?" (both lookups run in one turn) or "Can I talk to a human?". The order
 tools need `engg.weil`; the hand-off to a human does not.
 
 ```bash
-(set -a; source .env.hello; set +a; cd examples-web && mvn -q compile exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.spring_chat_advanced.SpringChatAdvancedApplication)
+(set -a; source .env.hello; set +a; mvn -q compile exec:java -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.spring_chat_advanced.SpringChatAdvancedApplication)
 ```
 
 Both apps listen on `localhost:8080` only, since their chat endpoint has no

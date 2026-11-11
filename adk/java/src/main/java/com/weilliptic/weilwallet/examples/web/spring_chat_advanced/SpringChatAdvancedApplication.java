@@ -24,7 +24,7 @@ import java.util.Map;
  * {@code returnDirect} is ADK's own skip-summarization.</p>
  *
  * <pre>
- *   cd examples-web && mvn -q compile exec:java \
+ *   mvn -q compile exec:java \
  *       -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.spring_chat_advanced.SpringChatAdvancedApplication
  * </pre>
  *
@@ -39,7 +39,7 @@ public class SpringChatAdvancedApplication {
         SpringApplication app = new SpringApplication(SpringChatAdvancedApplication.class);
         app.setDefaultProperties(Map.of(
             // This module holds several web apps, so each serves its own page.
-            "spring.web.resources.static-locations", "classpath:/spring_chat_advanced/",
+            "spring.web.resources.static-locations", "classpath:/com/weilliptic/weilwallet/examples/web/spring_chat_advanced/",
             // The chat endpoint has no authentication, so listen on loopback
             // only unless told otherwise.
             "server.address", "${SERVER_ADDRESS:localhost}"));

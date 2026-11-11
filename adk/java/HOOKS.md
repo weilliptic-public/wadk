@@ -430,7 +430,7 @@ All of this goes in `Weil.plugin`, or in a plugin built directly with
 | Stream only some tools | `StreamAudit.builder("audits").when(ev -> "rollDie".equals(ev.toolName())).nonBlocking().done()` |
 | Gate every tool on a subgroup | `PermissionGate.on("engg.weil", identity)` |
 | Gate some tools | `PermissionGate.on(svc, identity, sentinelHost, ev -> Set.of(...).contains(ev.toolName()))` |
-| Write your own check | a blocking `WeilAction` that vetoes, as below and in `WeilAdkPluginExample` |
+| Write your own check | a blocking `WeilAction` that vetoes, as below |
 
 A spending cap, refusing any payment over a quarter of the treasury:
 

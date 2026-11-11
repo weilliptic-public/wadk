@@ -19,7 +19,7 @@ import java.util.Map;
  * reloads, where ADK's forgets everything with the session.</p>
  *
  * <pre>
- *   cd examples-web && mvn -q compile exec:java \
+ *   mvn -q compile exec:java \
  *       -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.spring_chat.SpringChatApplication
  * </pre>
  *
@@ -33,7 +33,7 @@ public class SpringChatApplication {
         SpringApplication app = new SpringApplication(SpringChatApplication.class);
         app.setDefaultProperties(Map.of(
             // This module holds several web apps, so each serves its own page.
-            "spring.web.resources.static-locations", "classpath:/spring_chat/",
+            "spring.web.resources.static-locations", "classpath:/com/weilliptic/weilwallet/examples/web/spring_chat/",
             // The chat endpoint has no authentication, so listen on loopback
             // only unless told otherwise.
             "server.address", "${SERVER_ADDRESS:localhost}"));

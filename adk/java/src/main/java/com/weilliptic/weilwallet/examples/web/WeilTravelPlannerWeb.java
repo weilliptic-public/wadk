@@ -17,7 +17,7 @@ import com.weilliptic.weilwallet.adk.WeilAgentSetup;
  * <p>Start the two specialists first, then:</p>
  *
  * <pre>
- *   cd examples-web && mvn -q compile exec:java \
+ *   mvn -q compile exec:java \
  *       -Dexec.mainClass=com.weilliptic.weilwallet.examples.web.WeilTravelPlannerWeb
  * </pre>
  *

@@ -6,7 +6,7 @@
 
     <groupId>ai.weilliptic</groupId>
     <artifactId>weil-wallet</artifactId>
-    <version>0.2.1</version>
+    <version>0.2.2</version>
     <packaging>jar</packaging>
     <name>Weil Wallet SDK for Java</name>
     <description>WeilChain wallet, client, and agent with audit capabilities</description>
@@ -113,10 +113,18 @@
             <artifactId>bcprov-jdk18on</artifactId>
             <version>1.78.1</version>
         </dependency>
+        <!-- Jackson on one line, 2.20: ADK brings jackson-annotations 2.20, and
+             the dev UI's Spring Boot 4 calls databind methods added in 2.19. An
+             older databind makes every dev UI response fail with NoSuchMethodError. -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.16.1</version>
+            <version>2.20.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <version>2.20.2</version>
         </dependency>
         <dependency>
             <groupId>commons-codec</groupId>

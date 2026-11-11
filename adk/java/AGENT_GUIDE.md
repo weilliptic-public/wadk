@@ -2,8 +2,7 @@
 
 Every way the Java SDK runs an agent, attaches the Weil plugin, secures it and
 connects it to other agents, with the example that does each. Paths are under
-`src/main/java/com/weilliptic/weilwallet/` unless they start with
-`examples-web/`.
+`src/main/java/com/weilliptic/weilwallet/`.
 
 | I want to... | Use | Section |
 |---|---|---|
@@ -46,7 +45,7 @@ optional. This project's `pom.xml` runs `exec:java` on the test classpath, the
 only scope with both it and ADK's runtime-only jars.
 
 **Examples:** every agent in `examples/` except the A2A servers, and
-`examples-web/.../WeilTravelPlannerWeb.java`.
+`examples/web/WeilTravelPlannerWeb.java`.
 
 ### 1.2 Terminal: `Weil.chat`
 
@@ -112,8 +111,8 @@ Runner runner = new InMemoryRunner(agent, "my-app", Weil.plugins(gate));
 You own the sessions and the event loop. Records go out in the background; the
 shutdown hook sends what is left when the process stops (§2.4).
 
-**Examples:** `examples-web/.../spring_chat/` (the runner as a Spring bean
-behind `POST /api/chat`) and `.../spring_chat_advanced/` (each run streamed as
+**Examples:** `examples/web/spring_chat/` (the runner as a Spring bean
+behind `POST /api/chat`) and `examples/web/spring_chat_advanced/` (each run streamed as
 server-sent events).
 
 ---
@@ -164,8 +163,7 @@ Weil.web(agent, List.of(plugin, MemoryPrompt.plugin()), args);
 **Use when:** a different set of actions (no trace, digest-only audits, a
 custom check) or a wallet other than the env's. Keep
 `PermissionGate.annotated` in the list, or `@WeilSecured` is not checked.
-**Example:** `examples/WeilAdkPluginExample.java`, a spending cap read from
-chain state. HOOKS.md §9 shows how to write an action.
+HOOKS.md §9 shows how to write an action of your own.
 
 ### 2.4 When queued records are sent
 
@@ -278,14 +276,13 @@ outside an agent.
 | `contextcaching/ContextCachingAgent` | dev UI, an App | none |
 | `mcpfilesystem/McpFilesystemAgent` | dev UI | `PermissionGate.on`, MCP tools by type |
 | `financialadvisor/FinancialAdvisorAgent` | dev UI | `Weil.agentTool(agent, service)` per specialist, `@WeilSecured` inside |
-| `WeilAdkPluginExample` | dev UI, its own plugin | `@WeilSecured`, plus a spending cap |
 | `a2a_server/agent/Agent` | A2A server | agent on a subgroup, `@WeilSecured` |
 | `a2a_basic/A2AAgent` | dev UI | `@WeilSecured` locally; calls the server above with `remoteAgent` |
 | `WeilTravelFlights`, `WeilTravelHotels` | A2A servers | agent on `engg.weil`, `@WeilSecured` on each search |
 | `WeilTravelPlanner` | dev UI | none of its own; calls both with `remoteTool` |
-| `examples-web/.../WeilTravelPlannerWeb` | dev UI | as `WeilTravelPlanner` |
-| `examples-web/.../spring_chat` | own runner behind `POST /api/chat` | none (memory only) |
-| `examples-web/.../spring_chat_advanced` | own runner, streamed | `@WeilSecured` on Spring beans; `talkToHuman` open |
+| `web/WeilTravelPlannerWeb` | dev UI | as `WeilTravelPlanner` |
+| `web/spring_chat` | own runner behind `POST /api/chat` | none (memory only) |
+| `web/spring_chat_advanced` | own runner, streamed | `@WeilSecured` on Spring beans; `talkToHuman` open |
 
 Commands for each: `ADK_EXAMPLES.md`. Hooks, records and writing an action:
 `HOOKS.md`.

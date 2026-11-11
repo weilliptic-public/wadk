@@ -21,60 +21,22 @@ public class WeilAgent<T> {
     private WeilClient client;
     private String sentinelHost;
 
-    /**
-     * Create a WeilAgent with no wallet pre-configured.
-     * Call {@link #setWalletPath(String)} before invoking {@link #audit(String)}.
-     *
-     * @param agent the underlying agent implementation to wrap.
-     */
     public WeilAgent(T agent) {
         this(agent, (String) null, (Wallet) null, null);
     }
 
-    /**
-     * Create a WeilAgent that loads its wallet from a private key file.
-     *
-     * @param agent          the underlying agent implementation to wrap.
-     * @param privateKeyPath path to the {@code wallet.wc} file; {@code null} defers setup.
-     */
     public WeilAgent(T agent, String privateKeyPath) {
         this(agent, privateKeyPath, null, null);
     }
 
-    /**
-     * Create a WeilAgent with an already-constructed wallet.
-     *
-     * @param agent  the underlying agent implementation to wrap.
-     * @param wallet the pre-loaded wallet to use for signing and auditing.
-     */
     public WeilAgent(T agent, Wallet wallet) {
         this(agent, null, wallet, null);
     }
 
-    /**
-     * Create a WeilAgent that loads its wallet from a private key file
-     * and targets a specific Sentinel host.
-     *
-     * @param agent          the underlying agent implementation to wrap.
-     * @param privateKeyPath path to the {@code wallet.wc} file; {@code null} defers setup.
-     * @param sentinelHost   Sentinel host to use; {@code null} falls back to {@code SENTINEL_HOST} env var.
-     */
     public WeilAgent(T agent, String privateKeyPath, String sentinelHost) {
         this(agent, privateKeyPath, null, sentinelHost);
     }
 
-    /**
-     * Create a WeilAgent with optional wallet, private key file, and Sentinel host.
-     *
-     * <p>A pre-built {@code wallet} takes precedence over {@code privateKeyPath}.
-     * When both are {@code null}, no wallet is configured and
-     * {@link #setWalletPath(String)} must be called before {@link #audit(String)}.</p>
-     *
-     * @param agent          the underlying agent implementation to wrap.
-     * @param privateKeyPath path to the {@code wallet.wc} file; may be {@code null}.
-     * @param wallet         a pre-loaded wallet; may be {@code null}.
-     * @param sentinelHost   Sentinel host to use; {@code null} falls back to {@code SENTINEL_HOST} env var.
-     */
     public WeilAgent(T agent, String privateKeyPath, Wallet wallet, String sentinelHost) {
         this.agent = agent;
         this.sentinelHost = sentinelHost != null ? sentinelHost : System.getenv("SENTINEL_HOST");
@@ -93,15 +55,6 @@ public class WeilAgent<T> {
         setWalletPath(Paths.get(path));
     }
 
-    /**
-     * Set or change the wallet identity from a {@link Path}.
-     * The existing {@link WeilClient} is discarded and will be recreated on the next
-     * call to {@link #audit(String)}.
-     *
-     * @param path path to the {@code wallet.wc} file.
-     * @throws IllegalArgumentException if the file does not exist.
-     * @throws RuntimeException         if the wallet file cannot be parsed.
-     */
     public void setWalletPath(Path path) {
         if (!Files.isRegularFile(path)) {
             throw new IllegalArgumentException("Account file not found: " + path);
@@ -114,22 +67,11 @@ public class WeilAgent<T> {
         }
     }
 
-    /**
-     * Replace the wallet with an already-constructed instance.
-     * The existing {@link WeilClient} is discarded and will be recreated lazily.
-     *
-     * @param wallet the new wallet to use for signing and auditing.
-     */
     public void setWallet(Wallet wallet) {
         this.wallet = wallet;
         this.client = null;
     }
 
-    /**
-     * Return the configured wallet, throwing if none has been set.
-     *
-     * @throws IllegalStateException if no wallet has been configured.
-     */
     private Wallet ensureWallet() {
         if (wallet == null) {
             throw new IllegalStateException(
@@ -138,9 +80,6 @@ public class WeilAgent<T> {
         return wallet;
     }
 
-    /**
-     * Return the {@link WeilClient}, creating it lazily from the current wallet.
-     */
     private WeilClient getClient() {
         if (client == null) {
             client = new WeilClient(ensureWallet(), sentinelHost);
@@ -162,18 +101,12 @@ public class WeilAgent<T> {
         return agent;
     }
 
-    /**
-     * Return the current wallet, or {@code null} if none has been set.
-     */
     public Wallet getWallet() {
         return wallet;
     }
 
     /**
-     * Find {@code private_key.wc} in the default locations: cwd, then parent, then {@code examples/}.
-     *
-     * @return the first existing {@code private_key.wc} path.
-     * @throws IllegalStateException if the file is not found in any default location.
+     * Default locations to look for private_key.wc (cwd, then parent, then examples/).
      */
     public static Path findDefaultPrivateKeyPath() {
         Path cwd = Paths.get("").toAbsolutePath();

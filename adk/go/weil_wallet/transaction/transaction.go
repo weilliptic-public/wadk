@@ -1,6 +1,7 @@
 package transaction
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"time"
@@ -97,6 +98,9 @@ type TransactionResult struct {
 	TxnIdx       uint   `json:"tx_idx"`
 	TxnResult    string `json:"txn_result"`
 	CreationTime string `json:"creation_time"`
+	// TxnTicket identifies a transaction submitted without waiting (a
+	// non-blocking submit), for Sentinel's /txn_status. Empty otherwise.
+	TxnTicket string `json:"txn_ticket,omitempty"`
 }
 
 type BaseTransaction struct {
@@ -125,9 +129,14 @@ func BtreeMapToJson(m btree.Map[string, interface{}]) ([]byte, error) {
 		vanillaMap[it.Key()] = it.Value()
 	}
 
-	jsonData, err := json.Marshal(vanillaMap)
-	if err != nil {
+	// The node hashes serde_json::to_string of the same sorted map, which
+	// writes <, > and & as they are; encoding/json would escape them
+	// (\u003c ...) and the digests would differ.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(vanillaMap); err != nil {
 		return nil, err
 	}
-	return jsonData, nil
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }

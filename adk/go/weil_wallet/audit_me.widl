@@ -1,0 +1,3 @@
+interface AuditMe {
+    mutate func audit(log: string) -> result<(), string>
+}

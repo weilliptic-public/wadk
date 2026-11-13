@@ -1,29 +1,37 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "weil-ai"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP and AI integrations for WeilChain"
 requires-python = ">=3.9"
 dependencies = [
-    "weil-wallet>=0.1.0",
+    "weil-wallet>=0.1.1",
     "httpx>=0.27.0",
     "mcp>=1.0.0",
 ]
 
 [project.optional-dependencies]
 server = [
+    "fastapi>=0.100.0",
     "fastmcp>=3.0.0",
     "starlette>=0.27.0",
     "uvicorn>=0.20.0",
     "eth-account>=0.8.0",
 ]
 
-[tool.setuptools.packages.find]
-where = [".."]
-include = ["weil_ai*"]
+strands = [
+    "strands-agents[a2a]>=1.62.0",
+]
+
+[tool.setuptools]
+packages = ["weil_ai", "weil_ai.agents"]
+
+[tool.setuptools.package-dir]
+weil_ai = "."
+"weil_ai.agents" = "agents"
 
 [tool.setuptools.package-data]
 weil_ai = ["py.typed"]

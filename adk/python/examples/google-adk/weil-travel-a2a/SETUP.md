@@ -126,9 +126,9 @@ Check a wallet before running:
 ```bash
 ./.venv/bin/python -c "
 import asyncio
-from weil_ai.mcp import wallet_has_execution_permission as ex
+from weil_ai.mcp import wallet_has_purpose as ex
 A='<72-hex address>'
-print(asyncio.run(ex(A,'engg.weil',sentinel_host='https://your-host',verify=False)))"
+print(asyncio.run(ex(A,'engg.weil',purposes=('Execution','Management'),sentinel_host='https://your-host',verify=False)))"
 ```
 
 Without the grant you get `403 Forbidden` from the middleware, or

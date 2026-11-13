@@ -124,6 +124,19 @@ def make_adk_pensieve_tools(owner: Any) -> list[Any]:
     return tools
 
 
+def make_strands_pensieve_tools(owner: Any) -> list[Any]:
+    """Return Strands tools bound to *owner*'s wallet-scoped Pensieve memory."""
+
+    try:
+        from strands import tool
+    except ImportError as exc:
+        raise ImportError(
+            "strands-agents is required for Strands Pensieve tools"
+        ) from exc
+
+    return [tool(afn) for _, afn in _pensieve_functions(owner)]
+
+
 def append_unique_tools(existing: Any, additions: list[Any]) -> list[Any]:
     """Append tools by name without duplicating caller-provided tools."""
 
@@ -410,6 +423,7 @@ def _run_sync(coro: Any) -> Any:
 def _tool_name(tool: Any) -> str:
     return str(
         getattr(tool, "name", None)
+        or getattr(tool, "tool_name", None)
         or getattr(tool, "__name__", None)
         or getattr(getattr(tool, "func", None), "__name__", None)
         or ""

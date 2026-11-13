@@ -18,7 +18,12 @@ from .derived_wallet import (
 from .errors import InvalidContractIdError, WalletNotPermittedError
 from .pensieve import Pensieve
 from .streaming import ByteStream
-from .transaction import BaseTransaction, TransactionResult, TransactionStatus, TransactionHeader
+from .transaction import (
+    BaseTransaction,
+    TransactionHeader,
+    TransactionResult,
+    TransactionStatus,
+)
 from .wallet import OrgInfo, OrgMembership, SelectedAccount, Wallet
 from .secure_wallet import harden_process
 

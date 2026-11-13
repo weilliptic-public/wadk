@@ -4,20 +4,103 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.weilliptic</groupId>
+    <groupId>ai.weilliptic</groupId>
     <artifactId>weil-wallet</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>0.2.2</version>
     <packaging>jar</packaging>
     <name>Weil Wallet SDK for Java</name>
     <description>WeilChain wallet, client, and agent with audit capabilities</description>
+    <url>https://github.com/weilliptic-public/wadk</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>Weilliptic</name>
+            <email>mohitsingh@weilliptic.com</email>
+            <organization>Weilliptic</organization>
+            <organizationUrl>https://weilliptic.ai</organizationUrl>
+        </developer>
+    </developers>
+
+    <scm>
+        <url>https://github.com/weilliptic-public/wadk</url>
+        <connection>scm:git:https://github.com/weilliptic-public/wadk.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/weilliptic-public/wadk.git</developerConnection>
+    </scm>
 
     <properties>
-        <maven.compiler.source>11</maven.compiler.source>
-        <maven.compiler.target>11</maven.compiler.target>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- What a bare `mvn exec:java` runs; pick another with -Dexec.mainClass=... -->
+        <exec.mainClass>com.weilliptic.weilwallet.examples.AuditExample</exec.mainClass>
     </properties>
 
     <dependencies>
+        <!-- Google ADK for Java: agents, tools, and the Plugin hook interface -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk</artifactId>
+            <version>1.11.0</version>
+        </dependency>
+        <!-- A2A: ADK's executor and remote agent, over the a2a-java SDK -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-a2a</artifactId>
+            <version>1.11.0</version>
+        </dependency>
+        <!-- ADK's dev UI, for Weil.web only: compiled against, never shipped
+             or passed on. An agent that serves the UI declares it itself, so
+             one that never does carries no Spring Boot. -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-dev</artifactId>
+            <version>1.11.0</version>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <!-- Tests only: WeilHookTimingTest, opt-in with WEIL_IT=1 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- OpenAI, or any OpenAI-compatible server, as an ADK model: ADK's
+             LangChain4j adapter over LangChain4j's OpenAI client. Used when
+             MODEL_PROVIDER=openai; see WeilAgentSetup.model(). -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-langchain4j</artifactId>
+            <version>1.11.0</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+            <version>1.12.2</version>
+        </dependency>
+        <!-- A2A server side: request handling and the JSON-RPC transport -->
+        <dependency>
+            <groupId>io.github.a2asdk</groupId>
+            <artifactId>a2a-java-sdk-server-common</artifactId>
+            <version>0.3.2.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a2asdk</groupId>
+            <artifactId>a2a-java-sdk-transport-jsonrpc</artifactId>
+            <version>0.3.2.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a2asdk</groupId>
+            <artifactId>a2a-java-sdk-client-transport-jsonrpc</artifactId>
+            <version>0.3.2.Final</version>
+        </dependency>
         <!-- secp256k1, BIP32, BIP39 -->
         <dependency>
             <groupId>org.bitcoinj</groupId>
@@ -30,10 +113,18 @@
             <artifactId>bcprov-jdk18on</artifactId>
             <version>1.78.1</version>
         </dependency>
+        <!-- Jackson on one line, 2.20: ADK brings jackson-annotations 2.20, and
+             the dev UI's Spring Boot 4 calls databind methods added in 2.19. An
+             older databind makes every dev UI response fail with NoSuchMethodError. -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.16.1</version>
+            <version>2.20.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <version>2.20.2</version>
         </dependency>
         <dependency>
             <groupId>commons-codec</groupId>
@@ -44,6 +135,17 @@
 
     <build>
         <plugins>
+            <!-- The examples compile and run here, but are not shipped in the jar. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <configuration>
+                    <excludes>
+                        <exclude>com/weilliptic/weilwallet/examples/**</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
@@ -70,10 +172,92 @@
                         </goals>
                     </execution>
                 </executions>
+                <!-- No <configuration><mainClass> here: a value set in the plugin's
+                     configuration beats -Dexec.mainClass on the command line, so
+                     every example would run AuditExample. The default lives in
+                     the exec.mainClass property instead, which -D overrides. -->
                 <configuration>
-                    <mainClass>com.weilliptic.weilwallet.examples.AuditExample</mainClass>
+                    <!-- test, not the default runtime: the only scope that has both
+                         google-adk-dev ("provided", which Weil.web needs for the dev UI)
+                         and the runtime-only jars ADK needs, such as jackson-module-kotlin.
+                         compile would leave the runtime ones out. -->
+                    <classpathScope>test</classpathScope>
                 </configuration>
             </plugin>
         </plugins>
     </build>
+
+    <!-- Maven Central release: mvn -P release clean deploy -->
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <!-- Sources jar, required by Central -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <configuration>
+                            <excludes>
+                                <exclude>com/weilliptic/weilwallet/examples/**</exclude>
+                            </excludes>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Javadoc jar, required by Central -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.11.2</version>
+                        <configuration>
+                            <excludePackageNames>com.weilliptic.weilwallet.examples:com.weilliptic.weilwallet.examples.*</excludePackageNames>
+                            <doclint>none</doclint>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Signs every file with the release GPG key -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Uploads to central.sonatype.com; Publish is clicked there -->
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.12.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>false</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

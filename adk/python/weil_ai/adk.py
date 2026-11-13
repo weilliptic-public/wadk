@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -22,15 +23,26 @@ from .mcp import (
     current_wallet_addr,
     reset_current_wallet_addr,
     set_current_wallet_addr,
-    wallet_has_execution_permission,
+    _granting_purpose,
 )
 from .memory import append_unique_tools, make_adk_pensieve_tools
+from .tracer import (
+    arecord_tool_call,
+    begin_trace,
+    current_parent_id,
+    current_trace_id,
+    extract_prompt,
+    finish_trace,
+    reset_trace_parent,
+    set_trace_parent,
+)
 
 
 _SECURE_A2A_ATTR = "__weil_secure_a2a__"
 
-# Purpose the inbound A2A gate requires on the caller's key.
+# Purposes accepted by the inbound A2A service gate.
 _EXECUTION_PURPOSE = "Execution"
+_MANAGEMENT_PURPOSE = "Management"
 
 # Auth headers build_auth_headers() sets; all four are required to verify.
 _REQUIRED_AUTH_HEADERS = ("x-wallet-address", "x-signature", "x-message", "x-timestamp")
@@ -41,14 +53,18 @@ def setup_secure_a2a(
     *,
     service: Optional[str] = None,
     audit: bool = True,
-    verify: bool = True,
+    verify_signature: bool = True,
     pensieve: bool = True,
 ) -> Any:
     """Patch an ADK agent tree with Weil A2A signing and audit hooks.
 
-    Serving agents use *service* as the permission gate. Calling/root agents
-    usually omit *service*; their remote sub-agents are patched with outbound
-    request interceptors that sign each A2A message with this agent's wallet.
+    Serving agents use *service* as the permission gate on inbound A2A calls;
+    calling/root agents usually omit it. Remote sub-agents are patched with
+    outbound interceptors that sign each A2A message with this agent's wallet.
+
+    When *service* is set, the inbound caller is checked at the middleware.
+    Inside the tree, secured tools authorize as the acting agent, and audit
+    records use that agent's wallet; ``caller_wallet`` records who invoked it.
     """
 
     weil_agent = _as_weil_agent(agent)
@@ -56,22 +72,44 @@ def setup_secure_a2a(
     config = {
         "service": service,
         "audit": audit,
-        "verify": verify,
+        "verify_signature": verify_signature,
         "pensieve": pensieve,
     }
     setattr(inner, _SECURE_A2A_ATTR, config)
     if pensieve:
         _install_pensieve_tools(weil_agent, inner)
     _compose_agent_callbacks(weil_agent, inner, service=service, audit=audit)
-
-    for sub_agent in _sub_agents(inner):
-        _patch_remote_agent(
-            owner=weil_agent,
-            remote_agent=_inner(sub_agent),
-            audit=audit,
-        )
+    _secure_sub_agents(weil_agent, inner, audit=audit)
 
     return agent
+
+
+def _secure_sub_agents(parent: Any, agent: Any, *, audit: bool) -> None:
+    """Patch an agent's sub-agents recursively.
+
+    Remote A2A calls are signed by *parent*, the nearest enclosing agent with
+    a wallet. Local sub-agents use their own proxy's wallet when available;
+    otherwise they inherit *parent*'s wallet for tool authorization and audits.
+    """
+    for sub_agent in _sub_agents(agent):
+        # ADK stores the unwrapped agent; recover its proxy (and wallet).
+        sub_agent = getattr(sub_agent, "__weil_agent__", sub_agent)
+        sub = _inner(sub_agent)
+        if _looks_like_remote_a2a_agent(sub):
+            _patch_remote_agent(owner=parent, remote_agent=sub, audit=audit)
+            continue
+        # The agent whose wallet signs this sub-agent's audit records and
+        # authorizes its tools: its own if it has one, else its enclosing agent's.
+        acting = sub_agent if _has_own_identity(sub_agent) else parent
+        # A nested local invocation is not an inbound HTTP request, so pass
+        # the enclosing agent explicitly for caller attribution in its audits.
+        caller_parent = parent if acting is not parent else None
+
+        if not _secure_config(sub):
+            _compose_agent_callbacks(
+                acting, sub, service=None, audit=audit, parent=caller_parent
+            )
+        _secure_sub_agents(acting, sub, audit=audit)
 
 
 def secure_a2a_app(
@@ -80,21 +118,20 @@ def secure_a2a_app(
     *,
     service: Optional[str] = None,
     audit: bool = True,
-    verify: bool = True,
 ) -> Any:
     """Add inbound Weil verification middleware to a Starlette A2A app."""
 
-    if not verify and not audit:
-        return app
-
     weil_agent = _as_weil_agent(agent)
-    resolved_service = service or _secure_config(_inner(agent)).get("service")
+    config = _secure_config(_inner(agent))
+    resolved_service = service or config.get("service")
+    verify_signature = config.get("verify_signature", True)
+
     app.add_middleware(
         WeilA2AMiddleware,
         agent=weil_agent,
         service=resolved_service,
         audit=audit,
-        verify=verify,
+        verify_signature=verify_signature,
     )
     return app
 
@@ -140,13 +177,13 @@ class WeilA2AMiddleware:
         agent: Any,
         service: Optional[str] = None,
         audit: bool = True,
-        verify: bool = True,
+        verify_signature: bool = True,
     ) -> None:
         self.app = app
         self.agent = agent
         self.service = service
         self.audit = audit
-        self.verify = verify
+        self.verify_signature = verify_signature
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope.get("type") != "http" or scope.get("method") != "POST":
@@ -163,19 +200,24 @@ class WeilA2AMiddleware:
         request = _request_context(scope, body, signed_payload)
         serving = _serving_agent_context(self.agent)
 
-        if self.verify and not verify_weil_request(headers, signed_payload):
-            await _audit(
-                self.agent,
-                "a2a.verify.failed",
-                outcome="rejected",
-                status=401,
-                stage="verify",
-                wallet=wallet_addr or None,
-                service=self.service,
-                **_verify_failure_context(headers, signed_payload),
-                **request,
-                **serving,
-            )
+        # A request with no caller identity is rejected even when signature
+        # verification is off, so no run ever starts without a named caller.
+        if not wallet_addr or (
+            self.verify_signature and not verify_weil_request(headers, signed_payload)
+        ):
+            if self.audit:
+                await _audit(
+                    self.agent,
+                    "a2a.verify.failed",
+                    outcome="rejected",
+                    status=401,
+                    stage="verify",
+                    wallet=wallet_addr or None,
+                    service=self.service,
+                    **_verify_failure_context(headers, signed_payload),
+                    **request,
+                    **serving,
+                )
             await _send_plain(
                 send,
                 401,
@@ -199,37 +241,40 @@ class WeilA2AMiddleware:
         }
         wallet_addr = canonical_addr or wallet_addr
 
+        granted = None
         if self.service:
             check = {
                 "service": self.service,
                 "permission_check": "secured.key_has_purpose",
-                "purpose": _EXECUTION_PURPOSE,
+                "required_purposes": [_EXECUTION_PURPOSE, _MANAGEMENT_PURPOSE],
                 "sentinel_host": getattr(self.agent, "_sentinel_host", None),
             }
             started = time.monotonic()
             try:
-                permitted = await wallet_has_execution_permission(
+                granted = await _granting_purpose(
                     wallet_addr,
                     self.service,
+                    purposes=(_EXECUTION_PURPOSE, _MANAGEMENT_PURPOSE),
                     sentinel_host=getattr(self.agent, "_sentinel_host"),
                     verify=getattr(self.agent, "_verify"),
                 )
             except Exception as exc:
-                await _audit(
-                    self.agent,
-                    "a2a.permission.error",
-                    outcome="error",
-                    status=403,
-                    stage="permission",
-                    reason="secured permission check could not be completed",
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                    check_ms=_elapsed_ms(started),
-                    **caller,
-                    **check,
-                    **request,
-                    **serving,
-                )
+                if self.audit:
+                    await _audit(
+                        self.agent,
+                        "a2a.permission.error",
+                        outcome="error",
+                        status=403,
+                        stage="permission",
+                        reason="secured permission check could not be completed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        check_ms=_elapsed_ms(started),
+                        **caller,
+                        **check,
+                        **request,
+                        **serving,
+                    )
                 await _send_plain(
                     send,
                     403,
@@ -237,40 +282,43 @@ class WeilA2AMiddleware:
                     f"permission check for service {self.service!r}: {exc}",
                 )
                 return
-            if not permitted:
+            if granted is None:
                 exc = WalletNotPermittedError(wallet_addr, self.service)
-                await _audit(
-                    self.agent,
-                    "a2a.permission.denied",
-                    outcome="denied",
-                    status=403,
-                    stage="permission",
-                    reason=(
-                        f"wallet does not hold the {_EXECUTION_PURPOSE} purpose "
-                        f"on service {self.service}"
-                    ),
-                    check_ms=_elapsed_ms(started),
-                    **caller,
-                    **check,
-                    **request,
-                    **serving,
-                )
+                if self.audit:
+                    await _audit(
+                        self.agent,
+                        "a2a.permission.denied",
+                        outcome="denied",
+                        status=403,
+                        stage="permission",
+                        reason=(
+                            f"wallet holds neither the {_EXECUTION_PURPOSE} nor the "
+                            f"{_MANAGEMENT_PURPOSE} purpose on service {self.service}"
+                        ),
+                        check_ms=_elapsed_ms(started),
+                        **caller,
+                        **check,
+                        **request,
+                        **serving,
+                    )
                 await _send_plain(send, 403, str(exc))
                 return
 
-        await _audit(
-            self.agent,
-            "a2a.request.accepted",
-            outcome="accepted",
-            status=200,
-            service=self.service,
-            purpose=_EXECUTION_PURPOSE if self.service else None,
-            verified=self.verify,
-            permission_checked=bool(self.service),
-            **caller,
-            **request,
-            **serving,
-        )
+        if self.audit:
+            await _audit(
+                self.agent,
+                "a2a.request.accepted",
+                outcome="accepted",
+                status=200,
+                service=self.service,
+                # The purpose that granted access (None when no service gate).
+                purpose=granted,
+                verified=self.verify_signature,
+                permission_checked=bool(self.service),
+                **caller,
+                **request,
+                **serving,
+            )
         tokens = set_current_wallet_addr(
             wallet_addr,
             mode="adk",
@@ -307,27 +355,29 @@ def _patch_remote_agent(*, owner: Any, remote_agent: Any, audit: bool) -> None:
                 signed_body_sha256=_short_hash(headers.get("X-Body-SHA256")),
                 **target,
                 **_message_context(request_payload),
-                **_invocation_context(ctx),
             )
         return a2a_request, parameters
 
     async def after_request(ctx: Any, a2a_response: Any, event: Any) -> Any:
-        if audit:
+        # ADK calls this for every streamed event; record only the final one.
+        task = a2a_response[0] if isinstance(a2a_response, tuple) else a2a_response
+        payload = _model_to_data(task)
+        status = payload.get("status") if isinstance(payload, dict) else None
+        state = _task_state(status.get("state") if isinstance(status, dict) else None)
+        if audit and (state in _FINAL_TASK_STATES or (state is None and not isinstance(a2a_response, tuple))):
             await _audit(
                 owner,
                 "a2a.response.received",
                 direction="inbound",
                 wallet=_own_wallet(owner),
+                task_state=state,
+                task_id=payload.get("id") if isinstance(payload, dict) else None,
+                response_sha256=_short_hash(_safe_body_hash(payload)),
                 **target,
-                **_response_context(a2a_response),
-                **_invocation_context(ctx),
             )
         return event
 
-    interceptor = RequestInterceptor(
-        before_request=before_request,
-        after_request=after_request if audit else None,
-    )
+    interceptor = RequestInterceptor(before_request=before_request, after_request=after_request)
     config = getattr(remote_agent, "_config", None)
     if config is None:
         return
@@ -348,86 +398,164 @@ def _compose_agent_callbacks(
     *,
     service: Optional[str],
     audit: bool,
+    parent: Any = None,
 ) -> None:
+    """Audit agent runs under *weil_agent*'s wallet and scope its secured tools.
+
+    The caller (set by the inbound middleware) is authorized at the A2A
+    boundary; inside the agent, @secured tools authorize as the agent itself.
+    """
+    _compose_tool_callbacks(weil_agent, inner, audit=audit, parent=parent)
     if not audit:
         return
 
     before = getattr(inner, "before_agent_callback", None)
     after = getattr(inner, "after_agent_callback", None)
+    trace_handles: dict[Any, Any] = {}
 
     async def before_wrapper(*args: Any, **kwargs: Any) -> Any:
-        await _audit(
-            weil_agent,
-            "adk.agent.before",
-            agent=getattr(inner, "name", ""),
-            agent_type=type(inner).__name__,
-            service=service,
-            wallet=_own_wallet(weil_agent),
-            # Set by the inbound middleware when this run serves an A2A call,
-            # so a run can be traced back to the caller that triggered it.
-            caller_wallet=_caller_wallet(weil_agent),
-            **_invocation_context(_first_context(args, kwargs)),
-        )
+        ctx = _first_context(args, kwargs)
+        run_id = _callback_run_key(ctx)
+        trace = begin_trace(weil_agent, _trace_root(ctx))
+        trace_handles[run_id] = trace
+        _set_trace_handle(ctx, trace)
+        if audit:
+            await _audit(
+                weil_agent,
+                "adk.agent.before",
+                agent=getattr(inner, "name", ""),
+                agent_type=type(inner).__name__,
+                service=service,
+                wallet=_own_wallet(weil_agent),
+                # Set by the inbound middleware when this run serves an A2A call,
+                # so a run can be traced back to the caller that triggered it.
+                caller_wallet=_caller_wallet(weil_agent, parent),
+            )
         return await _maybe_call(before, *args, **kwargs)
 
     async def after_wrapper(*args: Any, **kwargs: Any) -> Any:
-        result = await _maybe_call(after, *args, **kwargs)
-        await _audit(
-            weil_agent,
-            "adk.agent.after",
-            agent=getattr(inner, "name", ""),
-            agent_type=type(inner).__name__,
-            service=service,
-            wallet=_own_wallet(weil_agent),
-            caller_wallet=_caller_wallet(weil_agent),
-            **_invocation_context(_first_context(args, kwargs)),
-        )
-        return result
+        ctx = _first_context(args, kwargs)
+        run_id = _callback_run_key(ctx)
+        try:
+            result = await _maybe_call(after, *args, **kwargs)
+            if audit:
+                await _audit(
+                    weil_agent,
+                    "adk.agent.after",
+                    agent=getattr(inner, "name", ""),
+                    agent_type=type(inner).__name__,
+                    service=service,
+                    wallet=_own_wallet(weil_agent),
+                    caller_wallet=_caller_wallet(weil_agent, parent),
+                )
+            return result
+        finally:
+            trace = trace_handles.pop(run_id, None) or _get_trace_handle(ctx)
+            if trace is not None:
+                try:
+                    await finish_trace(trace)
+                except Exception:
+                    pass
 
     _set_callback(inner, "before_agent_callback", before_wrapper)
     _set_callback(inner, "after_agent_callback", after_wrapper)
-    _compose_tool_callbacks(weil_agent, inner)
 
 
-def _compose_tool_callbacks(weil_agent: Any, inner: Any) -> None:
-    """Audit @secured tool calls with their arguments and response.
+def _compose_tool_callbacks(
+    weil_agent: Any, inner: Any, *, audit: bool, parent: Any = None
+) -> None:
+    """Run @secured tools as *weil_agent* and audit them with their arguments.
 
-    Only tools guarded by ``@secured_user``/``@secured_admin`` are recorded;
+    Only tools guarded by ``@secured_user``/``@secured_admin`` are touched;
     other tools pass straight through to any callbacks already installed.
+
+    A secured tool runs with the acting agent's wallet in the ContextVar. The
+    token returned when it is set is kept until ADK's matching after-tool
+    callback, which restores the previous context. The callbacks are paired by
+    ADK's function-call ID.
     """
     if not hasattr(inner, "before_tool_callback"):
         return
 
     before = getattr(inner, "before_tool_callback", None)
     after = getattr(inner, "after_tool_callback", None)
+    # Pair each before-tool context token with its after-tool callback.
+    tokens: dict[Any, Any] = {}
+    tool_trace_contexts: dict[Any, tuple[str, Optional[str], Any]] = {}
 
     async def before_tool_wrapper(*args: Any, **kwargs: Any) -> Any:
         tool, tool_args, tool_context = _tool_callback_args(args, kwargs)
+        event_id = str(uuid.uuid4())
+        parent_id = current_parent_id()
+        parent_token = set_trace_parent(event_id)
+        _store_tool_trace_context(
+            tool_trace_contexts,
+            tool,
+            tool_context,
+            event_id,
+            parent_id,
+            parent_token,
+        )
         secured = _secured_tool_info(tool)
-        if secured is not None:
-            await _audit(
-                weil_agent,
-                "adk.tool.before",
-                **_tool_context(weil_agent, inner, tool, tool_context, secured),
-                args=tool_args,
-            )
-        return await _maybe_call(before, *args, **kwargs)
+        try:
+            if secured is not None:
+                if audit:
+                    await _audit(
+                        weil_agent,
+                        "adk.tool.before",
+                        **_tool_context(weil_agent, inner, tool, tool_context, secured, parent),
+                        args=tool_args,
+                    )
+                tokens[tool_context.function_call_id] = set_current_wallet_addr(
+                    _own_wallet(weil_agent),
+                    mode="adk",
+                    sentinel_host=weil_agent._sentinel_host,
+                    verify=weil_agent._verify,
+                )
+            return await _maybe_call(before, *args, **kwargs)
+        except Exception:
+            _restore_tool_trace_context(tool_trace_contexts, tool, tool_context)
+            raise
 
     async def after_tool_wrapper(*args: Any, **kwargs: Any) -> Any:
-        result = await _maybe_call(after, *args, **kwargs)
-        tool, _, tool_context = _tool_callback_args(args, kwargs)
-        secured = _secured_tool_info(tool)
-        if secured is not None:
+        tool, tool_args, tool_context = _tool_callback_args(args, kwargs)
+        trace_ctx = _pop_tool_trace_context(tool_trace_contexts, tool, tool_context)
+        event_id, parent_id, parent_token = trace_ctx or (
+            str(uuid.uuid4()),
+            current_parent_id(),
+            None,
+        )
+        restored = False
+        try:
+            result = await _maybe_call(after, *args, **kwargs)
+            if parent_token is not None:
+                _reset_trace_parent_token(parent_token)
+                restored = True
             response = kwargs.get("tool_response", args[3] if len(args) > 3 else None)
-            await _audit(
-                weil_agent,
-                "adk.tool.after",
-                **_tool_context(weil_agent, inner, tool, tool_context, secured),
-                # A user after-callback may replace the tool result; record
-                # what the model actually receives.
-                response=result if result is not None else response,
+            final_response = result if result is not None else response
+            await arecord_tool_call(
+                getattr(tool, "name", None),
+                _tool_args_with_metadata(tool_args, _tool_call_id(tool_context)),
+                final_response,
+                event_id=event_id,
+                parent_id=parent_id,
             )
-        return result
+            secured = _secured_tool_info(tool)
+            if audit and secured is not None:
+                await _audit(
+                    weil_agent,
+                    "adk.tool.after",
+                    **_tool_context(weil_agent, inner, tool, tool_context, secured, parent),
+                    # A user after-callback may replace the tool result; record
+                    # what the model actually receives.
+                    response=final_response,
+                )
+            return result
+        finally:
+            if parent_token is not None and not restored:
+                _reset_trace_parent_token(parent_token)
+            if caller_tokens := tokens.pop(tool_context.function_call_id, None):
+                reset_current_wallet_addr(caller_tokens)
 
     _set_callback(inner, "before_tool_callback", before_tool_wrapper)
     _set_callback(inner, "after_tool_callback", after_tool_wrapper)
@@ -443,21 +571,146 @@ def _tool_callback_args(args: tuple, kwargs: dict) -> tuple[Any, Any, Any]:
     )
 
 
+def _tool_call_id(tool_context: Any) -> Optional[str]:
+    for attr in ("function_call_id", "tool_call_id", "call_id", "id"):
+        value = getattr(tool_context, attr, None)
+        if value:
+            return str(value)
+    return None
+
+
+def _tool_args_with_metadata(args: Any, framework_call_id: Optional[str]) -> Any:
+    if not framework_call_id:
+        return args
+    if isinstance(args, dict):
+        return {
+            **args,
+            "_weil": {
+                "framework": "adk",
+                "tool_call_id": framework_call_id,
+            },
+        }
+    return {
+        "value": args,
+        "_weil": {
+            "framework": "adk",
+            "tool_call_id": framework_call_id,
+        },
+    }
+
+
+def _tool_trace_key(tool: Any, tool_context: Any) -> Any:
+    call_id = _tool_call_id(tool_context)
+    if call_id:
+        return ("call", call_id)
+    return ("context", id(tool_context), getattr(tool, "name", None))
+
+
+def _store_tool_trace_context(
+    contexts: dict[Any, tuple[str, Optional[str], Any]],
+    tool: Any,
+    tool_context: Any,
+    event_id: str,
+    parent_id: Optional[str],
+    parent_token: Any,
+) -> None:
+    ctx = (event_id, parent_id, parent_token)
+    contexts[_tool_trace_key(tool, tool_context)] = ctx
+    if tool_context is None:
+        return
+    try:
+        setattr(tool_context, "_weil_trace_context", ctx)
+    except Exception:
+        return
+
+
+def _pop_tool_trace_context(
+    contexts: dict[Any, tuple[str, Optional[str], Any]],
+    tool: Any,
+    tool_context: Any,
+) -> Optional[tuple[str, Optional[str], Any]]:
+    key = _tool_trace_key(tool, tool_context)
+    ctx = contexts.pop(key, None)
+    if ctx is None and tool_context is not None:
+        ctx = getattr(tool_context, "_weil_trace_context", None)
+    if tool_context is not None:
+        try:
+            delattr(tool_context, "_weil_trace_context")
+        except Exception:
+            pass
+    return ctx
+
+
+def _restore_tool_trace_context(
+    contexts: dict[Any, tuple[str, Optional[str], Any]],
+    tool: Any,
+    tool_context: Any,
+) -> None:
+    ctx = _pop_tool_trace_context(contexts, tool, tool_context)
+    if ctx is not None:
+        _reset_trace_parent_token(ctx[2])
+
+
+def _reset_trace_parent_token(token: Any) -> None:
+    try:
+        reset_trace_parent(token)
+    except ValueError:
+        # ADK may call before/after hooks in different contextvars contexts.
+        # The token's original context is already gone, so there is nothing
+        # useful left to restore here.
+        pass
+
+
+def _trace_root(ctx: Any) -> Any:
+    """Choose the root value used to initialize an ADK run trace.
+
+    Prefer user prompt text when it can be extracted from the callback context;
+    otherwise fall back to ADK invocation metadata, then to the context type.
+    """
+    prompt = extract_prompt(ctx)
+    if prompt:
+        return prompt
+    invocation = _invocation_context(ctx)
+    return invocation or {"type": type(ctx).__name__ if ctx is not None else "unknown"}
+
+
+def _set_trace_handle(ctx: Any, trace: Any) -> None:
+    """Attach the active trace handle to an ADK callback context.
+
+    ADK passes context objects between before/after callbacks, so storing the
+    handle there lets the after callback finish the same trace even when
+    contextvars are not enough to identify it.
+    """
+    if ctx is None or not getattr(trace, "active", False):
+        return
+    try:
+        setattr(ctx, "_weil_trace_handle", trace)
+    except Exception:
+        return
+
+
+def _get_trace_handle(ctx: Any) -> Any:
+    """Return a trace handle previously attached to an ADK context."""
+    if ctx is None:
+        return None
+    return getattr(ctx, "_weil_trace_handle", None)
+
+
 def _tool_context(
     weil: Any,
     inner: Any,
     tool: Any,
     tool_context: Any,
     secured: dict[str, str],
+    parent: Any = None,
 ) -> dict[str, Any]:
     return {
         "agent": getattr(inner, "name", None) or None,
         "tool": getattr(tool, "name", None),
-        "tool_call_id": getattr(tool_context, "function_call_id", None),
+        "tool_call_id": _tool_call_id(tool_context),
         **secured,
         "wallet": _own_wallet(weil),
-        "caller_wallet": _caller_wallet(weil),
-        **_invocation_context(tool_context),
+        "caller_wallet": _caller_wallet(weil, parent),
     }
 
 
@@ -498,12 +751,13 @@ def _add_request_headers(parameters: Any, headers: dict[str, str]) -> None:
 
 async def _audit(weil: Any, event: str, **fields: Any) -> None:
     """Write one audit record. Fields that are None are dropped, so callers can
-    pass optional context unconditionally."""
+    pass optional context unconditionally. Inside a traced run the record also
+    carries trace_id, linking it to the trace published for that run."""
     try:
         payload = {
             "event": event,
             "ts": _now_iso(),
-            **{k: v for k, v in fields.items() if v is not None},
+            **{k: v for k, v in {"trace_id": current_trace_id(), **fields}.items() if v is not None},
         }
         result = weil._audit_async(json.dumps(payload, default=repr))
         if inspect.isawaitable(result):
@@ -548,10 +802,11 @@ def _own_wallet(weil: Any) -> Optional[str]:
         return None
 
 
-def _caller_wallet(weil: Any) -> Optional[str]:
-    """Wallet of the A2A caller currently being served, if any."""
+def _caller_wallet(weil: Any, parent: Any = None) -> Optional[str]:
+    """Wallet of whoever called *weil*: its enclosing agent when embedded, else
+    the A2A caller currently being served, if any."""
     try:
-        caller = current_wallet_addr()
+        caller = _own_wallet(parent) if parent is not None else current_wallet_addr()
     except Exception:
         return None
     if not caller or caller == _own_wallet(weil):
@@ -600,86 +855,22 @@ def _message_context(payload: Any) -> dict[str, Any]:
     }
 
 
-def _response_context(response: Any) -> dict[str, Any]:
-    """Outcome, integrity and shape of a remote A2A response.
-
-    The response is hashed, measured and classified, but never copied: the
-    digest is enough to later prove a stored reply is the one that was
-    received, without publishing what the agent actually said.
-    """
-    payload = _model_to_data(response)
-    if not isinstance(payload, dict):
-        return {}
-    result = payload.get("result")
-    result = result if isinstance(result, dict) else payload
-    status = result.get("status")
-    state = status.get("state") if isinstance(status, dict) else None
-    error = payload.get("error")
-    ids = _message_context(result)
-    # A Task carries its id as "id"; a Message carries "taskId". Only trust
-    # "id" inside a real result object -- at envelope level it is the
-    # JSON-RPC request id, which is not a task id.
-    if result is not payload or status is not None:
-        ids["task_id"] = ids.get("task_id") or result.get("id")
-    context: dict[str, Any] = {
-        "task_state": state or None,
-        **ids,
-        "response_sha256": _short_hash(_safe_body_hash(payload)),
-        **_response_shape(result),
-    }
-    if isinstance(error, dict):
-        context["error"] = error.get("message") or None
-        context["error_code"] = error.get("code")
-        context["outcome"] = "error"
-    elif state:
-        context["outcome"] = "failed" if state in ("failed", "rejected") else "ok"
-    return context
+# Terminal task states: no further events are expected. input_required and
+# auth_required only pause the task (it resumes on a follow-up), so they are not here.
+_FINAL_TASK_STATES = {
+    "completed",
+    "failed",
+    "canceled",
+    "cancelled",
+    "rejected",
+}
 
 
-def _response_shape(result: Any) -> dict[str, Any]:
-    """How much came back and in what form -- counts and kinds, no content.
-
-    Enough to spot an empty or truncated reply, a tool that returned a file
-    instead of text, or a response that grew unexpectedly, none of which the
-    task state alone reveals.
-    """
-    if not isinstance(result, dict):
-        return {}
-
-    parts: list[Any] = []
-    message = result.get("status", {}).get("message") if isinstance(
-        result.get("status"), dict
-    ) else None
-    for container in (result, message):
-        if isinstance(container, dict) and isinstance(container.get("parts"), list):
-            parts.extend(container["parts"])
-
-    artifacts = result.get("artifacts")
-    artifacts = artifacts if isinstance(artifacts, list) else []
-    for artifact in artifacts:
-        if isinstance(artifact, dict) and isinstance(artifact.get("parts"), list):
-            parts.extend(artifact["parts"])
-
-    kinds = sorted(
-        {
-            part.get("kind") or next((k for k in ("text", "file", "data") if k in part), "unknown")
-            for part in parts
-            if isinstance(part, dict)
-        }
-    )
-    text_chars = sum(
-        len(part["text"])
-        for part in parts
-        if isinstance(part, dict) and isinstance(part.get("text"), str)
-    )
-    history = result.get("history")
-    return {
-        "part_count": len(parts) or None,
-        "part_kinds": kinds or None,
-        "text_chars": text_chars or None,
-        "artifact_count": len(artifacts) or None,
-        "history_len": len(history) if isinstance(history, list) and history else None,
-    }
+def _task_state(state: Any) -> Optional[str]:
+    """Normalise an A2A task state ("completed", "TASK_STATE_COMPLETED", ...)."""
+    if not state:
+        return None
+    return str(state).lower().removeprefix("task_state_")
 
 
 def _remote_target_context(remote_agent: Any) -> dict[str, Any]:
@@ -702,6 +893,12 @@ def _first_context(args: tuple, kwargs: dict) -> Any:
         if key in kwargs:
             return kwargs[key]
     return None
+
+
+def _callback_run_key(ctx: Any) -> Any:
+    return _invocation_context(ctx).get("invocation_id") or (
+        id(ctx) if ctx is not None else None
+    )
 
 
 def _invocation_context(ctx: Any) -> dict[str, Any]:
@@ -796,10 +993,15 @@ def _set_callback(obj: Any, name: str, value: Any) -> None:
             obj.__dict__.update(updated.__dict__)
 
 
+def _has_own_identity(agent: Any) -> bool:
+    """Whether *agent* was wrapped with weil_ai.agent, so it carries its own wallet."""
+    return hasattr(agent, "get_auth_headers") and hasattr(agent, "_audit_async")
+
+
 def _as_weil_agent(agent: Any) -> Any:
-    if hasattr(agent, "get_auth_headers") and hasattr(agent, "_audit_async"):
-        return agent
-    raise TypeError("setup_secure_a2a() requires an object wrapped with weil_ai.agent")
+    if not _has_own_identity(agent):
+        raise TypeError("setup_secure_a2a() requires an object wrapped with weil_ai.agent")
+    return agent
 
 
 def _inner(agent: Any) -> Any:
@@ -807,7 +1009,12 @@ def _inner(agent: Any) -> Any:
 
 
 def _sub_agents(agent: Any) -> list[Any]:
-    return list(getattr(agent, "sub_agents", None) or [])
+    """Agents *agent* delegates to: its sub_agents plus any wrapped as AgentTool."""
+    agents = list(getattr(agent, "sub_agents", None) or [])
+    for tool in getattr(agent, "tools", None) or []:
+        if type(tool).__name__ == "AgentTool" and getattr(tool, "agent", None) is not None:
+            agents.append(tool.agent)
+    return agents
 
 
 def _secure_config(agent: Any) -> dict[str, Any]:

@@ -20,6 +20,7 @@ public final class Account {
     private static final int COMPACT_SIG_LEN = 32;
 
     private final ECKey secretKey;
+    private final byte[] publicKeyUncompressed;
     /** Sentinel-minted 72-char hex account address. */
     private final String accountAddress;
 
@@ -31,6 +32,25 @@ public final class Account {
      */
     public Account(ECKey secretKey, String accountAddress) {
         this.secretKey = secretKey;
+        this.publicKeyUncompressed = secretKey.getPubKeyPoint().getEncoded(false);
+        this.accountAddress = accountAddress;
+    }
+
+    /**
+     * Create a public-only Account for Agent Registry API-key wallets.
+     *
+     * <p>Wallet JSON stores the point compressed (33 bytes), while the
+     * transaction header carries it uncompressed, so the key is normalised
+     * here rather than passed through: a compressed key on the wire makes the
+     * node reject the transaction when it parses the header.</p>
+     *
+     * @param publicKey      The secp256k1 public key, compressed or uncompressed.
+     * @param accountAddress The sentinel-minted 72-char hex account address.
+     */
+    public Account(byte[] publicKey, String accountAddress) {
+        this.secretKey = null;
+        this.publicKeyUncompressed =
+            ECKey.fromPublicOnly(publicKey).getPubKeyPoint().getEncoded(false);
         this.accountAddress = accountAddress;
     }
 
@@ -57,13 +77,16 @@ public final class Account {
      * Return the account's secp256k1 public key (uncompressed 65 bytes for wire format).
      */
     public byte[] getPublicKeyUncompressed() {
-        return secretKey.getPubKeyPoint().getEncoded(false);
+        return publicKeyUncompressed.clone();
     }
 
     /**
      * Return the underlying ECKey for low-level operations.
      */
     public ECKey getSecretKey() {
+        if (secretKey == null) {
+            throw new IllegalStateException("account has no local secret key; use remote signing");
+        }
         return secretKey;
     }
 
@@ -72,6 +95,9 @@ public final class Account {
      * Returns hex-encoded 64-byte compact signature (r || s).
      */
     public String sign(byte[] buf) {
+        if (secretKey == null) {
+            throw new IllegalStateException("account has no local secret key; use remote signing");
+        }
         byte[] digest = Utils.hashSha256(buf);
         Sha256Hash hash = Sha256Hash.wrap(digest);
         ECKey.ECDSASignature sig = secretKey.sign(hash);

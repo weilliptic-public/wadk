@@ -3,7 +3,7 @@ package com.weilliptic.weilwallet.transaction;
 import com.weilliptic.weilwallet.Utils;
 
 /**
- * Transaction header: nonce, public key, addresses, signature, weilpod counter, creation time, salt.
+ * Transaction header: nonce, public key, addresses, signature, weilpod counter, creation time.
  */
 public class TransactionHeader {
 
@@ -22,15 +22,10 @@ public class TransactionHeader {
     // active org. Covered by the signature (see WeilClient.execute).
     private final OrgContext org;
 
-    /**
-     * Create a transaction header. A {@code creationTime} of 0 is replaced
-     * with the current time.
-     *
-     * <p>{@code org} is a required constructor parameter rather than an optional setter
-     * on purpose: it is part of the signed digest, so every construction site
-     * must make a deliberate choice about it. A defaulted field would let a
-     * caller silently drop it and produce a transaction the node rejects.</p>
-     */
+    // `org` is a required constructor parameter rather than an optional setter
+    // on purpose: it is part of the signed digest, so every construction site
+    // must make a deliberate choice about it. A defaulted field would let a
+    // caller silently drop it and produce a transaction the node rejects.
     public TransactionHeader(long nonce, String publicKey, String fromAddr, String toAddr,
                              String signature, int weilpodCounter, long creationTime, String salt,
                              OrgContext org) {

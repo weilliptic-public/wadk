@@ -24,7 +24,7 @@ func (tracker *NonceTracker) GetNonce(key string) uint {
 	return uint(actual.Load())
 }
 
-//  if the key exists in the NonceTracker , then increment it to expectedNonce + 1
+// if the key exists in the NonceTracker , then increment it to expectedNonce + 1
 func (tracker *NonceTracker) SetNonce(key string, expectedNonce uint64) {
 	actual, loaded := tracker.Map.Load(key)
 

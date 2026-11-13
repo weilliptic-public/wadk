@@ -5,10 +5,10 @@ Provides:
                                 Management wallet purpose.
 - ``secured_admin(svc_name)`` — decorator factory that allows Management wallet
                                 purpose only.
-- ``weil_middleware()``   — Starlette middleware that reads the ``weil-wallet-addr``
-                            request header and stores it in a ContextVar.
-- ``current_wallet_addr()`` — read the wallet address set by the middleware for the
-                              current request.
+- ``weil_middleware()``   — Starlette middleware that verifies signed Weil auth
+                            headers and stores the caller in a ContextVar.
+- ``current_wallet_addr()`` — read the wallet address active in the current
+                              request or tool context.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import contextvars
 import concurrent.futures
 import asyncio
 import functools
+import inspect
 import threading
 import json
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ from typing import Any, Callable, Type
 import httpx
 from weil_wallet.api.platform_api import PlatformApi
 from weil_wallet.client import WeilClient
-from weil_wallet.constants import IDENTITY_APPLET_SVC_PREFIX, PUBLISHER_APPLET_SVC_NAME
+from weil_wallet.constants import IDENTITY_APPLET_SVC_PREFIX
 from weil_wallet.contract import ContractId
 from weil_wallet.constants import SENTINEL_HOST
 from weil_wallet.errors import WalletNotPermittedError
@@ -34,10 +35,10 @@ from .auth import full_address_from_headers, verify_weil_signature
 
 # One ContextVar object per process, but its *value* is per-asyncio-task.
 # ASGI servers (uvicorn) run each HTTP request in a separate asyncio task, so
-# each request gets its own isolated copy of the context. Calling .set() in one
-# request's task never affects another concurrent request's task.
-# Set by weil_middleware() on every inbound request; read by secured decorators and
-# current_wallet_addr().
+# each request gets its own isolated copy of the context.
+# Async tasks inherit a context when they are created; setting
+# a value in one task does not mutate another task's context.
+# Middleware and agent integrations set these values around secured work.
 _weil_wallet_addr: contextvars.ContextVar[str] = contextvars.ContextVar(
     "weil_wallet_addr", default=""
 )
@@ -59,6 +60,8 @@ _weil_verify_tls: contextvars.ContextVar[bool] = contextvars.ContextVar(
 # more than 5 minutes after they were issued.
 _ALLOWED_TIMESTAMP_DRIFT: int = 300  # 5 minutes
 _SECURED_CHECK_TOPIC = "security"
+# Metadata field in which audit() returns the entry in the tool result.
+AUDIT_FIELD = "audit_payload"
 # Set on @secured wrappers so framework audit hooks can tell a guarded tool
 # apart and record its arguments and response.
 _SECURED_ATTR = "__weil_secured__"
@@ -72,6 +75,10 @@ class _SecuredScope:
     @property
     def identity_name(self) -> str:
         return f"{IDENTITY_APPLET_SVC_PREFIX}{self.org}"
+
+    @property
+    def publisher_name(self) -> str:
+        return f"publisher::{self.org}"
 
     def key_for_wallet(self, wallet_addr: str) -> str:
         if self.subgroup:
@@ -100,9 +107,10 @@ def _parse_secured_scope(scope: str) -> _SecuredScope:
 
 
 def current_wallet_addr() -> str:
-    """Return the wallet address injected by the current request's middleware.
+    """Return the wallet address active in the current request/tool context.
 
-    Returns an empty string when called outside a request context.
+    Middleware and agent integrations set this value. 
+    Returns an empty string when called outside a secured request or tool execution.
     """
     return _weil_wallet_addr.get()
 
@@ -114,7 +122,11 @@ def set_current_wallet_addr(
     sentinel_host: str = SENTINEL_HOST,
     verify: bool = True,
 ) -> tuple[Any, Any, Any, Any]:
-    """Set the current verified caller wallet for MCP/ADK integrations."""
+    """Set the wallet and request settings used by secured checks.
+
+    Keep the returned tokens and pass them to ``reset_current_wallet_addr``
+    when this request or tool execution finishes.
+    """
     wallet_token = _weil_wallet_addr.set(wallet_addr)
     mode_token = _weil_context_mode.set(mode)
     sentinel_host_token = _weil_sentinel_host.set(sentinel_host)
@@ -131,9 +143,12 @@ def reset_current_wallet_addr(tokens: tuple[Any, Any, Any, Any]) -> None:
     _weil_verify_tls.reset(verify_token)
 
 
-def weil_middleware() -> Type[Any]:
-    """Return a Starlette middleware class that verifies wallet ownership on every
-    request and stores the verified address in a ContextVar.
+def weil_middleware(
+    *,
+    sentinel_host: str = SENTINEL_HOST,
+    verify: bool = True,
+) -> Type[Any]:
+    """Return middleware that verifies signed POST requests and stores the wallet.
 
     Expected request headers
     ------------------------
@@ -144,18 +159,21 @@ def weil_middleware() -> Type[Any]:
 
     The middleware rejects requests that:
     - are missing any of the four headers (401)
-    - carry a timestamp older than 5 minutes (401 — prevents replay)
+    - carry a timestamp outside the allowed 5-minute clock-skew window (401)
     - produce a recovered signing-key address that doesn't match the trailing
       64 chars of X-Wallet-Address (401)
     - carry an X-Wallet-Address that is not a 72-char hex string (401)
 
     On success the verified address is stored in the ContextVar and is readable
-    via ``current_wallet_addr()`` for the lifetime of the request.
+    via ``current_wallet_addr()`` for the lifetime of the request. ``sentinel_host``
+    and ``verify`` are likewise stored per-request so @secured decorators resolve
+    applets against the same environment the server was configured for, instead
+    of always falling back to the ``SENTINEL_HOST`` package default.
 
     Usage::
 
         app = mcp.http_app(transport="streamable-http")
-        app.add_middleware(weil_middleware())
+        app.add_middleware(weil_middleware(sentinel_host=os.environ["SENTINEL_HOST"]))
     """
     try:
         from starlette.middleware.base import BaseHTTPMiddleware
@@ -170,10 +188,8 @@ def weil_middleware() -> Type[Any]:
         """Verifies wallet ownership via signature and stores the address in a ContextVar."""
 
         async def dispatch(self, request: Any, call_next: Any) -> Any:
-            # Only verify auth for POST requests — those are the MCP tool calls.
-            # GET /mcp establishes the SSE stream and never invokes a tool, so
-            # it passes through without auth. weil_wallet_addr is only read
-            # inside secured decorators, which only run during POST-driven tool calls.
+            # Streamable HTTP uses POST for MCP operations, including tool calls;
+            # GET opens the SSE stream and does not invoke secured tools.
             if request.method != "POST":
                 return await call_next(request)
 
@@ -196,7 +212,9 @@ def weil_middleware() -> Type[Any]:
                 full_address_from_headers(request.headers) or wallet_address
             )
 
-            tokens = set_current_wallet_addr(caller_addr, mode="mcp")
+            tokens = set_current_wallet_addr(
+                caller_addr, mode="mcp", sentinel_host=sentinel_host, verify=verify
+            )
             try:
                 return await call_next(request)
             finally:
@@ -206,14 +224,15 @@ def weil_middleware() -> Type[Any]:
 
 
 # NOTE: the MCP-only `secured()` that lived here has been folded into
-# `_secured()` below, which now performs the same key-manager lookup while
-# also supporting Management-only scopes (`secured_admin`) and raising for
+# `_secured()` below, which checks purposes on the identity applet while also
+# supporting Management-only scopes (`secured_admin`) and raising for
 # non-MCP callers such as the ADK tool gate. Two `def secured(...)` in one
 # module meant the second shadowed this one, so this path never ran.
 
 async def _publish_secured_check(
     http_client: httpx.AsyncClient,
     wallet_addr: str,
+    publisher_svc_name: str,
     svc_name: str,
     passed: bool,
 ) -> None:
@@ -221,7 +240,7 @@ async def _publish_secured_check(
     try:
         publisher_id = await WeilClient.get_applet_id_for_name(
             http_client,
-            PUBLISHER_APPLET_SVC_NAME,
+            publisher_svc_name,
             wallet_address=wallet_addr,
         )
         verdict = "passed" if passed else "failed"
@@ -245,90 +264,90 @@ async def _publish_secured_check(
 
 async def _secured_key_has_purpose(
     http_client: httpx.AsyncClient,
-    key_manager_addr: ContractId,
+    applet_id: ContractId,
     wallet_addr: str,
     key: str,
     purpose: str,
 ) -> bool:
-    """Return whether *key* holds *purpose* on the given key-manager applet."""
+    """Return whether *key* holds *purpose* on the given identity applet."""
     value = await _call_secured_contract(
         http_client,
-        key_manager_addr,
+        applet_id,
         wallet_addr,
         "key_has_purpose",
         json.dumps({"key": key, "purpose": purpose}),
     )
-    if isinstance(value, bool):
-        return value
-    if value == "true":
-        return True
-    if value == "false":
-        return False
-    return False
+    return value is True or value == "true"
 
 
-async def wallet_has_execution_permission(
+async def wallet_has_purpose(
     wallet_addr: str,
     svc_name: str,
     *,
+    purposes: tuple[str, ...],
     sentinel_host: str = SENTINEL_HOST,
     verify: bool = True,
+    http_client: httpx.AsyncClient | None = None,
 ) -> bool:
-    """Return whether *wallet_addr* may execute methods guarded by *svc_name*."""
-    async with httpx.AsyncClient(
-        base_url=sentinel_host.rstrip("/"),
-        verify=verify,
-        timeout=60.0,
-    ) as http_client:
+    """Return whether *wallet_addr* holds any of *purposes* for *svc_name*."""
+    return (
+        await _granting_purpose(
+            wallet_addr,
+            svc_name,
+            purposes=purposes,
+            sentinel_host=sentinel_host,
+            verify=verify,
+            http_client=http_client,
+        )
+        is not None
+    )
+
+
+async def _granting_purpose(
+    wallet_addr: str,
+    svc_name: str,
+    *,
+    purposes: tuple[str, ...],
+    sentinel_host: str = SENTINEL_HOST,
+    verify: bool = True,
+    http_client: httpx.AsyncClient | None = None,
+) -> str | None:
+    """Return the purpose that grants *wallet_addr* access to *svc_name*, or None.
+
+    Purposes are probed in the order given, so a wallet holding several reports
+    the first one listed.
+
+    A single client and applet-name resolution serve every purpose/key probe,
+    so an Execution-or-Management check pays one connection instead of two.
+    Pass *http_client* to reuse an already-open client.
+    """
+
+    async def check(client: httpx.AsyncClient) -> str | None:
         subgroup, _, org = svc_name.rpartition(".")
         applet_name = f"{IDENTITY_APPLET_SVC_PREFIX}{org or svc_name}"
-        applet_id = await WeilClient.get_applet_id_for_name(http_client, applet_name)
+        applet_id = await WeilClient.get_applet_id_for_name(client, applet_name)
 
-        from_addr = wallet_addr
-        to_addr = from_addr
-        weilpod_counter = applet_id.pod_counter()
         # Org-level keys span every subgroup, so a subgroup tool accepts the
         # bare org-level address or "<subgroup>_<addr>".
         keys = [wallet_addr]
         if subgroup:
             keys.append(f"{subgroup}_{wallet_addr}")
         for key in keys:
-            method_args = json.dumps({"key": key, "purpose": "Execution"})
+            for purpose in purposes:
+                if await _secured_key_has_purpose(
+                    client, applet_id, wallet_addr, key, purpose
+                ):
+                    return purpose
+        return None
 
-            final_args = {
-                "contract_address": applet_id,
-                "contract_method": "key_has_purpose",
-                "contract_input_bytes": method_args,
-                "should_hide_args": True,
-            }
-
-            nonce = int(current_time_millis())
-            header = TransactionHeader(
-                nonce=nonce,
-                public_key="",
-                from_addr=from_addr,
-                to_addr=to_addr,
-                weilpod_counter=weilpod_counter,
-            )
-
-            base_txn = BaseTransaction(header=header)
-            payload = WeilClient._build_submit_payload("", base_txn, final_args)
-
-            resp = await PlatformApi.submit_transaction(
-                payload,
-                http_client,
-                is_non_blocking=False,
-            )
-
-            txn_result = json.loads(resp.txn_result)
-            if "Ok" not in txn_result:
-                continue
-
-            flag = txn_result["Ok"]
-            if flag is True or flag == "true":
-                return True
-
-        return False
+    if http_client is not None:
+        return await check(http_client)
+    async with httpx.AsyncClient(
+        base_url=sentinel_host.rstrip("/"),
+        verify=verify,
+        timeout=60.0,
+    ) as client:
+        return await check(client)
 
 async def _call_secured_contract(
     http_client: httpx.AsyncClient,
@@ -395,70 +414,6 @@ def _unwrap_secured_result(txn_result: str) -> Any:
     return ok_value
 
 
-async def wallet_has_management_permission(
-    wallet_addr: str,
-    svc_name: str,
-    *,
-    sentinel_host: str = SENTINEL_HOST,
-    verify: bool = True,
-) -> bool:
-    """Return whether *wallet_addr* may execute methods guarded by *svc_name*."""
-    async with httpx.AsyncClient(
-        base_url=sentinel_host.rstrip("/"),
-        verify=verify,
-        timeout=60.0,
-    ) as http_client:
-        subgroup, _, org = svc_name.rpartition(".")
-        applet_name = f"{IDENTITY_APPLET_SVC_PREFIX}{org or svc_name}"
-        applet_id = await WeilClient.get_applet_id_for_name(http_client, applet_name)
-
-        from_addr = wallet_addr
-        to_addr = from_addr
-        weilpod_counter = applet_id.pod_counter()
-        # Org-level keys span every subgroup, so a subgroup tool accepts the
-        # bare org-level address or "<subgroup>_<addr>".
-        keys = [wallet_addr]
-        if subgroup:
-            keys.append(f"{subgroup}_{wallet_addr}")
-        for key in keys:
-            method_args = json.dumps({"key": key, "purpose": "Management"})
-
-            final_args = {
-                "contract_address": applet_id,
-                "contract_method": "key_has_purpose",
-                "contract_input_bytes": method_args,
-                "should_hide_args": True,
-            }
-
-            nonce = int(current_time_millis())
-            header = TransactionHeader(
-                nonce=nonce,
-                public_key="",
-                from_addr=from_addr,
-                to_addr=to_addr,
-                weilpod_counter=weilpod_counter,
-            )
-
-            base_txn = BaseTransaction(header=header)
-            payload = WeilClient._build_submit_payload("", base_txn, final_args)
-
-            resp = await PlatformApi.submit_transaction(
-                payload,
-                http_client,
-                is_non_blocking=False,
-            )
-
-            txn_result = json.loads(resp.txn_result)
-            if "Ok" not in txn_result:
-                continue
-
-            flag = txn_result["Ok"]
-            if flag is True or flag == "true":
-                return True
-
-        return False
-
-
 def secured_user(svc_name: str) -> Callable:
     """Decorator factory for user tools that enforce on-chain access control.
 
@@ -502,61 +457,38 @@ def _secured(svc_name: str, *, allow_execution: bool) -> Callable:
 
     def decorator(func: Callable) -> Callable:
         async def _check_permission() -> Any:
-            """Ask the key-manager applet whether the caller holds the purpose.
-
-            The purposes live on a separate key-manager applet, whose address
-            the identity applet stores under "key_management_addr". Asking the
-            identity applet directly would trust whichever applet answered;
-            following the indirection asks the contract that actually owns the
-            key list. See the #261 rework.
-            """
+            """Ask the identity applet whether the caller holds the purpose."""
             wallet_addr = current_wallet_addr()
+            if not wallet_addr:
+                return _permission_denied(wallet_addr or "", svc_name)
+            
             async with httpx.AsyncClient(
                 base_url=_weil_sentinel_host.get().rstrip("/"),
                 verify=_weil_verify_tls.get(),
                 timeout=60.0,
             ) as http_client:
-                identity_id = await WeilClient.get_applet_id_for_name(
-                    http_client,
-                    scope.identity_name,
-                    wallet_address=wallet_addr,
-                )
-                key_manager_addr = await _call_secured_contract(
-                    http_client,
-                    identity_id,
+                if not await wallet_has_purpose(
                     wallet_addr,
-                    "get_data",
-                    json.dumps({"key": "key_management_addr"}),
-                )
-                if key_manager_addr is None:
+                    svc_name,
+                    purposes=("Management", "Execution") if allow_execution else ("Management",),
+                    http_client=http_client,
+                ):
                     await _publish_secured_check(
-                        http_client, wallet_addr, svc_name, False)
+                        http_client,
+                        wallet_addr,
+                        scope.publisher_name,
+                        svc_name,
+                        False,
+                    )
                     return _permission_denied(wallet_addr, svc_name)
-
-                key_manager_id = ContractId(str(key_manager_addr))
-
-                # Org-level keys span every subgroup, so a subgroup tool
-                # accepts the bare org-level address or "<subgroup>_<addr>".
-                keys = [wallet_addr]
-                if scope.subgroup:
-                    keys.append(scope.key_for_wallet(wallet_addr))
-                purposes = ["Management"]
-                if allow_execution:
-                    purposes.append("Execution")
-                passed = False
-                for key in keys:
-                    for purpose in purposes:
-                        if await _secured_key_has_purpose(
-                            http_client, key_manager_id, wallet_addr,
-                            key, purpose,
-                        ):
-                            passed = True
-                            break
-                    if passed:
-                        break
                 await _publish_secured_check(
-                    http_client, wallet_addr, svc_name, passed)
-                return None if passed else _permission_denied(wallet_addr, svc_name)
+                    http_client,
+                    wallet_addr,
+                    scope.publisher_name,
+                    svc_name,
+                    True,
+                )
+                return None
 
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
@@ -586,6 +518,72 @@ def _secured(svc_name: str, *, allow_execution: bool) -> Callable:
         return sync_wrapper
 
     return decorator
+
+
+
+def audit(name: str = "") -> Callable[[Callable], Callable]:
+    """Decorator that returns an audit entry with the tool result.
+
+    The server builds the entry — verified caller, tool and arguments —
+    and attaches it to the result's metadata under ``AUDIT_FIELD``
+    (``audit_payload``). The calling agent reads it and submits it from its own
+    wallet with ``agent.audit(entry)``. Stack it below ``@secured`` so only
+    authorized calls produce an entry.
+
+    Usage::
+
+        @mcp.tool()
+        @secured("infrastructure.weil")
+        @audit()
+        async def my_tool(query: str) -> str: ...
+    """
+
+    def decorator(func: Callable) -> Callable:
+        sig = inspect.signature(func)
+        tool_name = name or func.__name__
+
+        def _wrap(result: Any, args: tuple, kwargs: dict) -> Any:
+            from fastmcp.tools.tool import ToolResult
+
+            bound = sig.bind(*args, **kwargs)
+            entry = json.dumps(
+                {
+                    "caller": current_wallet_addr(),
+                    "tool": tool_name,
+                    "args": {
+                        k: v
+                        for k, v in bound.arguments.items()
+                        if k not in ("self", "cls")
+                    },
+                },
+                default=repr,
+            )
+            if not isinstance(result, ToolResult):
+                result = ToolResult(content=result)
+            result.meta = {**(result.meta or {}), AUDIT_FIELD: entry}
+            return result
+
+        if asyncio.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                return _wrap(await func(*args, **kwargs), args, kwargs)
+
+            # Same reason as @secured: the result is no longer a plain str.
+            async_wrapper.__annotations__.pop("return", None)
+            return async_wrapper
+
+        @functools.wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            return _wrap(func(*args, **kwargs), args, kwargs)
+
+        sync_wrapper.__annotations__.pop("return", None)
+        return sync_wrapper
+
+    return decorator
+
+
+audit_payload = audit
 
 
 def _secured_tool_info(tool: Any) -> "dict[str, str] | None":

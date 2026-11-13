@@ -1,6 +1,7 @@
 """WeilClient and WeilContractClient for executing applet methods on WeilChain."""
 
 from __future__ import annotations
+
 import asyncio
 import concurrent.futures
 import contextvars
@@ -11,8 +12,10 @@ import json
 import threading
 import warnings
 from collections.abc import Mapping
-from typing import Any, AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Callable, Generic, Optional, TypeVar
+
 import httpx
+
 from .api.platform_api import PlatformApi
 from .api.request import SubmitTxnRequest, Transaction, UserTransaction, Verifier
 from .constants import (
@@ -23,8 +26,14 @@ from .constants import (
 )
 from .contract import ContractId
 from .streaming import ByteStream
-from .transaction import BaseTransaction, OrgContext, TransactionHeader, TransactionResult
+from .transaction import (
+    BaseTransaction,
+    OrgContext,
+    TransactionHeader,
+    TransactionResult,
+)
 from .utils import current_time_millis
+from .wallet import SelectedAccount, Wallet
 
 
 def _org_context(org_info: Any) -> Optional[OrgContext]:
@@ -42,7 +51,6 @@ def _org_context(org_info: Any) -> Optional[OrgContext]:
         org=org_info.name,
         subgroup=subgroup if subgroup else None,
     )
-from .wallet import SelectedAccount, Wallet
 
 _sync_loop: Optional[asyncio.AbstractEventLoop] = None
 _sync_loop_lock = threading.Lock()
@@ -161,10 +169,92 @@ async def _extract_fastapi_request_payload(request: Any) -> Any:
     return _decode_body_bytes(await request.body())
 
 
+_T = TypeVar("_T")
+
+
+async def _on_bridge(coro: Any) -> Any:
+    """Run *coro* on the bridge loop and return its result.
+
+    The caller's own loop keeps running while it waits: the coroutine is handed
+    to the bridge loop's thread and awaited as a future, unlike ``_run_sync``,
+    which blocks the calling thread. Cancelling the caller cancels the
+    coroutine too. Code running on the bridge loop must never block on it (for
+    example through ``_run_sync``), or whatever it waits for can never run.
+    """
+    bridge = _get_sync_loop()
+    if asyncio.get_running_loop() is bridge:
+        return await coro
+    return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, bridge))
+
+
+class _BridgeLocal(Generic[_T]):
+    """An asyncio-bound object that lives only on the bridge loop.
+
+    Built the first time it is used there, and again if the bridge loop is
+    ever replaced. Only code running on the bridge loop may use it, so it
+    needs no thread lock.
+    """
+
+    def __init__(self, factory: Callable[[], _T]) -> None:
+        self._factory = factory
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._value: Optional[_T] = None
+
+    def get(self) -> _T:
+        loop = asyncio.get_running_loop()
+        if loop is not _get_sync_loop():
+            raise RuntimeError(
+                "this object belongs to the bridge loop; run the code that uses "
+                "it through _on_bridge()"
+            )
+        if self._loop is not loop:
+            self._value = self._factory()
+            self._loop = loop
+        return self._value  # type: ignore[return-value]
+
+    def reset(self) -> Optional[_T]:
+        """Forget the instance and return it, so the next use builds a new one."""
+        value, self._value, self._loop = self._value, None, None
+        return value
+
+
+class _BridgeHttpClient:
+    """Stands in for the pooled ``httpx.AsyncClient``, from any event loop.
+
+    Each request runs on the bridge loop, where the one real client lives, so
+    its pooled connections only ever belong to that loop. Only the request
+    coroutines (``post``, ``get``, ``request``, ``send`` ...) are offered; a
+    response is read in full before it is handed back.
+    """
+
+    def __init__(self, client: _BridgeLocal[httpx.AsyncClient]) -> None:
+        self._client = client
+
+    def __getattr__(self, name: str) -> Any:
+        if not inspect.iscoroutinefunction(getattr(httpx.AsyncClient, name, None)):
+            raise AttributeError(
+                f"{name!r} is not offered by the bridged HTTP client; "
+                "only its request coroutines are"
+            )
+
+        async def call(*args: Any, **kwargs: Any) -> Any:
+            async def on_bridge() -> Any:
+                return await getattr(self._client.get(), name)(*args, **kwargs)
+
+            return await _on_bridge(on_bridge())
+
+        return call
+
+
 class WeilClient:
     """High-level client for WeilChain applet methods.
 
-    Holds an HTTP client, a signer Wallet, and a concurrency limiter.
+    Holds an HTTP client, a signer Wallet, and a concurrency limiter. The HTTP
+    client, the limiter and the locks live on the bridge loop, a background
+    loop that never closes, and every request is run there (see
+    ``_on_bridge``). So one WeilClient can be used from any loop, including a
+    fresh loop per call, its connections are reused across all of them, and
+    the limit applies to the whole client.
     """
 
     def __init__(
@@ -179,32 +269,86 @@ class WeilClient:
 
         Args:
             wallet: Signing wallet (holds the private key).
-            concurrency: Max concurrent in-flight requests. Defaults to DEFAULT_CONCURRENCY.
-            sentinel_host: Base URL of the Sentinel node. Defaults to the production endpoint.
-            verify: Whether to verify TLS certificates (set False for self-signed certs).
+            concurrency: Max concurrent in-flight requests. Defaults to
+                ``DEFAULT_CONCURRENCY``.
+            sentinel_host: Base URL of the Sentinel node. Defaults to the
+                production endpoint.
+            verify: Whether to verify TLS certificates. Set this to ``False``
+                only for development hosts with self-signed certificates.
         """
         self._wallet = wallet
         self._concurrency = (
             concurrency if concurrency is not None else DEFAULT_CONCURRENCY
         )
-        self._semaphore = asyncio.Semaphore(self._concurrency)
         self._sentinel_host = sentinel_host or SENTINEL_HOST
         self._verify = verify
-        self._http_client = httpx.AsyncClient(
-            base_url=self._sentinel_host.rstrip("/"),
-            verify=verify,
-            timeout=60.0,
+        # These live on the bridge loop; only code run through _on_bridge may
+        # use them.
+        self._bridge_semaphore: _BridgeLocal[asyncio.Semaphore] = _BridgeLocal(
+            lambda: asyncio.Semaphore(self._concurrency)
         )
+        self._bridge_http: _BridgeLocal[httpx.AsyncClient] = _BridgeLocal(
+            lambda: type(self)._new_http_client(self._sentinel_host, self._verify)
+        )
+        self._bridge_audit_contract_id_lock: _BridgeLocal[asyncio.Lock] = _BridgeLocal(
+            asyncio.Lock
+        )
+        self._bridge_publisher_contract_id_lock: _BridgeLocal[asyncio.Lock] = _BridgeLocal(
+            asyncio.Lock
+        )
+        self._bridged_http_client = _BridgeHttpClient(self._bridge_http)
         self._audit_contract_id: Optional[ContractId] = None
-        self._audit_contract_id_lock = asyncio.Lock()
-        self._publisher_contract_id: Optional[ContractId] = None
         self._publisher_contract_ids: dict[str, ContractId] = {}
-        self._publisher_contract_id_lock = asyncio.Lock()
         self._remote_signing = False
         self._credentials: Optional[dict] = None
 
+    @property
+    def _http_client(self) -> Any:
+        """The pooled Sentinel HTTP client; usable from any loop (requests run on the bridge)."""
+        return self._bridged_http_client
+
+    @property
+    def _semaphore(self) -> asyncio.Semaphore:
+        """The in-flight request limiter; only on the bridge loop."""
+        return self._bridge_semaphore.get()
+
+    @property
+    def _audit_contract_id_lock(self) -> asyncio.Lock:
+        return self._bridge_audit_contract_id_lock.get()
+
+    @property
+    def _publisher_contract_id_lock(self) -> asyncio.Lock:
+        return self._bridge_publisher_contract_id_lock.get()
+
+    async def _submit(
+        self, payload: SubmitTxnRequest, *, is_non_blocking: bool
+    ) -> TransactionResult:
+        """Submit a signed transaction under the client's limit."""
+
+        async def on_bridge() -> TransactionResult:
+            async with self._semaphore:
+                return await PlatformApi.submit_transaction(
+                    payload, self._bridge_http.get(), is_non_blocking=is_non_blocking
+                )
+
+        return await _on_bridge(on_bridge())
+
+    async def _submit_reading_all(self, payload: SubmitTxnRequest) -> list[bytes]:
+        """Submit a signed transaction and return its response body's chunks."""
+
+        async def on_bridge() -> list[bytes]:
+            async with self._semaphore:
+                return [
+                    chunk
+                    async for chunk in PlatformApi.submit_transaction_with_streaming(
+                        payload, self._bridge_http.get(), is_non_blocking=False
+                    )
+                ]
+
+        return await _on_bridge(on_bridge())
+
     @staticmethod
-    def _http_client(
+    def _new_http_client(
         sentinel_host: Optional[str] = SENTINEL_HOST,
         verify: bool = True,
     ) -> httpx.AsyncClient:
@@ -318,11 +462,14 @@ class WeilClient:
             IndexError: If the index is out of bounds.
         """
         self._wallet.set_index(selected)
-        async with self._audit_contract_id_lock:
-            self._audit_contract_id = None
-        async with self._publisher_contract_id_lock:
-            self._publisher_contract_id = None
-            self._publisher_contract_ids.clear()
+
+        async def on_bridge() -> None:
+            async with self._audit_contract_id_lock:
+                self._audit_contract_id = None
+            async with self._publisher_contract_id_lock:
+                self._publisher_contract_ids.clear()
+
+        await _on_bridge(on_bridge())
 
     async def derived_account_count(self) -> int:
         """Return the number of BIP32 HD-derived accounts in the wallet."""
@@ -401,7 +548,7 @@ class WeilClient:
         if credentials:
             payload["credentials"] = credentials
 
-        async with cls._http_client(sentinel_host, verify) as http_client:
+        async with cls._new_http_client(sentinel_host, verify) as http_client:
             resp = await http_client.post(
                 "/get_agent_wallet",
                 json=payload,
@@ -413,7 +560,9 @@ class WeilClient:
                 error = resp.json()
             except json.JSONDecodeError:
                 error = None
-            message = error.get("message") if isinstance(error, dict) else "no message"
+            message = (
+                error.get("message") if isinstance(error, dict) else "no message"
+            )
             raise RuntimeError(
                 f"agent wallet lookup failed: HTTP {resp.status_code}: {message}"
             )
@@ -465,7 +614,7 @@ class WeilClient:
         if self._credentials:
             req["credentials"] = self._credentials
 
-        async with type(self)._http_client(self._sentinel_host, self._verify) as http_client:
+        async with type(self)._new_http_client(self._sentinel_host, self._verify) as http_client:
             resp = await http_client.post("/sign_payload", json=req)
         resp.raise_for_status()
         try:
@@ -527,27 +676,35 @@ class WeilClient:
         ``validate_and_persist_receipt`` can land on a pod whose local
         ``identity::<org>`` copy never saw this wallet's membership.
         """
-        async with self._audit_contract_id_lock:
-            if self._audit_contract_id is not None:
-                return self._audit_contract_id
-            resp = await self._http_client.post(
-                "/get_applet_address",
-                json={
-                    "svc_name": AUDIT_APPLET_SVC_NAME,
-                    "wallet_address": self.wallet_addr(),
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if "Ok" in data:
-                self._audit_contract_id = ContractId(data["Ok"])
-                return self._audit_contract_id
-            raise RuntimeError(f"get_applet_address failed: {data.get('Err', data)}")
+        if self._audit_contract_id is not None:
+            return self._audit_contract_id
+
+        async def on_bridge() -> ContractId:
+            async with self._audit_contract_id_lock:
+                if self._audit_contract_id is not None:
+                    return self._audit_contract_id
+                resp = await self._bridge_http.get().post(
+                    "/get_applet_address",
+                    json={
+                        "svc_name": AUDIT_APPLET_SVC_NAME,
+                        "wallet_address": self.wallet_addr(),
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if "Ok" in data:
+                    self._audit_contract_id = ContractId(data["Ok"])
+                    return self._audit_contract_id
+                raise RuntimeError(f"get_applet_address failed: {data.get('Err', data)}")
+
+        return await _on_bridge(on_bridge())
 
     def _publisher_svc_name_for_wallet_org(self) -> str:
         org = self._wallet.org
         if org is None or not org.name:
-            raise RuntimeError("stream_audit requires a wallet linked to an organization")
+            raise RuntimeError(
+                "stream_audit requires a wallet linked to an organization"
+            )
         return f"publisher::{org.name}"
 
     async def _get_publisher_contract_id(
@@ -555,18 +712,23 @@ class WeilClient:
         svc_name: str = PUBLISHER_APPLET_SVC_NAME,
     ) -> ContractId:
         """Resolve and cache a publisher applet contract address."""
-        async with self._publisher_contract_id_lock:
-            if svc_name in self._publisher_contract_ids:
-                return self._publisher_contract_ids[svc_name]
-            contract_id = await self.get_applet_id_for_name(
-                self._http_client,
-                svc_name,
-                wallet_address=self.wallet_addr(),
-            )
-            self._publisher_contract_ids[svc_name] = contract_id
-            if svc_name == PUBLISHER_APPLET_SVC_NAME:
-                self._publisher_contract_id = contract_id
-            return contract_id
+        cached = self._publisher_contract_ids.get(svc_name)
+        if cached is not None:
+            return cached
+
+        async def on_bridge() -> ContractId:
+            async with self._publisher_contract_id_lock:
+                if svc_name in self._publisher_contract_ids:
+                    return self._publisher_contract_ids[svc_name]
+                contract_id = await self.get_applet_id_for_name(
+                    self._bridge_http.get(),
+                    svc_name,
+                    wallet_address=self.wallet_addr(),
+                )
+                self._publisher_contract_ids[svc_name] = contract_id
+                return contract_id
+
+        return await _on_bridge(on_bridge())
 
     async def get_receipt_for_commit(self, commit_hash: str) -> Optional[str]:
         """Read back the receipt content currently persisted for ``commit_hash``.
@@ -651,10 +813,17 @@ class WeilClient:
     def audit(self, log: Optional[str] = None) -> Any:
         """Submit an audit log entry, or use as a decorator factory.
 
-        Direct call:   await client.audit("log string")
-        Decorator:     @client.audit()   — prepends two lines to the wrapped
-                       function: builds a JSON entry from all arguments, then
-                       calls client._submit_audit(entry) before the handler runs.
+        Direct call::
+
+            await client.audit("log string")
+
+        Decorator usage::
+
+            @client.audit()
+            async def handler(...): ...
+
+        The decorator builds a JSON entry from the wrapped call arguments and
+        submits it before the handler runs.
         """
         if log is not None:
             return self._submit_audit(log)
@@ -751,8 +920,11 @@ class WeilClient:
         description: str,
         retention_in_bytes: int,
     ) -> TransactionResult:
-        """Create a publisher topic through ``publisher::weil``.
+        """Create a publisher topic.
 
+        The default publisher service is the platform publisher applet. Agents
+        that publish through an organization-scoped applet should use
+        :meth:`publish` with an explicit ``svc_name``.
         """
         contract_id = await self._get_publisher_contract_id()
         method_args = json.dumps(
@@ -773,8 +945,12 @@ class WeilClient:
         *,
         svc_name: str = PUBLISHER_APPLET_SVC_NAME,
     ) -> TransactionResult:
-        """Publish a payload through ``publisher::weil``.
+        """Publish a payload to a publisher topic.
 
+        Args:
+            topic: Target topic name.
+            payload: String payload to publish.
+            svc_name: Publisher service name to resolve before submitting.
         """
         contract_id = await self._get_publisher_contract_id(svc_name)
         method_args = json.dumps({"topic": topic, "payload": payload})
@@ -783,8 +959,14 @@ class WeilClient:
         )
 
     async def close(self) -> None:
-        """Close the HTTP client."""
-        await self._http_client.aclose()
+        """Close the HTTP client. A later request opens a new one."""
+
+        async def on_bridge() -> None:
+            client = self._bridge_http.reset()
+            if client is not None:
+                await client.aclose()
+
+        await _on_bridge(on_bridge())
 
     async def __aenter__(self) -> "WeilClient":
         """Enter async context: pre-resolve the audit applet address."""
@@ -930,11 +1112,7 @@ class WeilContractClient:
             method_name, method_args, should_hide_args
         )
         payload = WeilClient._build_submit_payload(signature, base_txn, args)
-
-        async with self._client._semaphore:
-            return await PlatformApi.submit_transaction(
-                payload, self._client._http_client, is_non_blocking=is_non_blocking
-            )
+        return await self._client._submit(payload, is_non_blocking=is_non_blocking)
 
     async def execute_with_streaming(
         self,
@@ -948,10 +1126,10 @@ class WeilContractClient:
         payload = WeilClient._build_submit_payload(signature, base_txn, args)
 
         async def stream() -> AsyncIterator[bytes]:
-            async with self._client._semaphore:
-                async for chunk in PlatformApi.submit_transaction_with_streaming(
-                    payload, self._client._http_client, is_non_blocking=False
-                ):
-                    yield chunk
+            # The request runs on the bridge loop, so its body is read there and
+            # handed over whole; submit_transaction_with_streaming's POST reads
+            # the full body before yielding anyway.
+            for chunk in await self._client._submit_reading_all(payload):
+                yield chunk
 
         return ByteStream(stream())

@@ -33,12 +33,12 @@ Usage::
 
 from __future__ import annotations
 
-import contextvars
 import functools
 import inspect
 import json
 import os
 import warnings
+import httpx
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional, Union
@@ -51,49 +51,32 @@ from weil_wallet.transaction import TransactionResult
 from weil_ai.auth import (
     abuild_auth_headers,
     build_auth_headers,
-    verify_weil_signature,
+    full_address_from_headers,
+    verify_weil_request,
 )
 from weil_ai.mcp import (
-    wallet_has_execution_permission,
-    wallet_has_management_permission,
+    reset_current_wallet_addr,
+    set_current_wallet_addr,
+    wallet_has_purpose,
 )
 
-
-_CALLER_WALLET_ADDR: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "weil_agent_caller_wallet_addr",
-    default="",
+from weil_ai.tracer import (
+    begin_trace,
+    finish_trace,
+    finish_trace_sync,
+    is_async_stream,
+    is_sync_stream,
+    root_from_call,
+    wrap_async_iterator,
+    wrap_sync_iterator,
 )
-
-_VERIFIABLE_ATTR = "__weil_verifiable_svc_name__"
-
-
-def verifiable(svc_name: str) -> Callable:
-    """Mark an agent method as requiring Execution permission on *svc_name*.
-
-    The check is enforced by :class:`WeilAgent` when the method is called through
-    the wrapped agent returned by ``@weil_ai.agent(...)``.
-    """
-
-    def decorator(func: Callable) -> Callable:
-        setattr(func, _VERIFIABLE_ATTR, svc_name)
-        return func
-
-    return decorator
-
-
-def _verifiable_service(attr: Any) -> Optional[str]:
-    return getattr(attr, _VERIFIABLE_ATTR, None) or getattr(
-        getattr(attr, "__func__", None),
-        _VERIFIABLE_ATTR,
-        None,
-    )
-
 
 class WeilAgent:
     """Proxy wrapper that attaches a Weil wallet identity to any agent.
 
-    All attribute access is forwarded to the wrapped agent except for the
-    Weil-specific names: ``get_auth_headers``, ``audit``, ``weil_wallet``.
+    Attributes not implemented by this proxy are forwarded to the wrapped
+    agent. Weil-specific methods and properties (such as ``get_auth_headers``,
+    ``audit``, and ``weil_wallet``) are handled by the proxy itself.
     """
 
     _WEIL_ATTRS = frozenset(
@@ -108,18 +91,17 @@ class WeilAgent:
             "get_auth_headers",
             "aget_auth_headers",
             "audit",
+            "audit_mcp_result",
+            "weil_session",
             "stream_audit",
             "pensieve",
             "weil_wallet",
             "inner_agent",
-            "as_caller",
-            "call",
-            "acall",
             "remote",
             "setup_secure_a2a",
-            "secure_a2a_app",
             "to_secure_a2a",
             "setup_secure_langchain",
+            "setup_secure_strands",
             "_get_client",
             "_audit_async",
         }
@@ -143,31 +125,36 @@ class WeilAgent:
     ) -> None:
         """Wrap *agent* with a Weil wallet.
 
-        Exactly one of *wallet*, *private_key_path*, or *identity* must be provided.
+        Exactly one of ``wallet``, ``private_key_path``, or ``identity`` must
+        be provided. The wrapped object is otherwise left untouched: method
+        calls and attribute access continue to flow to the original agent.
 
         Args:
-            agent:            Any agent object to wrap.
-            wallet:           Pre-built :class:`Wallet` (takes precedence over
-                              *private_key_path*).
-            private_key_path: Path to an account export JSON file (produced by
-                              the CLI's ``wallet export-account`` command).
-            identity:          Agent identity used to resolve the wallet.
-            concurrency:      Max concurrent in-flight requests for the client.
-            sentinel_host:    Override Sentinel node URL (defaults to
-                              ``SENTINEL_HOST`` env var or the production endpoint).
-            verify:           Whether to verify TLS certificates (set False for
-                              self-signed / development Sentinel nodes).
-            credentials:      Optional storage credentials (e.g. AWS S3 keys) used
-                              to resolve an externally stored wallet from the
-                              agent identity.
-            include_creds:    With ``secure=True`` + ``identity``, attach
-                              env-var AWS credentials to the wallet fetch. Set
-                              True only for external wallets stored under those
-                              credentials.
+            agent: Agent object to wrap.
+            wallet: Pre-built :class:`Wallet`.
+            private_key_path: Path to an account export JSON file.
+            identity: Agent identity used to resolve the wallet from Sentinel.
+            concurrency: Max concurrent in-flight Sentinel requests.
+            sentinel_host: Override Sentinel node URL. Defaults to the
+                ``SENTINEL_HOST`` environment variable, then the package
+                default.
+            verify: Whether to verify TLS certificates. Set ``False`` only for
+                development hosts with self-signed certificates.
+            credentials: Optional storage credentials used to resolve externally
+                stored identity wallets.
+            secure: Use native secure-memory wallet loading when available.
+            require_lock: With ``secure=True``, fail if native key memory cannot
+                be locked into RAM.
+            harden_process: With ``secure=True``, disable core dumps before
+                loading key material.
+            include_creds: With ``secure=True`` and ``identity``, attach
+                environment-provided AWS credentials to the native wallet fetch.
         """
         sources = sum(x is not None for x in (wallet, private_key_path, identity))
         if sources != 1:
-            raise ValueError("Provide exactly one of wallet=, private_key_path=, or identity=.")
+            raise ValueError(
+                "Provide exactly one of wallet=, private_key_path=, or identity=."
+            )
         if secure and wallet is not None:
             raise ValueError("secure=True requires private_key_path= or identity=.")
         if secure and identity is not None and credentials is not None:
@@ -179,7 +166,9 @@ class WeilAgent:
             )
             include_creds = True
 
-        resolved_sentinel_host = sentinel_host or os.environ.get("SENTINEL_HOST") or SENTINEL_HOST
+        resolved_sentinel_host = (
+            sentinel_host or os.environ.get("SENTINEL_HOST") or SENTINEL_HOST
+        )
         client = None
 
         if wallet is None and identity is not None:
@@ -194,7 +183,7 @@ class WeilAgent:
                 )
             else:
                 client = _run_sync(
-                     WeilClient.from_identity(
+                    WeilClient.from_identity(
                         identity,
                         concurrency=concurrency,
                         sentinel_host=resolved_sentinel_host,
@@ -221,6 +210,12 @@ class WeilAgent:
         object.__setattr__(self, "_verify", verify)
         if not secure:
             object.__setattr__(self, "_credentials", credentials)
+        # ADK holds the unwrapped agent in sub_agents; keep a way back to this
+        # proxy so the agent's own wallet can still be found there.
+        try:
+            object.__setattr__(agent, "__weil_agent__", self)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Weil-specific public API
@@ -238,6 +233,10 @@ class WeilAgent:
 
     def get_auth_headers(self, body: Any = None) -> dict:
         """Return signed auth headers for an MCP (or any HTTP) request.
+
+        Pass the exact request body when the receiver verifies a body-bound
+        signature; otherwise the signature covers the headers' timestamp and
+        wallet address only.
 
         Ready to pass directly to an MCP transport::
 
@@ -275,77 +274,57 @@ class WeilAgent:
 
         return await abuild_auth_headers(wallet, signer=signer, body=body)
 
-    @contextmanager
-    def as_caller(self) -> Iterator[None]:
-        """Use this agent's wallet as the caller for local verifiable calls."""
-        token = _CALLER_WALLET_ADDR.set(self._wallet_auth_address())
-        try:
-            yield
-        finally:
-            _CALLER_WALLET_ADDR.reset(token)
-
-    def call(self, target: Callable, *args: Any, **kwargs: Any) -> Any:
-        """Call another wrapped agent method as this agent."""
-        with self.as_caller():
-            return target(*args, **kwargs)
-
-    async def acall(self, target: Callable, *args: Any, **kwargs: Any) -> Any:
-        """Async variant of :meth:`call`."""
-        with self.as_caller():
-            result = target(*args, **kwargs)
-            if inspect.isawaitable(result):
-                return await result
-            return result
 
     def remote(self, base_url: str) -> "WeilRemoteAgent":
         """Return a proxy for invoking a remote Weil agent over HTTP."""
         return WeilRemoteAgent(self, base_url)
 
+
+    # Google ADK A2A (Agent-to-Agent) support
     def setup_secure_a2a(
         self,
         *,
         service: Optional[str] = None,
         audit: bool = True,
-        verify: bool = True,
+        verify_signature: bool = True,
         pensieve: bool = True,
     ) -> "WeilAgent":
-        """Install Weil signing, verification, and audit hooks for Google ADK A2A."""
+        """Install Weil signing, verification, and audit hooks for Google ADK A2A.
+
+        Args:
+            service: Permission gate service name for inbound A2A calls.
+            audit: Enable audit logging.
+            verify_signature: Verify inbound caller signatures.
+            pensieve: Install pensieve audit tools.
+
+        Returns:
+            Self for method chaining.
+        """
         from weil_ai.adk import setup_secure_a2a
 
         setup_secure_a2a(
             self,
             service=service,
             audit=audit,
-            verify=verify,
+            verify_signature=verify_signature,
             pensieve=pensieve,
         )
         return self
 
-    def secure_a2a_app(
-        self,
-        app: Any,
-        *,
-        service: Optional[str] = None,
-        audit: bool = True,
-        verify: bool = True,
-    ) -> Any:
-        """Wrap an ADK A2A Starlette app with Weil request verification."""
-        from weil_ai.adk import secure_a2a_app
-
-        return secure_a2a_app(
-            app,
-            self,
-            service=service,
-            audit=audit,
-            verify=verify,
-        )
-
     def to_secure_a2a(self, **kwargs: Any) -> Any:
-        """Convert the wrapped ADK agent to A2A and add Weil verification."""
+        """Convert the wrapped ADK agent to A2A and add Weil verification.
+
+        Args:
+            **kwargs: Passed to ``weil_ai.adk.to_secure_a2a``.
+
+        Returns:
+            Secure A2A Starlette application.
+        """
         from weil_ai.adk import to_secure_a2a
 
         return to_secure_a2a(self, **kwargs)
 
+    # LangChain support
     def setup_secure_langchain(
         self,
         *,
@@ -353,10 +332,53 @@ class WeilAgent:
         verify: bool = True,
         pensieve: bool = True,
     ) -> "WeilAgent":
-        """Install Weil invocation context/audit hooks for a LangChain agent."""
+        """Install Weil invocation context/audit hooks for a LangChain agent.
+
+        Args:
+            audit: Enable audit logging.
+            verify: Verify TLS certificates for Sentinel connections.
+            pensieve: Install pensieve audit tools.
+
+        Returns:
+            Self for method chaining.
+        """
         from weil_ai.langchain import setup_secure_langchain
 
         setup_secure_langchain(self, audit=audit, verify=verify, pensieve=pensieve)
+        return self
+
+    def to_secure_http(self, *, service: Optional[str] = None) -> Any:
+        """Serve this agent's methods over signed HTTP (``POST /invoke``).
+
+        LangChain counterpart of ``to_secure_a2a``: callers are verified by
+        signature and, with *service*, by on-chain permission. See
+        :func:`agent_http_app`.
+        """
+        return agent_http_app(self, service=service)
+    # Strands Agents support
+    def setup_secure_strands(
+        self,
+        *,
+        audit: bool = True,
+        verify: bool = True,
+        pensieve: bool = True,
+    ) -> "WeilAgent":
+        """Install Weil audit, trace and secured-tool hooks on a Strands agent.
+
+        Also secures its sub-agents (agents used as tools), or the nodes of a
+        wrapped Graph or Swarm, and signs remote A2A agents among them.
+
+        Args:
+            audit: Enable audit logging.
+            verify: Verify TLS certificates for Sentinel connections.
+            pensieve: Install pensieve memory tools.
+
+        Returns:
+            Self for method chaining.
+        """
+        from weil_ai.strands import setup_secure_strands
+
+        setup_secure_strands(self, audit=audit, verify=verify, pensieve=pensieve)
         return self
 
     def audit(self, log: str) -> TransactionResult:
@@ -369,6 +391,28 @@ class WeilAgent:
     def stream_audit(self, topic: str = "audits") -> Callable[[Callable], Callable]:
         """Return a decorator that publishes wrapped calls to a stream topic."""
         return self._get_client().stream_audit(topic)
+
+    async def audit_mcp_result(self, result: Any) -> Any:
+        """Submit a returned MCP audit payload with this agent's wallet."""
+        from weil_ai.mcp import AUDIT_FIELD
+
+        entry = (getattr(result, "meta", None) or {}).get(AUDIT_FIELD)
+        if entry:
+            await self._audit_async(entry)
+        return result
+
+    def weil_session(
+        self,
+        session: Any,
+        *,
+        raise_audit_errors: bool = False,
+    ) -> "WeilMcpSession":
+        """Wrap an MCP client session and audit tool results automatically."""
+        return WeilMcpSession(
+            self,
+            session,
+            raise_audit_errors=raise_audit_errors,
+        )
 
     def pensieve(self, **kwargs: Any) -> Any:
         """Return a Pensieve graph-memory client for this agent."""
@@ -403,30 +447,6 @@ class WeilAgent:
         wallet = object.__getattribute__(self, "_wallet")
         return wallet.get_address()
 
-    async def _verify_caller_permission(self, caller_addr: str, svc_name: str) -> None:
-        """Allow callers holding either Management or Execution purpose.
-
-        Mirrors weil_ai.secured_user: an admin key (Management) passes without
-        also needing Execution.
-        """
-        sentinel_host = object.__getattribute__(self, "_sentinel_host")
-        verify = object.__getattribute__(self, "_verify")
-        if await wallet_has_management_permission(
-            caller_addr,
-            svc_name,
-            sentinel_host=sentinel_host,
-            verify=verify,
-        ):
-            return
-        if await wallet_has_execution_permission(
-            caller_addr,
-            svc_name,
-            sentinel_host=sentinel_host,
-            verify=verify,
-        ):
-            return
-        raise WalletNotPermittedError(caller_addr, svc_name)
-
     async def _audit_async(self, log: str) -> TransactionResult:
         return await self._get_client().audit(log)
 
@@ -435,7 +455,86 @@ class WeilAgent:
     # ------------------------------------------------------------------
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(object.__getattribute__(self, "_agent"), name)
+        attr = getattr(object.__getattribute__(self, "_agent"), name)
+        if name.startswith("_") or not callable(attr):
+            return attr
+        return self._trace_callable(attr)
+
+    def _trace_callable(self, attr: Callable) -> Callable:
+        """Wrap a forwarded agent method with trace lifecycle handling.
+
+        The wrapped method starts a trace from the call arguments, lets the
+        underlying agent method run unchanged, and finishes the trace after a
+        sync result, awaitable result, or stream has completed.
+
+        An async method starts its trace when its coroutine starts running,
+        not when it is created: ``asyncio.run(agent.ainvoke(...))`` runs the
+        coroutine in a copy of the caller's context, and a trace begun outside
+        that copy could not be cleared inside it, leaving every later run of
+        the caller untraced.
+        """
+        if inspect.iscoroutinefunction(attr):
+
+            @functools.wraps(attr)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                trace = begin_trace(self, root_from_call(args, kwargs))
+                try:
+                    result = attr(*args, **kwargs)
+                except Exception:
+                    try:
+                        await finish_trace(trace)
+                    except Exception:
+                        pass
+                    raise
+                return await self._finish_awaitable_trace(result, trace)
+
+            return async_wrapper
+
+        @functools.wraps(attr)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            trace = begin_trace(self, root_from_call(args, kwargs))
+            try:
+                result = attr(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    return self._finish_awaitable_trace(result, trace)
+                if is_sync_stream(result):
+                    return wrap_sync_iterator(result, trace)
+                try:
+                    finish_trace_sync(trace)
+                except Exception:
+                    pass
+                return result
+            except Exception:
+                try:
+                    finish_trace_sync(trace)
+                except Exception:
+                    pass
+                raise
+
+        return wrapper
+
+    async def _finish_awaitable_trace(self, result: Any, trace: Any) -> Any:
+        """Await a forwarded async call and finish its trace.
+
+        If the awaited value is an async stream, trace completion is deferred
+        until the stream wrapper is exhausted. Exceptions still close the trace
+        before being re-raised.
+        """
+        try:
+            value = await result
+            if is_async_stream(value):
+                return wrap_async_iterator(value, trace)
+            try:
+                await finish_trace(trace)
+            except Exception:
+                pass
+            return value
+        except Exception:
+            try:
+                await finish_trace(trace)
+            except Exception:
+                pass
+            raise
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name in WeilAgent._WEIL_ATTRS:
@@ -457,6 +556,41 @@ class WeilAgent:
         await self.close()
 
 
+class WeilMcpSession:
+    """MCP client-session proxy that submits Weil audit metadata automatically."""
+
+    def __init__(
+        self,
+        agent: WeilAgent,
+        session: Any,
+        *,
+        raise_audit_errors: bool = False,
+    ) -> None:
+        self._agent = agent
+        self._session = session
+        self._raise_audit_errors = raise_audit_errors
+        self.last_audit_error: Optional[BaseException] = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._session, name)
+
+    async def initialize(self, *args: Any, **kwargs: Any) -> Any:
+        """Initialize the underlying MCP session."""
+        return await self._session.initialize(*args, **kwargs)
+
+    async def call_tool(self, *args: Any, **kwargs: Any) -> Any:
+        """Call a tool and submit any audit payload attached to its result."""
+        result = await self._session.call_tool(*args, **kwargs)
+        self.last_audit_error = None
+        try:
+            await self._agent.audit_mcp_result(result)
+        except Exception as error:
+            self.last_audit_error = error
+            if self._raise_audit_errors:
+                raise
+        return result
+
+
 class WeilRemoteAgent:
     """Client-side proxy for a remote Weil agent HTTP app."""
 
@@ -466,12 +600,11 @@ class WeilRemoteAgent:
 
     def __getattr__(self, name: str) -> Callable:
         def remote_call(*args: Any, **kwargs: Any) -> Any:
-            import httpx
-
+            payload = {"method": name, "args": list(args), "kwargs": kwargs}
             resp = httpx.post(
                 f"{self._base_url}/invoke",
-                headers=self._caller.get_auth_headers(),
-                json={"method": name, "args": args, "kwargs": kwargs},
+                headers=self._caller.get_auth_headers(body=payload),
+                json=payload,
                 timeout=60.0,
             )
             resp.raise_for_status()
@@ -480,23 +613,27 @@ class WeilRemoteAgent:
         return remote_call
 
     async def acall(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        import httpx
-
+        """Call a named method on the remote agent asynchronously."""
+        payload = {"method": name, "args": list(args), "kwargs": kwargs}
         async with httpx.AsyncClient(base_url=self._base_url, timeout=60.0) as client:
             resp = await client.post(
                 "/invoke",
-                headers=self._caller.get_auth_headers(),
-                json={"method": name, "args": args, "kwargs": kwargs},
+                headers=await self._caller.aget_auth_headers(body=payload),
+                json=payload,
             )
         resp.raise_for_status()
         return resp.json().get("result")
 
 
-def agent_http_app(agent: WeilAgent) -> Any:
+def agent_http_app(agent: WeilAgent, *, service: Optional[str] = None) -> Any:
     """Create a small Starlette app exposing public methods on *agent*.
 
-    Requests must include the same signed Weil headers produced by
-    ``WeilAgent.get_auth_headers()``. The request body is:
+    Requests must include the body-bound Weil headers produced by
+    ``WeilAgent.get_auth_headers(body=payload)``. When *service* is set, the
+    verified caller must also hold the Execution or Management purpose on that service
+    (the same gate ``setup_secure_a2a(service=...)`` applies to ADK agents);
+    otherwise the request is rejected with 403 before any agent code runs.
+    The request body is:
 
         {"method": "run", "args": [...], "kwargs": {...}}
     """
@@ -511,15 +648,20 @@ def agent_http_app(agent: WeilAgent) -> Any:
         ) from exc
 
     async def invoke(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except ValueError:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Invalid request body"}, status_code=400)
+        if not verify_weil_request(request.headers, body):
+            return JSONResponse(
+                {"error": "Wallet address verification failed"}, status_code=401
+            )
+
+        # This header carries the public-key-derived address; the signed
+        # canonical address (including the pod counter) is recovered below.
         wallet_address = request.headers.get("X-Wallet-Address")
-        signature_hex = request.headers.get("X-Signature")
-        message = request.headers.get("X-Message")
-        timestamp = request.headers.get("X-Timestamp")
-
-        if not verify_weil_signature(wallet_address, signature_hex, message, timestamp):
-            return JSONResponse({"error": "Wallet address verification failed"}, status_code=401)
-
-        body = await request.json()
         method = body.get("method")
         if not isinstance(method, str) or method.startswith("_"):
             return JSONResponse({"error": "Invalid method"}, status_code=400)
@@ -530,7 +672,34 @@ def agent_http_app(agent: WeilAgent) -> Any:
 
         args = body.get("args", [])
         kwargs = body.get("kwargs", {})
-        token = _CALLER_WALLET_ADDR.set(wallet_address)
+        # Identity lookups key on the canonical address (pod counter + key
+        # hash), which the client signs. Older clients omit it; fall back to
+        # the key-derived form.
+        caller_addr = (
+            full_address_from_headers(request.headers) or wallet_address
+        )
+        sentinel_host = object.__getattribute__(agent, "_sentinel_host") or SENTINEL_HOST
+        verify = object.__getattribute__(agent, "_verify")
+        if service:
+            try:
+                permitted = await wallet_has_purpose(
+                    caller_addr,
+                    service,
+                    purposes=("Execution", "Management"),
+                    sentinel_host=sentinel_host,
+                    verify=verify,
+                )
+            except Exception as exc:
+                return JSONResponse(
+                    {"error": f"permission check for service {service!r} failed: {exc}"},
+                    status_code=403,
+                )
+            if not permitted:
+                exc = WalletNotPermittedError(caller_addr, service)
+                return JSONResponse({"error": str(exc)}, status_code=403)
+        tokens = set_current_wallet_addr(
+            caller_addr, sentinel_host=sentinel_host, verify=verify
+        )
         try:
             target = getattr(agent, method)
             result = target(*args, **kwargs)
@@ -540,7 +709,7 @@ def agent_http_app(agent: WeilAgent) -> Any:
         except WalletNotPermittedError as exc:
             return JSONResponse({"error": str(exc)}, status_code=403)
         finally:
-            _CALLER_WALLET_ADDR.reset(token)
+            reset_current_wallet_addr(tokens)
 
     return Starlette(routes=[Route("/invoke", invoke, methods=["POST"])])
 
@@ -583,10 +752,21 @@ def weil_agent(
         agent.audit("ran query")   # on-chain log
 
     Args:
-        key_or_wallet: Path to an account export JSON file (``str`` or
-                       :class:`~pathlib.Path`), or a pre-built
-                       :class:`~weil_wallet.Wallet`.
+        key_or_wallet: Path to an account export JSON file, or a pre-built
+            :class:`~weil_wallet.Wallet`.
+        identity: Agent identity used to resolve a wallet from Sentinel.
+        concurrency: Max concurrent Sentinel requests for the wrapped agent.
         sentinel_host: Override the Sentinel node URL.
+        credentials: Optional storage credentials for externally stored
+            identity wallets.
+        verify: Whether to verify TLS certificates.
+        secure: Use native secure-memory wallet loading when available.
+        require_lock: With ``secure=True``, fail if native key memory cannot be
+            locked into RAM.
+        harden_process: With ``secure=True``, disable core dumps before loading
+            key material.
+        include_creds: With ``secure=True`` and ``identity``, attach
+            environment-provided AWS credentials to the native wallet fetch.
     """
     if (key_or_wallet is None) == (identity is None):
         raise ValueError("Provide exactly one of key_or_wallet or identity=.")
@@ -604,7 +784,9 @@ def weil_agent(
     resolved_sentinel_host = sentinel_host or os.environ.get("SENTINEL_HOST")
 
     if identity is not None:
-        resolved_sentinel_host = sentinel_host or os.environ.get("SENTINEL_HOST") or SENTINEL_HOST
+        resolved_sentinel_host = (
+            sentinel_host or os.environ.get("SENTINEL_HOST") or SENTINEL_HOST
+        )
         if secure:
             wallet = Wallet.from_secure_identity(
                 identity,

@@ -4,32 +4,46 @@
 // Derived accounts have their secret keys re-derived from the stored xprv;
 // external accounts carry their own secret keys.
 //
+// Wallets resolved from an Agent Registry API key are *masked*: Sentinel
+// returns the wallet file with an obfuscated xprv, so derived accounts carry
+// only their public key and address and cannot sign locally. Such wallets keep
+// the raw file (see SourceJSON) so signing can be delegated to Sentinel.
+//
 // Use SetIndex to switch the active account at runtime.
 package wallet
 
 import (
 	"bytes"
-	"crypto/ecdsa"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
 
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/utils"
 )
 
+// ErrNoSecretKey is returned when signing locally with an account that holds
+// no secret key — the derived accounts of a masked (API-key) wallet. Those
+// accounts must sign remotely through Sentinel.
+var ErrNoSecretKey = errors.New("account has no local secret key; use remote signing")
+
 // Account holds the secp256k1 key pair and the sentinel-minted account address.
 type Account struct {
-	SecretKey      secp.PrivateKey
+	// SecretKey is nil for masked accounts, which can only sign remotely.
+	SecretKey      *secp.PrivateKey
 	PublicKey      secp.PublicKey
 	AccountAddress string
+
+	// org is the organization this account acts under, or nil.
+	org *OrgInfo
 }
 
 // GetAddress returns the sentinel-minted 72-char hex account address.
@@ -42,17 +56,36 @@ func (a *Account) GetPublicKey() secp.PublicKey {
 	return a.PublicKey
 }
 
-// Sign hashes the given buffer with SHA-256 and signs with the account's
-// private key, returning the hex-encoded signature.
-func (a *Account) Sign(buf []byte) (*string, error) {
-	digest := utils.HashSha256(buf)
+// CanSign reports whether the account holds a secret key and can sign locally.
+func (a *Account) CanSign() bool {
+	return a.SecretKey != nil
+}
 
-	r, s, err := ecdsa.Sign(rand.Reader, a.SecretKey.ToECDSA(), digest)
-	if err != nil {
-		return nil, err
+// Org returns the organization this account acts under, or nil.
+func (a *Account) Org() *OrgInfo {
+	return a.org
+}
+
+// Sign hashes the given buffer with SHA-256 and signs it with the account's
+// private key, returning the hex-encoded 64-byte compact signature (r ‖ s).
+//
+// The node rejects anything that is not exactly 64 bytes, so r and s are
+// always written as fixed 32-byte big-endian values. Signing is RFC 6979
+// deterministic and produces a low-S signature, matching libsecp256k1.
+func (a *Account) Sign(buf []byte) (*string, error) {
+	if a.SecretKey == nil {
+		return nil, ErrNoSecretKey
 	}
-	signature := append(r.Bytes(), s.Bytes()...)
-	hexSignature := hex.EncodeToString(signature)
+
+	digest := utils.HashSha256(buf)
+	sig := ecdsa.Sign(a.SecretKey, digest)
+
+	var compact [64]byte
+	r, s := sig.R(), sig.S()
+	r.PutBytesUnchecked(compact[:32])
+	s.PutBytesUnchecked(compact[32:])
+
+	hexSignature := hex.EncodeToString(compact[:])
 	return &hexSignature, nil
 }
 
@@ -92,7 +125,11 @@ type Wallet struct {
 	derivedAccounts []*Account
 	addedAccounts   []*Account
 	currentIndex    SelectedAccount
-	org             *OrgInfo
+
+	// source is the raw wallet file, kept only for masked wallets so it can be
+	// handed to Sentinel's /sign_payload for remote signing.
+	source json.RawMessage
+	masked bool
 }
 
 // ── wallet.wc file structs ────────────────────────────────────────────────────
@@ -115,22 +152,23 @@ type walletSelectedAccount struct {
 }
 
 type walletDerivedEntry struct {
-	Index          int              `json:"index"`
-	PublicKey      string           `json:"public_key"`
-	AccountAddress string           `json:"account_address"`
+	Index          int               `json:"index"`
+	PublicKey      string            `json:"public_key"`
+	AccountAddress string            `json:"account_address"`
 	Orgs           []orgMembershipV2 `json:"orgs"`
-	ActiveOrg      *int             `json:"active_org,omitempty"`
+	ActiveOrg      *int              `json:"active_org,omitempty"`
 }
 
 type walletExternalEntry struct {
-	Index          int              `json:"index"`
-	SecretKey      string           `json:"secret_key"`
-	AccountAddress string           `json:"account_address"`
+	Index          int               `json:"index"`
+	SecretKey      string            `json:"secret_key"`
+	PublicKey      string            `json:"public_key"` // set in masked wallets, whose secret_key is withheld
+	AccountAddress string            `json:"account_address"`
 	Orgs           []orgMembershipV2 `json:"orgs"`
-	ActiveOrg      *int             `json:"active_org,omitempty"`
+	ActiveOrg      *int              `json:"active_org,omitempty"`
 }
 
-// ── Constructor ───────────────────────────────────────────────────────────────
+// ── Constructors ──────────────────────────────────────────────────────────────
 
 // FromWalletFile loads a Wallet from a wallet.wc file.
 //
@@ -143,57 +181,191 @@ func FromWalletFile(path string) (*Wallet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("FromWalletFile: %w", err)
 	}
+	w, err := FromWalletJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("FromWalletFile: %w", err)
+	}
+	return w, nil
+}
 
-	var wf walletFile
-	if err := json.Unmarshal(data, &wf); err != nil {
-		return nil, fmt.Errorf("FromWalletFile: parse: %w", err)
+// FromPrivateKey builds a single-account wallet from a hex secp256k1 secret
+// key and the account address Sentinel minted for it (pod counter + key
+// hash) — the twin of Python's Wallet.from_private_key_and_address.
+func FromPrivateKey(secretKeyHex string, accountAddress string) (*Wallet, error) {
+	data, err := json.Marshal(map[string]any{
+		"type": "wallet",
+		"external_accounts": []map[string]any{{
+			"index": 0, "secret_key": secretKeyHex, "account_address": accountAddress,
+		}},
+		"selected_account": map[string]any{"type": "external", "index": 0},
+	})
+	if err != nil {
+		return nil, err
 	}
-	if wf.Type != "wallet" {
-		return nil, fmt.Errorf("FromWalletFile: expected type 'wallet', got '%s'", wf.Type)
+	return FromWalletJSON(data)
+}
+
+// FromWalletJSON loads a Wallet from the contents of a wallet.wc file.
+func FromWalletJSON(data []byte) (*Wallet, error) {
+	wf, err := parseWalletFile(data)
+	if err != nil {
+		return nil, err
 	}
-	if len(wf.DerivedAccounts) == 0 && len(wf.ExternalAccounts) == 0 {
-		return nil, fmt.Errorf("FromWalletFile: wallet file contains no accounts")
+
+	derivedAccounts, err := derivedAccountsFromXprv(wf)
+	if err != nil {
+		return nil, err
+	}
+
+	addedAccounts, err := externalAccounts(wf)
+	if err != nil {
+		return nil, err
+	}
+
+	current, err := selectedAccount(wf, len(derivedAccounts), len(addedAccounts))
+	if err != nil {
+		return nil, err
+	}
+
+	return &Wallet{
+		derivedAccounts: derivedAccounts,
+		addedAccounts:   addedAccounts,
+		currentIndex:    current,
+	}, nil
+}
+
+// derivedAccountsFromXprv re-derives each derived account's secret key from
+// the stored xprv. A wallet holding only external accounts needs no xprv.
+func derivedAccountsFromXprv(wf *walletFile) ([]*Account, error) {
+	if len(wf.DerivedAccounts) == 0 {
+		return nil, nil
 	}
 
 	masterKey, masterChain, err := decodeXprv(wf.Xprv)
 	if err != nil {
-		return nil, fmt.Errorf("FromWalletFile: %w", err)
+		return nil, err
 	}
 
 	accountKey, accountChain, err := resolveAccountLevelKey(masterKey, masterChain, wf.DerivedAccounts)
 	if err != nil {
-		return nil, fmt.Errorf("FromWalletFile: %w", err)
+		return nil, err
 	}
 
 	var derivedAccounts []*Account
 	for _, entry := range wf.DerivedAccounts {
 		childKey, _, err := bip32DeriveChild(accountKey, accountChain, uint32(entry.Index), false)
 		if err != nil {
-			return nil, fmt.Errorf("FromWalletFile: derive account %d: %w", entry.Index, err)
+			return nil, fmt.Errorf("derive account %d: %w", entry.Index, err)
 		}
 		privKey := secp.PrivKeyFromBytes(childKey[:])
 		derivedAccounts = append(derivedAccounts, &Account{
-			SecretKey:      *privKey,
+			SecretKey:      privKey,
 			PublicKey:      *privKey.PubKey(),
 			AccountAddress: entry.AccountAddress,
+			org:            resolveOrg(wf, entry.Orgs, entry.ActiveOrg),
+		})
+	}
+	return derivedAccounts, nil
+}
+
+// FromMaskedWalletJSON loads a masked wallet — the wallet file Sentinel's
+// /get_agent_wallet returns for an Agent Registry API key.
+//
+// The xprv in a masked file is an obfuscated token, so derived accounts are
+// built from their stored public keys and cannot sign locally. External
+// accounts keep their secret keys when the file carries them. The raw file is
+// retained (see SourceJSON) for remote signing.
+func FromMaskedWalletJSON(data []byte) (*Wallet, error) {
+	wf, err := parseWalletFile(data)
+	if err != nil {
+		return nil, err
+	}
+
+	var derivedAccounts []*Account
+	for _, entry := range wf.DerivedAccounts {
+		pkBytes, err := hex.DecodeString(entry.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("derived account %d public key: %w", entry.Index, err)
+		}
+		pubKey, err := secp.ParsePubKey(pkBytes)
+		if err != nil {
+			return nil, fmt.Errorf("derived account %d public key: %w", entry.Index, err)
+		}
+		derivedAccounts = append(derivedAccounts, &Account{
+			PublicKey:      *pubKey,
+			AccountAddress: entry.AccountAddress,
+			org:            resolveOrg(wf, entry.Orgs, entry.ActiveOrg),
 		})
 	}
 
+	// A masked wallet carries each external account's public key, not its
+	// secret (Python: Account(public_key_hex=...)).
 	var addedAccounts []*Account
+	for _, entry := range wf.ExternalAccounts {
+		pkBytes, err := hex.DecodeString(entry.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("external account %d public key: %w", entry.Index, err)
+		}
+		pubKey, err := secp.ParsePubKey(pkBytes)
+		if err != nil {
+			return nil, fmt.Errorf("external account %d public key: %w", entry.Index, err)
+		}
+		addedAccounts = append(addedAccounts, &Account{
+			PublicKey:      *pubKey,
+			AccountAddress: entry.AccountAddress,
+			org:            resolveOrg(wf, entry.Orgs, entry.ActiveOrg),
+		})
+	}
+
+	current, err := selectedAccount(wf, len(derivedAccounts), len(addedAccounts))
+	if err != nil {
+		return nil, err
+	}
+
+	return &Wallet{
+		derivedAccounts: derivedAccounts,
+		addedAccounts:   addedAccounts,
+		currentIndex:    current,
+		source:          append(json.RawMessage(nil), data...),
+		masked:          true,
+	}, nil
+}
+
+func parseWalletFile(data []byte) (*walletFile, error) {
+	var wf walletFile
+	if err := json.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("parse wallet file: %w", err)
+	}
+	if wf.Type != "wallet" {
+		return nil, fmt.Errorf("expected wallet file type 'wallet', got '%s'", wf.Type)
+	}
+	if len(wf.DerivedAccounts) == 0 && len(wf.ExternalAccounts) == 0 {
+		return nil, fmt.Errorf("wallet file contains no accounts")
+	}
+	return &wf, nil
+}
+
+func externalAccounts(wf *walletFile) ([]*Account, error) {
+	var accounts []*Account
 	for _, entry := range wf.ExternalAccounts {
 		keyBytes, err := hex.DecodeString(entry.SecretKey)
 		if err != nil {
-			return nil, fmt.Errorf("FromWalletFile: external account %d secret key: %w", entry.Index, err)
+			return nil, fmt.Errorf("external account %d secret key: %w", entry.Index, err)
 		}
 		privKey := secp.PrivKeyFromBytes(keyBytes)
-		addedAccounts = append(addedAccounts, &Account{
-			SecretKey:      *privKey,
+		accounts = append(accounts, &Account{
+			SecretKey:      privKey,
 			PublicKey:      *privKey.PubKey(),
 			AccountAddress: entry.AccountAddress,
+			org:            resolveOrg(wf, entry.Orgs, entry.ActiveOrg),
 		})
 	}
+	return accounts, nil
+}
 
-	// Default to derived index 0 when selected_account is absent.
+// selectedAccount reads selected_account from the file, defaulting to derived
+// index 0 when absent, and bounds-checks it.
+func selectedAccount(wf *walletFile, derived, external int) (SelectedAccount, error) {
 	kind := "derived"
 	index := 0
 	if wf.SelectedAccount != nil {
@@ -201,85 +373,50 @@ func FromWalletFile(path string) (*Wallet, error) {
 		index = wf.SelectedAccount.Index
 	}
 
-	var current SelectedAccount
 	switch kind {
 	case "external":
-		if index >= len(addedAccounts) {
-			return nil, fmt.Errorf(
-				"FromWalletFile: selected external account index %d out of bounds (have %d)",
-				index, len(addedAccounts),
-			)
+		if index < 0 || index >= external {
+			return SelectedAccount{}, fmt.Errorf(
+				"selected external account index %d out of bounds (have %d)", index, external)
 		}
-		current = External(index)
+		return External(index), nil
 	default:
-		if index >= len(derivedAccounts) {
-			return nil, fmt.Errorf(
-				"FromWalletFile: selected derived account index %d out of bounds (have %d)",
-				index, len(derivedAccounts),
-			)
+		if index < 0 || index >= derived {
+			return SelectedAccount{}, fmt.Errorf(
+				"selected derived account index %d out of bounds (have %d)", index, derived)
 		}
-		current = Derived(index)
+		return Derived(index), nil
 	}
+}
 
-	// Resolve org from the selected account's per-account orgs[],
-	// then fall back to top-level orgs[], then v1 org field.
-	var accountOrgs []orgMembershipV2
-	var accountActiveOrg *int
-	switch kind {
-	case "external":
-		if index < len(wf.ExternalAccounts) {
-			accountOrgs = wf.ExternalAccounts[index].Orgs
-			accountActiveOrg = wf.ExternalAccounts[index].ActiveOrg
-		}
-	default:
-		if index < len(wf.DerivedAccounts) {
-			accountOrgs = wf.DerivedAccounts[index].Orgs
-			accountActiveOrg = wf.DerivedAccounts[index].ActiveOrg
-		}
-	}
-
-	var org *OrgInfo
+// resolveOrg picks an account's org from its own per-account orgs[], then
+// falls back to the top-level orgs[] (CLI wallet exports), then to the v1
+// single org field.
+func resolveOrg(wf *walletFile, accountOrgs []orgMembershipV2, accountActiveOrg *int) *OrgInfo {
 	if len(accountOrgs) > 0 {
-		// Per-account v2 orgs (preferred).
-		idx := 0
-		if accountActiveOrg != nil {
-			idx = *accountActiveOrg
-		}
-		if idx < len(accountOrgs) {
-			m := accountOrgs[idx]
-			var subgroup *string
-			if m.Subgroup != "" {
-				s := m.Subgroup
-				subgroup = &s
-			}
-			org = &OrgInfo{Name: m.Org, Subgroup: subgroup}
-		}
-	} else if len(wf.Orgs) > 0 {
-		// Top-level v2 orgs (fallback for CLI wallet exports).
-		idx := 0
-		if wf.ActiveOrg != nil {
-			idx = *wf.ActiveOrg
-		}
-		if idx < len(wf.Orgs) {
-			m := wf.Orgs[idx]
-			var subgroup *string
-			if m.Subgroup != "" {
-				s := m.Subgroup
-				subgroup = &s
-			}
-			org = &OrgInfo{Name: m.Org, Subgroup: subgroup}
-		}
-	} else if wf.Org != nil {
-		// v1 single org field.
-		org = wf.Org
+		return pickOrg(accountOrgs, accountActiveOrg)
 	}
+	if len(wf.Orgs) > 0 {
+		return pickOrg(wf.Orgs, wf.ActiveOrg)
+	}
+	return wf.Org
+}
 
-	return &Wallet{
-		derivedAccounts: derivedAccounts,
-		addedAccounts:   addedAccounts,
-		currentIndex:    current,
-		org:             org,
-	}, nil
+func pickOrg(orgs []orgMembershipV2, active *int) *OrgInfo {
+	idx := 0
+	if active != nil {
+		idx = *active
+	}
+	if idx < 0 || idx >= len(orgs) {
+		return nil
+	}
+	m := orgs[idx]
+	var subgroup *string
+	if m.Subgroup != "" {
+		s := m.Subgroup
+		subgroup = &s
+	}
+	return &OrgInfo{Name: m.Org, Subgroup: subgroup}
 }
 
 // ── Account management ────────────────────────────────────────────────────────
@@ -326,9 +463,9 @@ func (w *Wallet) GetAddress() string {
 	return w.currentAccount().GetAddress()
 }
 
-// Org returns the org info if this wallet has a linked organization, or nil.
+// Org returns the org the currently selected account acts under, or nil.
 func (w *Wallet) Org() *OrgInfo {
-	return w.org
+	return w.currentAccount().Org()
 }
 
 // GetPublicKey returns the secp256k1 public key of the currently selected account.
@@ -336,9 +473,35 @@ func (w *Wallet) GetPublicKey() secp.PublicKey {
 	return w.currentAccount().GetPublicKey()
 }
 
+// CanSign reports whether the currently selected account can sign locally.
+func (w *Wallet) CanSign() bool {
+	return w.currentAccount().CanSign()
+}
+
+// Masked reports whether this wallet was resolved from an Agent Registry API
+// key with a masked xprv.
+func (w *Wallet) Masked() bool {
+	return w.masked
+}
+
+// SourceJSON returns the raw wallet file a masked wallet was built from, or
+// nil for wallets loaded with their secret keys.
+func (w *Wallet) SourceJSON() json.RawMessage {
+	return w.source
+}
+
 // Sign hashes the buffer and signs it with the currently selected account's key.
 func (w *Wallet) Sign(buf []byte) (*string, error) {
 	return w.currentAccount().Sign(buf)
+}
+
+// CurrentAccount returns the currently selected account.
+//
+// Callers that sign should take this snapshot once and use it for both the
+// transaction header and the signature, so a concurrent SetIndex cannot make
+// the two disagree.
+func (w *Wallet) CurrentAccount() *Account {
+	return w.currentAccount()
 }
 
 func (w *Wallet) currentAccount() *Account {

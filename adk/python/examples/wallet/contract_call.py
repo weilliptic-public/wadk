@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Example: initialize wallet from private_key.wc and execute balance_for on a contract.
+"""Example: initialize wallet from wallet.wc and execute balance_for on a contract.
 
 Run from python/ directory so weil_wallet is importable:
-  cd python && python examples/example.py
+  cd python && python examples/wallet/contract_call.py
 Or with PYTHONPATH set:
-  PYTHONPATH=python python examples/example.py
+  PYTHONPATH=python python examples/wallet/contract_call.py
 """
 
 import asyncio
@@ -12,27 +12,28 @@ import os
 import sys
 from pathlib import Path
 
-# Allow importing weil_wallet when run as script (e.g. python examples/example.py)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Allow importing weil_wallet when run as script (e.g. python examples/wallet/contract_call.py)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from weil_wallet import ContractId, Wallet, WeilClient
 
 
 async def main() -> None:
-    # Path to wallet export JSON file: script dir, cwd, or parent of script dir (e.g. python/)
+    # Path to wallet export file: script dir, cwd, examples/, or python/
     script_dir = os.path.dirname(os.path.abspath(__file__))
     wallet_path = None
     for candidate in (
         os.path.join(script_dir, "wallet.wc"),
         "wallet.wc",
         os.path.join(os.path.dirname(script_dir), "wallet.wc"),
+        os.path.join(os.path.dirname(os.path.dirname(script_dir)), "wallet.wc"),
     ):
         if os.path.isfile(candidate):
             wallet_path = candidate
             break
     if wallet_path is None:
         raise FileNotFoundError(
-            "wallet.wc not found. Place it in examples/, python/, or cwd."
+            "wallet.wc not found. Place it next to this script, in examples/, python/, or cwd."
         )
 
     wallet = Wallet.from_account_export_file(wallet_path)

@@ -1,10 +1,15 @@
 """MCP integration for WeilChain — secured decorators and HTTP middleware.
 
 Provides:
-- ``secured_user(svc_name)``  — decorator factory that allows Execution or
-                                Management wallet purpose.
-- ``secured_admin(svc_name)`` — decorator factory that allows Management wallet
-                                purpose only.
+- ``secured_user(rule)``  — decorator factory that allows Execution or
+                            Management wallet purpose.
+- ``secured_admin(rule)`` — decorator factory that allows Management wallet
+                            purpose only.
+
+  *rule* is one scope (``"engg.weil"``, ``"weil"``) or a boolean rule over
+  several, e.g. ``"(engg.weil | legal.weil) & !contractors.weil"`` — the same
+  language and evaluation as the Rust ``#[secured_user]``/``#[secured_admin]``
+  macros. See ``weil_ai.secured_expr``.
 - ``weil_middleware()``   — Starlette middleware that verifies signed Weil auth
                             headers and stores the caller in a ContextVar.
 - ``current_wallet_addr()`` — read the wallet address active in the current
@@ -18,9 +23,9 @@ import concurrent.futures
 import asyncio
 import functools
 import inspect
+import logging
 import threading
 import json
-from dataclasses import dataclass
 from typing import Any, Callable, Type
 import httpx
 from weil_wallet.api.platform_api import PlatformApi
@@ -32,6 +37,15 @@ from weil_wallet.errors import WalletNotPermittedError
 from weil_wallet.transaction import BaseTransaction, TransactionHeader
 from weil_wallet.utils import current_time_millis
 from .auth import full_address_from_headers, verify_weil_signature
+from .secured_expr import (
+    Outcome,
+    SecuredExprError,
+    evaluate_root_first,
+    parse_secured_expr,
+    secured_orgs,
+)
+
+_logger = logging.getLogger(__name__)
 
 # One ContextVar object per process, but its *value* is per-asyncio-task.
 # ASGI servers (uvicorn) run each HTTP request in a separate asyncio task, so
@@ -67,43 +81,24 @@ AUDIT_FIELD = "audit_payload"
 _SECURED_ATTR = "__weil_secured__"
 
 
-@dataclass(frozen=True)
-class _SecuredScope:
-    org: str
-    subgroup: str = ""
+class SecuredCheckError(RuntimeError):
+    """Raised when a secured rule's outcome could not be decided.
 
-    @property
-    def identity_name(self) -> str:
-        return f"{IDENTITY_APPLET_SVC_PREFIX}{self.org}"
+    Some check the rule depended on failed (identity applet missing, a
+    ``key_has_purpose`` call errored), and the rest of the rule could not
+    decide the result without it. Callers treat this as "not permitted";
+    the message lists what failed.
+    """
 
-    @property
-    def publisher_name(self) -> str:
-        return f"publisher::{self.org}"
-
-    def key_for_wallet(self, wallet_addr: str) -> str:
-        if self.subgroup:
-            return f"{self.subgroup}_{wallet_addr}"
-        return wallet_addr
+    def __init__(self, rule: str, failures: list[str]) -> None:
+        self.rule = rule
+        self.failures = list(failures)
+        detail = "; ".join(self.failures) or "unknown failure"
+        super().__init__(f"secured check for {rule!r} could not be completed: {detail}")
 
 
-def _parse_secured_scope(scope: str) -> _SecuredScope:
-    """Parse ``@secured("subgroup.org")`` into subgroup/org components."""
-    value = scope.strip()
-    if not value:
-        raise ValueError("secured scope must not be empty")
-    if "::" in value:
-        raise ValueError(
-            'secured scope must use dot syntax, e.g. @secured("subgroup.org")'
-        )
-    if "." not in value:
-        return _SecuredScope(org=value)
-
-    subgroup, org = value.split(".", 1)
-    if not subgroup or not org:
-        raise ValueError(
-            'secured scope must be "subgroup.org" or "org" for org-level access'
-        )
-    return _SecuredScope(org=org, subgroup=subgroup)
+def _publisher_name(org: str) -> str:
+    return f"publisher::{org}"
 
 
 def current_wallet_addr() -> str:
@@ -244,22 +239,22 @@ async def _publish_secured_check(
             wallet_address=wallet_addr,
         )
         verdict = "passed" if passed else "failed"
+        method_args = json.dumps(
+            {
+                "topic": _SECURED_CHECK_TOPIC,
+                "payload": f"{wallet_addr} {verdict} @secured check for {svc_name}",
+            }
+        )
         await _call_secured_contract(
             http_client,
             publisher_id,
             wallet_addr,
             "publish",
-            json.dumps(
-                {
-                    "topic": _SECURED_CHECK_TOPIC,
-                    "payload": (
-                        f"{wallet_addr} {verdict} @secured check for {svc_name}"
-                    ),
-                }
-            ),
+            method_args,
+            is_non_blocking=True,
         )
     except Exception:
-        return
+        logging.getLogger(__name__).exception("Failed to publish secured-check event")
 
 
 async def _secured_key_has_purpose(
@@ -289,7 +284,13 @@ async def wallet_has_purpose(
     verify: bool = True,
     http_client: httpx.AsyncClient | None = None,
 ) -> bool:
-    """Return whether *wallet_addr* holds any of *purposes* for *svc_name*."""
+    """Return whether *wallet_addr* satisfies the secured rule *svc_name*.
+
+    *svc_name* is one scope (``"engg.weil"``) or a rule over several
+    (``"infrastructure.weil & !finance.weil"``); each key must hold one of
+    *purposes*. Raises ``SecuredCheckError`` when the outcome could not be
+    decided because a check the rule depended on failed.
+    """
     return (
         await _granting_purpose(
             wallet_addr,
@@ -312,32 +313,72 @@ async def _granting_purpose(
     verify: bool = True,
     http_client: httpx.AsyncClient | None = None,
 ) -> str | None:
-    """Return the purpose that grants *wallet_addr* access to *svc_name*, or None.
+    """Return the purpose that grants *wallet_addr* access under *svc_name*, or None.
 
-    Purposes are probed in the order given, so a wallet holding several reports
-    the first one listed.
+    *svc_name* is a secured rule — one scope or a boolean rule over several —
+    evaluated "root access first", like the Rust macros: the caller's
+    org-level key (the bare wallet address) is checked once for every org the
+    rule names, then each ``"subgroup.org"`` condition passes on that
+    org-level key or on ``"<subgroup>_<addr>"``.
 
-    A single client and applet-name resolution serve every purpose/key probe,
-    so an Execution-or-Management check pays one connection instead of two.
+    Each key is probed for *purposes* in the order given; the purpose
+    returned is the first one that matched while evaluating the rule. A rule
+    satisfied without any key matching (only ``!`` conditions) reports the
+    first purpose listed.
+
+    One client, and one identity-applet lookup per org, serve every probe.
     Pass *http_client* to reuse an already-open client.
+
+    Raises:
+        SecuredExprError: *svc_name* is not a valid rule.
+        SecuredCheckError: a check the rule depended on failed, so the
+            outcome is unknown. A failure on a branch the rule did not need
+            (e.g. the losing side of an already-true ``|``) does not raise.
     """
+    expr = parse_secured_expr(svc_name)
 
     async def check(client: httpx.AsyncClient) -> str | None:
-        subgroup, _, org = svc_name.rpartition(".")
-        applet_name = f"{IDENTITY_APPLET_SVC_PREFIX}{org or svc_name}"
-        applet_id = await WeilClient.get_applet_id_for_name(client, applet_name)
+        applet_ids: dict[str, ContractId | None] = {}
+        matched: list[str] = []
+        failures: list[str] = []
 
-        # Org-level keys span every subgroup, so a subgroup tool accepts the
-        # bare org-level address or "<subgroup>_<addr>".
-        keys = [wallet_addr]
-        if subgroup:
-            keys.append(f"{subgroup}_{wallet_addr}")
-        for key in keys:
+        async def applet_id_for(org: str) -> ContractId | None:
+            if org not in applet_ids:
+                applet_name = f"{IDENTITY_APPLET_SVC_PREFIX}{org}"
+                try:
+                    applet_ids[org] = await WeilClient.get_applet_id_for_name(
+                        client, applet_name, wallet_address=wallet_addr
+                    )
+                except Exception as exc:
+                    failures.append(f"{applet_name} did not resolve: {exc}")
+                    applet_ids[org] = None
+            return applet_ids[org]
+
+        async def check_key(org: str, key: str) -> Outcome:
+            """Does *key* hold one of *purposes* on *org*? None if unknown."""
+            applet_id = await applet_id_for(org)
+            if applet_id is None:
+                return None
+            unknown = False
             for purpose in purposes:
-                if await _secured_key_has_purpose(
-                    client, applet_id, wallet_addr, key, purpose
-                ):
-                    return purpose
+                try:
+                    if await _secured_key_has_purpose(
+                        client, applet_id, wallet_addr, key, purpose
+                    ):
+                        matched.append(purpose)
+                        return True
+                except Exception as exc:
+                    failures.append(f"key_has_purpose({key!r}, {purpose}) on {org!r} failed: {exc}")
+                    unknown = True
+            return None if unknown else False
+
+        outcome = await evaluate_root_first(expr, check_key, wallet_addr)
+        if outcome is True:
+            return matched[0] if matched else (purposes[0] if purposes else None)
+        if outcome is None:
+            for failure in failures:
+                _logger.warning("secured %r: %s", svc_name, failure)
+            raise SecuredCheckError(svc_name, failures)
         return None
 
     if http_client is not None:
@@ -355,6 +396,8 @@ async def _call_secured_contract(
     wallet_addr: str,
     method_name: str,
     method_args: str,
+    *,
+    is_non_blocking: bool = False,
 ) -> Any:
     """Submit a read-only contract call and return its unwrapped result.
 
@@ -389,7 +432,7 @@ async def _call_secured_contract(
     resp = await PlatformApi.submit_transaction(
         payload,
         http_client,
-        is_non_blocking=False,
+        is_non_blocking=is_non_blocking,
     )
 
     return _unwrap_secured_result(resp.txn_result)
@@ -417,14 +460,24 @@ def _unwrap_secured_result(txn_result: str) -> Any:
 def secured_user(svc_name: str) -> Callable:
     """Decorator factory for user tools that enforce on-chain access control.
 
-    Resolves *svc_name* to a ContractId and calls ``key_has_purpose`` on it with
-    the verified caller wallet before invoking the tool. Callers with either the
-    Execution or Management purpose are permitted. The caller wallet can come
-    from Weil MCP middleware or Weil-secured ADK A2A middleware.
+    *svc_name* is a secured rule: one scope (``"engg.weil"``, or ``"weil"``
+    for org-level) or a boolean rule over several using ``!`` (not), ``&``
+    (and), ``|`` (or) and parentheses, with the same meaning as the Rust
+    ``#[secured_user]`` macro. Before invoking the tool, the verified caller
+    wallet is checked with ``key_has_purpose`` on each org's identity applet;
+    keys holding either the Execution or Management purpose count.
 
-    MCP/FastMCP tools keep the existing ``TextContent(isError=True)`` response
-    behavior. Other integrations, including Google ADK tools, raise
-    ``WalletNotPermittedError`` when the caller is not permitted.
+    Org-level access is checked first: for every org the rule names, holding
+    the org-level key (the bare wallet address) satisfies every condition in
+    that org — including one under ``!``. Otherwise ``"engg.weil"`` needs the
+    ``engg_<addr>`` key. A malformed rule raises ``SecuredExprError`` when the
+    decorator is applied.
+
+    The caller wallet can come from Weil MCP middleware or Weil-secured ADK
+    A2A middleware. MCP/FastMCP tools keep the existing
+    ``TextContent(isError=True)`` response behavior. Other integrations,
+    including Google ADK tools, raise ``WalletNotPermittedError`` when the
+    caller is not permitted.
 
     Usage::
 
@@ -432,12 +485,21 @@ def secured_user(svc_name: str) -> Callable:
         @secured_user("engg.weil")
         async def my_tool(query: str) -> str:
             ...
+
+        @server.tool()
+        @secured_user("(engg.weil | legal.weil) & !contractors.weil")
+        async def review(doc_id: str) -> str:
+            ...
     """
     return _secured(svc_name, allow_execution=True)
 
 
 def secured_admin(svc_name: str) -> Callable:
-    """Decorator factory for admin tools that require Management purpose."""
+    """Decorator factory for admin tools that require Management purpose.
+
+    Takes the same rules as ``secured_user``; every key checked must hold
+    the Management purpose.
+    """
     return _secured(svc_name, allow_execution=False)
 
 
@@ -449,7 +511,14 @@ def secured(svc_name: str) -> Callable:
 def _secured(svc_name: str, *, allow_execution: bool) -> Callable:
     """Build a secured decorator for the requested access level."""
 
-    scope = _parse_secured_scope(svc_name)
+    # Decorators have always required dot syntax; A2A service names passed
+    # straight to wallet_has_purpose may still use "::" as before.
+    if "::" in svc_name:
+        raise SecuredExprError(
+            'secured scope must use dot syntax, e.g. @secured_user("subgroup.org")'
+        )
+    # Parse now, so a malformed rule fails when the tool is defined.
+    publisher_names = [_publisher_name(org) for org in secured_orgs(parse_secured_expr(svc_name))]
     secured_info = {
         "service": svc_name,
         "access": "user" if allow_execution else "admin",
@@ -467,27 +536,27 @@ def _secured(svc_name: str, *, allow_execution: bool) -> Callable:
                 verify=_weil_verify_tls.get(),
                 timeout=60.0,
             ) as http_client:
-                if not await wallet_has_purpose(
-                    wallet_addr,
-                    svc_name,
-                    purposes=("Management", "Execution") if allow_execution else ("Management",),
-                    http_client=http_client,
-                ):
+                try:
+                    permitted = await wallet_has_purpose(
+                        wallet_addr,
+                        svc_name,
+                        purposes=("Management", "Execution") if allow_execution else ("Management",),
+                        http_client=http_client,
+                    )
+                except SecuredCheckError:
+                    # Undecidable (a check the rule needed failed): fail closed.
+                    permitted = False
+                # One verdict per org the rule names, to that org's publisher.
+                for publisher_name in publisher_names:
                     await _publish_secured_check(
                         http_client,
                         wallet_addr,
-                        scope.publisher_name,
+                        publisher_name,
                         svc_name,
-                        False,
+                        permitted,
                     )
+                if not permitted:
                     return _permission_denied(wallet_addr, svc_name)
-                await _publish_secured_check(
-                    http_client,
-                    wallet_addr,
-                    scope.publisher_name,
-                    svc_name,
-                    True,
-                )
                 return None
 
         if asyncio.iscoroutinefunction(func):

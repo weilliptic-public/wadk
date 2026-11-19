@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
-REPO_ROOT = EXAMPLE_DIR.parent
+REPO_ROOT = EXAMPLE_DIR.parents[1]
 sys.path = [path for path in sys.path if Path(path or ".").resolve() != EXAMPLE_DIR]
 sys.path.insert(0, str(REPO_ROOT))
 

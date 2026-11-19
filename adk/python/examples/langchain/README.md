@@ -36,3 +36,8 @@ Run:
 ```bash
 python examples/langchain/secure_hooks.py
 ```
+
+Other LangChain examples in this folder:
+
+- `basic_agent.py`: a minimal LangChain agent wrapped with a Weil wallet.
+- `agent_identity.py`: a LangChain agent resolved from a Weil agent identity.

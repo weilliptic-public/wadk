@@ -34,6 +34,7 @@ def build_auth_headers(
     wallet: Wallet,
     signer: Optional[Callable[[bytes], str]] = None,
     body: Any = None,
+    trace_context: Any = None,
 ) -> dict:
     """Build the four auth headers required by weil_middleware().
 
@@ -52,7 +53,7 @@ def build_auth_headers(
         Dict with keys ``X-Wallet-Address``, ``X-Signature``, ``X-Message``,
         and ``X-Timestamp``.
     """
-    json_str, args = _auth_payload(wallet, body)
+    json_str, args = _auth_payload(wallet, body, trace_context)
     sign = signer or wallet.sign
     signature = sign(json_str.encode("utf-8"))
     return _auth_headers(wallet, json_str, args, signature)
@@ -62,6 +63,7 @@ async def abuild_auth_headers(
     wallet: Wallet,
     signer: Optional[Callable[[bytes], Any]] = None,
     body: Any = None,
+    trace_context: Any = None,
 ) -> dict:
     """Async build_auth_headers: *signer* may be a coroutine function.
 
@@ -69,7 +71,7 @@ async def abuild_auth_headers(
     loop, where build_auth_headers would have to bridge through _run_sync and
     run it on a new one.
     """
-    json_str, args = _auth_payload(wallet, body)
+    json_str, args = _auth_payload(wallet, body, trace_context)
     if signer is None:
         signature = wallet.sign(json_str.encode("utf-8"))
     else:
@@ -79,7 +81,11 @@ async def abuild_auth_headers(
     return _auth_headers(wallet, json_str, args, signature)
 
 
-def _auth_payload(wallet: Wallet, body: Any) -> tuple[str, dict]:
+def _auth_payload(
+    wallet: Wallet,
+    body: Any,
+    trace_context: Any = None,
+) -> tuple[str, dict]:
     """Build the canonical message to sign. Pure; no I/O.
 
     Shared by the sync and async builders so both produce byte-identical
@@ -94,6 +100,9 @@ def _auth_payload(wallet: Wallet, body: Any) -> tuple[str, dict]:
     if body is not None:
         args["body_sha256"] = _body_sha256(body)
         args["nonce"] = secrets.token_hex(16)
+    trace = _normalize_trace_context(trace_context)
+    if trace is not None:
+        args["trace"] = trace
     return json.dumps(args, separators=(",", ":"), sort_keys=True), args
 
 
@@ -107,6 +116,11 @@ def _auth_headers(wallet: Wallet, json_str: str, args: dict, signature: str) -> 
     if "body_sha256" in args:
         headers["X-Body-SHA256"] = args["body_sha256"]
         headers["X-Nonce"] = args["nonce"]
+    trace = args.get("trace")
+    if isinstance(trace, dict):
+        headers["X-Weil-Trace-Id"] = trace["trace_id"]
+        if trace.get("parent_id") is not None:
+            headers["X-Weil-Trace-Parent-Id"] = trace["parent_id"]
     return headers
 
 
@@ -270,6 +284,60 @@ def full_address_from_headers(headers: Mapping[str, str]) -> Optional[str]:
     if not isinstance(full, str) or not full:
         return None
     return full if full.lower().endswith(short) else None
+
+
+def trace_context_from_headers(headers: Mapping[str, str]) -> Optional[dict[str, str]]:
+    """Return the signed trace propagation context, if present.
+
+    Call this only after ``verify_weil_request`` has accepted the same headers
+    and body. Unsigned ``X-Weil-Trace-*`` headers are treated as debugging
+    mirrors and are not trusted unless they match the signed payload.
+    """
+
+    def get(name: str) -> Optional[str]:
+        if name in headers:
+            return headers[name]
+        lower = name.lower()
+        for key, value in headers.items():
+            if key.lower() == lower:
+                return value
+        return None
+
+    message = get("X-Message")
+    if not message:
+        return None
+    try:
+        signed = json.loads(message)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(signed, dict):
+        return None
+    trace = _normalize_trace_context(signed.get("trace"))
+    if trace is None:
+        return None
+    header_trace_id = get("X-Weil-Trace-Id")
+    if header_trace_id is not None and header_trace_id != trace["trace_id"]:
+        return None
+    header_parent_id = get("X-Weil-Trace-Parent-Id")
+    if header_parent_id is not None and header_parent_id != trace.get("parent_id"):
+        return None
+    return trace
+
+
+def _normalize_trace_context(value: Any) -> Optional[dict[str, str]]:
+    if not isinstance(value, Mapping):
+        return None
+    trace_id = value.get("trace_id")
+    if trace_id is None:
+        return None
+    trace_id = str(trace_id)
+    if not trace_id:
+        return None
+    context = {"trace_id": trace_id}
+    parent_id = value.get("parent_id")
+    if parent_id is not None:
+        context["parent_id"] = str(parent_id)
+    return context
 
 
 def _canonical_body_bytes(body: Any) -> bytes:

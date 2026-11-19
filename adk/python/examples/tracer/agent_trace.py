@@ -17,15 +17,16 @@ server = Server("agent-trace")
 def _make_client() -> WeilClient:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     for candidate in (
-        os.path.join(script_dir, "account.wc"),
-        "account.wc",
-        os.path.join(os.path.dirname(script_dir), "account.wc"),
+        os.path.join(script_dir, "wallet.wc"),
+        "wallet.wc",
+        os.path.join(os.path.dirname(script_dir), "wallet.wc"),
+        os.path.join(os.path.dirname(os.path.dirname(script_dir)), "wallet.wc"),
     ):
         if os.path.isfile(candidate):
             wallet = Wallet.from_account_export_file(candidate)
             return WeilClient(wallet)
     raise FileNotFoundError(
-        "account.wc not found. Place it in examples/, python/, or cwd."
+        "wallet.wc not found. Place it next to this script, in examples/, python/, or cwd."
     )
 
 

@@ -11,20 +11,19 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-WEIL_AI_PATH = "<path/to/weillipticpythonsdk"  # Replace with the actual path
-if WEIL_AI_PATH not in sys.path:
-    sys.path.insert(0, WEIL_AI_PATH)
+# Allow importing local packages when run from the repository root or examples/.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import weil_ai
 
 
-identity = "weil_***"
+identity = "weil_xxx"
 
 agent = weil_ai.WeilAgent(
     None,
     identity=identity,
-    sentinel_host="sentinel.weilliptic.ai",
-    verify=False,
+    sentinel_host="https://sentinel.weilliptic.ai",
+    verify=True,
 )
 
 

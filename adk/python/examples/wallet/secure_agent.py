@@ -5,14 +5,14 @@ The full wallet file is parsed inside protected native memory. Python receives
 only the selected account's public key, address, and organization metadata.
 
     chmod 600 wallet.wc
-    WEIL_PRIVATE_KEY_FILE=wallet.wc python examples/secure_agent.py
+    WEIL_PRIVATE_KEY_FILE=wallet.wc python examples/wallet/secure_agent.py
 """
 
 import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import weil_ai
 

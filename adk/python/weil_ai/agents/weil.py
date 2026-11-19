@@ -52,6 +52,7 @@ from weil_ai.auth import (
     abuild_auth_headers,
     build_auth_headers,
     full_address_from_headers,
+    trace_context_from_headers,
     verify_weil_request,
 )
 from weil_ai.mcp import (
@@ -61,7 +62,9 @@ from weil_ai.mcp import (
 )
 
 from weil_ai.tracer import (
+    attach_trace_context,
     begin_trace,
+    current_trace_context,
     finish_trace,
     finish_trace_sync,
     is_async_stream,
@@ -104,6 +107,7 @@ class WeilAgent:
             "setup_secure_strands",
             "_get_client",
             "_audit_async",
+            "_record_token_usage_async",
         }
     )
 
@@ -231,7 +235,7 @@ class WeilAgent:
         """The original agent object wrapped by this WeilAgent."""
         return object.__getattribute__(self, "_agent")
 
-    def get_auth_headers(self, body: Any = None) -> dict:
+    def get_auth_headers(self, body: Any = None, trace_context: Any = None) -> dict:
         """Return signed auth headers for an MCP (or any HTTP) request.
 
         Pass the exact request body when the receiver verifies a body-bound
@@ -254,9 +258,14 @@ class WeilAgent:
         if client._remote_signing:
             def signer(msg: bytes) -> str:
                 return _run_sync(client.sign_message(json.loads(msg)))
-        return build_auth_headers(wallet, signer=signer, body=body)
+        return build_auth_headers(
+            wallet,
+            signer=signer,
+            body=body,
+            trace_context=trace_context,
+        )
 
-    async def aget_auth_headers(self, body: Any = None) -> dict:
+    async def aget_auth_headers(self, body: Any = None, trace_context: Any = None) -> dict:
         """Async :meth:`get_auth_headers`; use it from async code.
 
         Signs on the caller's own event loop. The sync version bridges through
@@ -272,7 +281,12 @@ class WeilAgent:
             async def signer(msg: bytes) -> str:
                 return await client.sign_message(json.loads(msg))
 
-        return await abuild_auth_headers(wallet, signer=signer, body=body)
+        return await abuild_auth_headers(
+            wallet,
+            signer=signer,
+            body=body,
+            trace_context=trace_context,
+        )
 
 
     def remote(self, base_url: str) -> "WeilRemoteAgent":
@@ -450,6 +464,11 @@ class WeilAgent:
     async def _audit_async(self, log: str) -> TransactionResult:
         return await self._get_client().audit(log)
 
+    async def _record_token_usage_async(
+        self, model: str, usage: dict[str, int], timestamp: str
+    ) -> Optional[TransactionResult]:
+        return await self._get_client().record_agent_token_usage(model, usage, timestamp)
+
     # ------------------------------------------------------------------
     # Proxy: forward everything else to the wrapped agent
     # ------------------------------------------------------------------
@@ -603,7 +622,10 @@ class WeilRemoteAgent:
             payload = {"method": name, "args": list(args), "kwargs": kwargs}
             resp = httpx.post(
                 f"{self._base_url}/invoke",
-                headers=self._caller.get_auth_headers(body=payload),
+                headers=self._caller.get_auth_headers(
+                    body=payload,
+                    trace_context=current_trace_context(),
+                ),
                 json=payload,
                 timeout=60.0,
             )
@@ -618,7 +640,10 @@ class WeilRemoteAgent:
         async with httpx.AsyncClient(base_url=self._base_url, timeout=60.0) as client:
             resp = await client.post(
                 "/invoke",
-                headers=await self._caller.aget_auth_headers(body=payload),
+                headers=await self._caller.aget_auth_headers(
+                    body=payload,
+                    trace_context=current_trace_context(),
+                ),
                 json=payload,
             )
         resp.raise_for_status()
@@ -700,7 +725,15 @@ def agent_http_app(agent: WeilAgent, *, service: Optional[str] = None) -> Any:
         tokens = set_current_wallet_addr(
             caller_addr, sentinel_host=sentinel_host, verify=verify
         )
+        trace_context = trace_context_from_headers(request.headers)
+        trace = None
         try:
+            if trace_context is not None:
+                trace = attach_trace_context(
+                    agent,
+                    trace_context["trace_id"],
+                    trace_context.get("parent_id"),
+                )
             target = getattr(agent, method)
             result = target(*args, **kwargs)
             if inspect.isawaitable(result):
@@ -709,6 +742,11 @@ def agent_http_app(agent: WeilAgent, *, service: Optional[str] = None) -> Any:
         except WalletNotPermittedError as exc:
             return JSONResponse({"error": str(exc)}, status_code=403)
         finally:
+            if trace is not None:
+                try:
+                    await finish_trace(trace)
+                except Exception:
+                    pass
             reset_current_wallet_addr(tokens)
 
     return Starlette(routes=[Route("/invoke", invoke, methods=["POST"])])
@@ -737,7 +775,7 @@ def weil_agent(
 
         import weil_ai
 
-        @weil_ai.agent("account.json")
+        @weil_ai.agent("wallet.wc")
         def create_agent():
             return MyAgent()
 

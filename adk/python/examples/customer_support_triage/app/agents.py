@@ -24,7 +24,7 @@ def _creds_from_env() -> Optional[dict]:
     """Build the S3 credentials dict from env vars, or None if unset.
 
     Supports the triage ``WEIL_S3_*`` names (see README/``.env``) with
-    ``AWS_*`` fallbacks (see ``examples/langchain_apikey.py``).
+    ``AWS_*`` fallbacks (see ``examples/langchain/agent_identity.py``).
     """
     access_key = os.environ.get("WEIL_S3_ACCESS_KEY") or os.environ.get("AWS_ACCESS_KEY_ID")
     secret_key = os.environ.get("WEIL_S3_SECRET_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")

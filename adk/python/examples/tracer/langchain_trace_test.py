@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
-REPO_ROOT = EXAMPLE_DIR.parent
+REPO_ROOT = EXAMPLE_DIR.parents[1]
 sys.path = [path for path in sys.path if Path(path or ".").resolve() != EXAMPLE_DIR]
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -21,7 +21,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_API_KEY = ""
 MODEL = "gpt-5.1"
 VERIFY_SENTINEL_TLS = False
 

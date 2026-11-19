@@ -19,6 +19,7 @@ import httpx
 from .api.platform_api import PlatformApi
 from .api.request import SubmitTxnRequest, Transaction, UserTransaction, Verifier
 from .constants import (
+    AGENT_REGISTRY_APPLET_SVC_NAME,
     AUDIT_APPLET_SVC_NAME,
     DEFAULT_CONCURRENCY,
     PUBLISHER_APPLET_SVC_NAME,
@@ -299,6 +300,7 @@ class WeilClient:
         self._bridged_http_client = _BridgeHttpClient(self._bridge_http)
         self._audit_contract_id: Optional[ContractId] = None
         self._publisher_contract_ids: dict[str, ContractId] = {}
+        self._agent_registry_contract_id: Optional[ContractId] = None
         self._remote_signing = False
         self._credentials: Optional[dict] = None
 
@@ -453,10 +455,10 @@ class WeilClient:
     async def set_account(self, selected: SelectedAccount) -> None:
         """Switch the active account used for signing.
 
-        Also drops the cached audit contract id — it's pinned to whichever
-        account's home pod resolved it (see _get_audit_contract_id), so a stale
-        entry from the previous account must not leak into calls made under the
-        new one.
+        Also drops the cached audit, publisher and agent_registry contract ids —
+        each is pinned to whichever account's home pod resolved it (see
+        _get_audit_contract_id), so a stale entry from the previous account must
+        not leak into calls made under the new one.
 
         Raises:
             IndexError: If the index is out of bounds.
@@ -468,6 +470,7 @@ class WeilClient:
                 self._audit_contract_id = None
             async with self._publisher_contract_id_lock:
                 self._publisher_contract_ids.clear()
+            self._agent_registry_contract_id = None
 
         await _on_bridge(on_bridge())
 
@@ -730,6 +733,21 @@ class WeilClient:
 
         return await _on_bridge(on_bridge())
 
+    async def _get_agent_registry_contract_id(self) -> ContractId:
+        """Resolve and cache ``agent_registry::weil`` on this wallet's home pod."""
+        if self._agent_registry_contract_id is not None:
+            return self._agent_registry_contract_id
+
+        async def on_bridge() -> ContractId:
+            self._agent_registry_contract_id = await self.get_applet_id_for_name(
+                self._bridge_http.get(),
+                AGENT_REGISTRY_APPLET_SVC_NAME,
+                wallet_address=self.wallet_addr(),
+            )
+            return self._agent_registry_contract_id
+
+        return await _on_bridge(on_bridge())
+
     async def get_receipt_for_commit(self, commit_hash: str) -> Optional[str]:
         """Read back the receipt content currently persisted for ``commit_hash``.
 
@@ -808,6 +826,38 @@ class WeilClient:
 
         return await self.to_contract_client(contract_id).execute(
             "audit", method_args, False, True
+        )
+
+    async def record_agent_token_usage(
+        self, model: str, usage: Mapping[str, int], timestamp: str
+    ) -> Optional[TransactionResult]:
+        """Record one model call's token usage on ``agent_registry::weil``.
+
+        The applet is resolved with this wallet's address, so the call lands on
+        the wallet's home pod. ``usage`` is agent_registry's ``TokenUsage``
+        (``input_tokens`` / ``output_tokens``). ``timestamp`` is the UTC
+        ISO-8601 time the model response arrived (e.g.
+        ``2026-11-15T10:02:11.123Z``). Returns None without submitting when the
+        wallet is not linked to an organization.
+        """
+        org = self._wallet.org
+        if org is None or not org.name:
+            return None
+        contract_id = await self._get_agent_registry_contract_id()
+        method_args = json.dumps(
+            {
+                "org": org.name,
+                "subgroup": org.subgroup or None,
+                "model": model,
+                "usage": {
+                    "input_tokens": int(usage.get("input_tokens", 0)),
+                    "output_tokens": int(usage.get("output_tokens", 0)),
+                },
+                "timestamp": timestamp,
+            }
+        )
+        return await self.to_contract_client(contract_id).execute(
+            "record_agent_token_usage", method_args, False, True
         )
 
     def audit(self, log: Optional[str] = None) -> Any:

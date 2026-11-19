@@ -1,7 +1,7 @@
 # Ported ADK examples
 
 Two sets live here: ports of the Python SDK's examples
-(`python/examples/adk-ported`, `python/examples/mcp_secured_audit_starter.py`),
+(`python/examples/adk-ported`, `python/examples/mcp/secured_audit_starter.py`),
 which behave as their Python originals, and four of the official adk-go
 examples (below the table).
 

@@ -160,9 +160,8 @@ func reorderObject(raw json.RawMessage, order []string) ([]byte, error) {
 }
 
 // declaredArgs is a typed handler's decoded arguments as JSON, fields in
-// declaration order — the Go counterpart of Python's bound.arguments: the
-// declared parameters only, as the handler received them (coerced to their
-// types). nil when In is not a struct.
+// declaration order: the declared parameters only, as the handler received
+// them (coerced to their types). nil when In is not a struct.
 func declaredArgs[In any](in In) json.RawMessage {
 	if fieldOrder[In]() == nil {
 		return nil
@@ -176,8 +175,8 @@ func declaredArgs[In any](in In) json.RawMessage {
 	return bytes.TrimSpace(buf.Bytes())
 }
 
-// fieldOrder is the JSON names of In's fields in declaration order, the Go
-// counterpart of a Python tool's parameter order; nil if In is no struct.
+// fieldOrder is the JSON names of In's fields in declaration order, the
+// order a tool's parameters are recorded in; nil if In is no struct.
 func fieldOrder[In any]() []string {
 	t := reflect.TypeFor[In]()
 	for t.Kind() == reflect.Pointer {

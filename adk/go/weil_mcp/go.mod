@@ -8,12 +8,12 @@ replace (
 )
 
 require (
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/weilliptic-public/wadk/adk/go/weil_wallet v0.0.0-00010101000000-000000000000
 )
 
 require (
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect

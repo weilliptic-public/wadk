@@ -1,8 +1,8 @@
 # Ported ADK examples
 
 Two sets live here: ports of the Python SDK's examples
-(`python/examples/adk-ported`, `python/examples/mcp/secured_audit_starter.py`),
-which behave as their Python originals, and four of the official adk-go
+(`python/examples/adk-ported`, `python/examples/mcp_secured_audit_starter.py`),
+which behave as their Python originals, and ports of the official adk-go
 examples (below the table).
 
 | Python example | Go port |
@@ -24,7 +24,7 @@ examples (below the table).
 
 Every agent — sub-agents, workflow agents and A2A callers included — acts
 under an identity of its own, chosen per agent by name (see
-`internal/devnet`): `WEIL_IDENTITY_<AGENT>` (an Agent Registry
+`examples/internal/devnet`): `WEIL_IDENTITY_<AGENT>` (an Agent Registry
 identity, `weil_...`), else `WEIL_WALLET_<AGENT>` (a wallet file), else
 `~/.weilliptic/agents/<agent>.wc`, created on first use. Each example's
 header lists its agents, their variables and the grants each needs; two
@@ -37,11 +37,11 @@ calls `to_secure_a2a`, the agent is served with `weiladk.ToSecureA2A` or
 
 ## Upstream adk-go examples
 
-Four of the official [adk-go examples](https://github.com/google/adk-go/tree/main/examples)
+Thirteen of the official [adk-go examples](https://github.com/google/adk-go/tree/main/examples)
 (v2.5.0), changed only as much as it takes to make them WeilChain agents.
-Each file keeps its upstream license header; every change is marked with a
-`// weil:` or `// model:` comment, so `diff` against the upstream file shows
-exactly what porting costs.
+Each file keeps its upstream license header. In the four below, every change
+is marked with a `// weil:` or `// model:` comment, so `diff` against the
+upstream file shows exactly what porting costs.
 
 | Example | Upstream | Shows | Lines changed |
 |---|---|---|---|
@@ -51,6 +51,10 @@ exactly what porting costs.
 | `a2a` | `examples/a2a` | an agent served and called over secured A2A, traced on both sides | +61 −12 |
 
 About half of each count is the `// model:` changes below, not WeilChain.
+
+The others are ported the same way: `tools/loadmemory`, `mcp`, `skills`,
+`multiagent/collaboration`, `workflowagents/{parallel,loop,sequentialCode}`,
+and the two OpenAI samples below.
 
 ## The `// weil:` changes
 
@@ -88,14 +92,16 @@ go run ./examples/ported/quickstart console
 go run ./examples/ported/tools/multipletools console
 go run ./examples/ported/workflowagents/sequential console
 go run ./examples/ported/a2a console
+
+# OpenAI models: OPENAI_API_KEY, or OPENAI_BASE_URL for an OpenAI-compatible
+# endpoint; OPENAI_MODEL picks the model.
+go run ./examples/ported/openai/responses console     # POST /v1/responses
+go run ./examples/ported/openai/completions console   # POST /v1/chat/completions
 ```
 
 In `multipletools`, `search_agent` and `poem_agent` run through
-`agenttool`, which gives each its own runner without the outer plugins, so
-the audit sees only `root_agent`: one run adds 4 records plus one per model
-reply and two per tool call of `root_agent`, nothing from inside the
-sub-agents. To audit an inner agent, use `SubAgents` instead of `agenttool`,
-or give it callbacks of its own.
+`weiladk.NewAgentTool`, which runs each with the calling run's Weil plugins,
+so their steps are audited and traced along with `root_agent`'s.
 
 `console` is ADK's own launcher, as upstream; type a message and press Enter.
 `CLAUDE_MODEL` picks the model (default `claude-opus-5-5`).
@@ -118,7 +124,7 @@ fallback wallet if the root agent has none.
 | Example | Trace per run |
 |---|---|
 | `quickstart` | one event per `web_search`, signed by `weather-agent` |
-| `tools/multipletools` | one event per call to `search_agent` or `poem_agent`, signed by `search-agent`; the searches inside `search_agent` are not in it (`agenttool`, as above) |
+| `tools/multipletools` | one event per call to `search_agent` or `poem_agent`, signed by `multipletools-root-agent`; the tool calls inside each sub-agent are traced as runs of their own |
 | `workflowagents/sequential` | no events (no tools), signed by `desk` |
 | `a2a` | two traces: the served agent's (`flight-agent`, its `web_search` calls), and the caller's (`travel-planner`, no events: handing the request to the remote agent is not a tool call). A refused call leaves only the caller's. |
 

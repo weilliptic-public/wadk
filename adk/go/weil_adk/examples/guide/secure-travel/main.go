@@ -45,7 +45,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -320,8 +319,7 @@ Do not pretend to have searched for flights or hotels yourself.
 	// planner.setup_secure_a2a(): agent and secured-tool audits plus a trace
 	// of each run, on the calling side.
 	secureA2A, err := weiladk.NewPlugin(plugin.Config{},
-		weiladk.WithSecureA2A(weiladk.SecureA2AConfig{}),
-		weiladk.WithFlushAfterRun(time.Minute))
+		weiladk.WithSecureA2A(weiladk.SecureA2AConfig{}))
 	if err != nil {
 		log.Fatalf("create plugin: %v", err)
 	}

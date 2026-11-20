@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"strings"
-	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -65,7 +64,6 @@ func RootAgent(ctx context.Context, cfg llmagent.Config) agent.Agent {
 func Plugin() *plugin.Plugin {
 	p, err := weiladk.NewPlugin(plugin.Config{},
 		weiladk.WithSecureA2A(weiladk.SecureA2AConfig{}),
-		weiladk.WithFlushAfterRun(time.Minute),
 		weiladk.WithErrorHandler(func(ev *weiladk.Event, action string, err error) {
 			Log.Warningf("weil %s failed for %s: %v", action, ev.AgentName, err)
 		}))

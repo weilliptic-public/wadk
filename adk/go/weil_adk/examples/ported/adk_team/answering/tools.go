@@ -14,7 +14,7 @@ import (
 	"github.com/weilliptic-public/wadk/adk/go/weil_adk/examples/ported/adk_team/internal/team"
 )
 
-// settings.py
+// Settings.
 var (
 	githubBaseURL    = "https://api.github.com"
 	githubGraphQLURL = githubBaseURL + "/graphql"
@@ -38,8 +38,6 @@ func loadSettings() {
 	isInteractive = team.IsTrue("INTERACTIVE", "1")
 	github = &team.HTTP{Headers: team.GitHubHeaders(githubToken), Timeout: 60 * time.Second}
 }
-
-// utils.py
 
 func errorResponse(msg string) map[string]any {
 	return map[string]any{"status": "error", "error_message": msg}
@@ -115,8 +113,6 @@ func convertGCSToHTTPS(gcsURI string) (string, bool) {
 	}
 	return generateGitHubURL(prefix, relativePath), true
 }
-
-// tools.py
 
 type discussionNumberArgs struct {
 	DiscussionNumber int `json:"discussion_number"`

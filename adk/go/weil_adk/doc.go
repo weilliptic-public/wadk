@@ -12,7 +12,22 @@
 //	functiontool.New(cfg, fn)     → functiontool.New(cfg, weiladk.SecuredUser("engg.weil", fn))
 //
 // The A2A and secured layers are wire-compatible with the Python SDK
-// (weil_ai), so Go and Python agents call and gate each other.
+// (weil_ai), so Go and Python agents call and gate each other. The Python
+// SDK's names map to Go as:
+//
+//	Python (weil_ai, weil_wallet)               Go
+//	@weil_ai.agent(identity=...)                weiladk.FromIdentity, weiladk.Bind
+//	agent.setup_secure_a2a(service=...)         weiladk.NewPlugin(cfg, weiladk.WithSecureA2A(...)), weiladk.SecureA2A(..., weiladk.WithService(...))
+//	agent.to_secure_a2a()                       weiladk.ToSecureA2A, weiladk.NewExecutor
+//	@secured_user / @secured_admin              weiladk.SecuredUser / weiladk.SecuredAdmin, secured.User / secured.Admin
+//	current_wallet_addr()                       weiladk.CallerFromContext, secured.WalletFromContext, weilmcp.Wallet
+//	WalletNotPermittedError                     *secured.NotPermittedError
+//	SecuredExprError                            secured.ErrBadRule
+//	SecuredCheckError                           *secured.CheckError
+//	flush_audits()                              weiladk.FlushAudits
+//	make_adk_pensieve_tools                     weiladk.PensieveTools
+//	AgentTool(include_plugins=True)             weiladk.NewAgentTool
+//	client.record_agent_token_usage             (*client.WeilClient).RecordAgentTokenUsage
 //
 // Inside any ADK callback or tool, Invoke (blocking) and Submit (queued)
 // call applets as the agent that is acting:

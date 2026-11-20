@@ -24,7 +24,7 @@ const MCPAuditField = "audit_payload"
 //	mcpClient.AddSendingMiddleware(weiladk.AuditMCPResults(shopID))
 //	tools, err := mcptoolset.New(mcptoolset.Config{Client: mcpClient, Transport: transport})
 //
-// The entry is queued on the dispatcher (see WithFlushAfterRun), so the tool
+// The entry is submitted in the background (see FlushAudits), so the tool
 // call does not wait for it; a failure is logged and never fails the call.
 func AuditMCPResults(id *Identity) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {

@@ -12,8 +12,8 @@ import (
 
 // PensieveTools returns ADK tools over the Pensieve graph-memory applet
 // (pensieve::weil), scoped to the calling agent's wallet: each agent reads
-// and writes only its own memory. They are the same tools, with the same
-// names and arguments, as the Python SDK's make_adk_pensieve_tools:
+// and writes only its own memory. Their names and arguments are those of
+// the Python SDK's Pensieve tools, so a prompt works with either:
 //
 //	weiladk.NewLLMAgent(id, llmagent.Config{..., Tools: append(tools, weiladk.PensieveTools()...)})
 //
@@ -123,8 +123,8 @@ func memoryTool[In any](name, description string, fn func(p *client.Pensieve, ct
 			if err != nil {
 				return nil, err
 			}
-			// As Python's ADK: an object result reaches the model as it is,
-			// anything else wrapped as {"result": ...}.
+			// An object result reaches the model as it is, anything else
+			// wrapped as {"result": ...}.
 			if m, ok := out.(map[string]any); ok {
 				return m, nil
 			}

@@ -68,7 +68,7 @@ type RollInput struct {
 // Python tool it returns a bare int, which reaches the model as
 // {"result": n}.
 func rollDie(_ agent.Context, in RollInput) (int, error) {
-	if in.Sides < 1 { // Python's random.randint(1, sides) raises here
+	if in.Sides < 1 {
 		return 0, fmt.Errorf("empty range in randint(1, %d)", in.Sides)
 	}
 	return rand.IntN(in.Sides) + 1, nil
@@ -84,14 +84,14 @@ type PrimeInput struct {
 func checkPrime(_ agent.Context, in PrimeInput) (string, error) {
 	var primes []int
 	for _, n := range in.Nums {
-		if isPrime(n) && !slices.Contains(primes, n) { // Python collects a set
+		if isPrime(n) && !slices.Contains(primes, n) {
 			primes = append(primes, n)
 		}
 	}
 	if len(primes) == 0 {
 		return "No prime numbers found.", nil
 	}
-	slices.Sort(primes) // CPython iterates a set of small ints in ascending order
+	slices.Sort(primes)
 	strs := make([]string, len(primes))
 	for i, n := range primes {
 		strs[i] = fmt.Sprint(n)

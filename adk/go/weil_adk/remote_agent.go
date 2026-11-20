@@ -47,7 +47,10 @@ type invokeRequest struct {
 //
 // The method runs with the verified caller in its context, where
 // secured.Require and secured.CallerFromContext find it, checked against
-// id's Sentinel. Of opts only WithService and WithMaxAge apply.
+// id's Sentinel. When the caller signed its trace context (RemoteAgent.Call
+// from a traced run), the method records into that trace: RecordToolCall,
+// and any traced ADK run it starts with its context, as a subtrace. Of opts
+// only WithService and WithMaxAge apply.
 func AgentHTTPHandler(id *Identity, methods map[string]AgentMethod, opts ...A2AOption) http.Handler {
 	o := newA2AOptions(opts)
 	checker := secured.NewChecker(secured.UsingSentinel(id.client.Sentinel()), secured.PublishVerdictsAs(id.client))
@@ -103,7 +106,14 @@ func AgentHTTPHandler(id *Identity, methods map[string]AgentMethod, opts ...A2AO
 			req.Kwargs = map[string]any{}
 		}
 		ctx := secured.ContextWithChecker(secured.ContextWithCaller(ContextWithIdentity(r.Context(), id), caller), checker)
+		// A caller in a traced run signed its trace: the method records
+		// into it (RecordToolCall, and the ADK runs it starts), and replies
+		// once those calls are submitted.
+		ctx, trace := borrowTrace(ctx, id, caller)
 		result, err := method(ctx, req.Args, req.Kwargs)
+		if trace != nil {
+			trace.sync(context.WithoutCancel(ctx))
+		}
 		switch {
 		case errors.Is(err, secured.ErrNotPermitted):
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
@@ -149,7 +159,9 @@ func (i *Identity) Remote(baseURL string) *RemoteAgent {
 
 // Call invokes method with args and kwargs (either may be nil) and returns
 // its result. A non-2xx reply is an error carrying the status and body, as
-// Python's raise_for_status.
+// Python's raise_for_status. Called from a traced run (a tool's context), it
+// signs the run's trace context (TraceContextOf), so the served agent's runs
+// record into that trace.
 func (r *RemoteAgent) Call(ctx context.Context, method string, args []any, kwargs map[string]any) (any, error) {
 	if args == nil {
 		args = []any{}
@@ -158,7 +170,8 @@ func (r *RemoteAgent) Call(ctx context.Context, method string, args []any, kwarg
 		kwargs = map[string]any{}
 	}
 	payload := invokeRequest{Method: method, Args: args, Kwargs: kwargs}
-	headers, err := r.caller.client.AuthHeadersForBody(ctx, payload)
+	// Inside a traced run, the callee records into the same trace.
+	headers, err := r.caller.client.AuthHeadersForBody(contextWithTrace(ctx), payload)
 	if err != nil {
 		return nil, err
 	}

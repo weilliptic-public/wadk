@@ -24,7 +24,7 @@ import (
 	"github.com/weilliptic-public/wadk/adk/go/weil_adk/examples/ported/adk_team/internal/team"
 )
 
-// settings.py
+// Settings.
 var (
 	githubBaseURL = "https://api.github.com"
 	owner, repo   string
@@ -105,7 +105,8 @@ func listCommentsOnIssue(_ agent.Context, in issueNumberArgs) (map[string]any, e
 	return map[string]any{"status": "success", "comments": response}, nil
 }
 
-// templatePath is Path(__file__).parent / "../../../../.github/ISSUE_TEMPLATE/<name>".
+// templatePath is the repository's .github/ISSUE_TEMPLATE/<name>, located
+// relative to this source file.
 func templatePath(name string) string {
 	_, file, _, _ := runtime.Caller(0)
 	return filepath.Dir(file) + "/../../../../.github/ISSUE_TEMPLATE/" + name

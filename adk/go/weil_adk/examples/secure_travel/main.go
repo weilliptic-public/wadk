@@ -53,7 +53,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -243,8 +242,7 @@ func main() {
 	// planner.setup_secure_a2a(): agent and secured-tool audits plus run
 	// traces on the calling side.
 	secureA2A := devnet.Must(weiladk.NewPlugin(plugin.Config{},
-		weiladk.WithSecureA2A(weiladk.SecureA2AConfig{}),
-		weiladk.WithFlushAfterRun(time.Minute)))
+		weiladk.WithSecureA2A(weiladk.SecureA2AConfig{})))
 	devnet.Section("planner plans a trip")
 	devnet.Must(devnet.Run(ctx, devnet.NewRunner("travel", plannerAgent,
 		runner.PluginConfig{Plugins: []*plugin.Plugin{secureA2A}}), "trip",

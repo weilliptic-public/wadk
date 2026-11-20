@@ -174,9 +174,14 @@ public class WeilClient implements AutoCloseable {
         return walletHasExecutionPermission(walletAddr, svcName, Constants.SENTINEL_HOST);
     }
 
+    /**
+     * Whether {@code walletAddr} satisfies the secured rule {@code svcName}
+     * with Execution keys. {@code svcName} is one scope ({@code "engg.weil"})
+     * or a rule over several; see {@link SecuredRule}.
+     */
     public static boolean walletHasExecutionPermission(String walletAddr, String svcName, String sentinelHost)
         throws IOException, InterruptedException {
-        return walletHasPurpose(walletAddr, svcName, "Execution", sentinelHost);
+        return grantingPurpose(walletAddr, svcName, List.of("Execution"), sentinelHost) != null;
     }
 
     public static boolean walletHasManagementPermission(String walletAddr, String svcName)
@@ -184,53 +189,143 @@ public class WeilClient implements AutoCloseable {
         return walletHasManagementPermission(walletAddr, svcName, Constants.SENTINEL_HOST);
     }
 
+    /**
+     * Whether {@code walletAddr} satisfies the secured rule {@code svcName}
+     * with Management keys. {@code svcName} is one scope or a rule over
+     * several; see {@link SecuredRule}.
+     */
     public static boolean walletHasManagementPermission(String walletAddr, String svcName, String sentinelHost)
         throws IOException, InterruptedException {
-        return walletHasPurpose(walletAddr, svcName, "Management", sentinelHost);
+        return grantingPurpose(walletAddr, svcName, List.of("Management"), sentinelHost) != null;
     }
 
     /**
-     * Ask an organisation's identity applet whether a key holds {@code purpose}.
-     *
-     * <p>{@code svcName} names a subgroup within an organisation
-     * ("engg.weil"), not an applet. The organisation is the part after the last
-     * dot, and its identity applet is "identity::&lt;org&gt;"; the subgroup
-     * prefixes the key the applet is asked about, since keys are enrolled there
-     * as "&lt;subgroup&gt;_&lt;address&gt;". Resolving {@code svcName} itself as
-     * an applet is what makes Sentinel answer "Not able to retrieve Applet
-     * address for Service Name".</p>
-     *
-     * <p>Org-level keys span every subgroup, so the bare address is asked
-     * first and the subgroup key second, as the Python SDK does.</p>
+     * Thrown when a secured rule's outcome could not be decided: a check the
+     * rule depended on failed (identity applet missing, a
+     * {@code key_has_purpose} call errored) and the rest of the rule could not
+     * decide without it. Callers treat it as "could not check", never as a grant.
      */
-    private static boolean walletHasPurpose(
-        String walletAddr, String svcName, String purpose, String sentinelHost)
+    public static final class SecuredCheckException extends IOException {
+        private final String rule;
+        private final List<String> failures;
+
+        public SecuredCheckException(String rule, List<String> failures) {
+            super("secured check for '" + rule + "' could not be completed: "
+                + (failures.isEmpty() ? "unknown failure" : String.join("; ", failures)));
+            this.rule = rule;
+            this.failures = List.copyOf(failures);
+        }
+
+        public String rule() {
+            return rule;
+        }
+
+        public List<String> failures() {
+            return failures;
+        }
+    }
+
+    /** Asks whether {@code key} holds {@code purpose} on {@code org}'s identity applet. */
+    @FunctionalInterface
+    interface PurposeProbe {
+        boolean keyHasPurpose(String org, String key, String purpose) throws Exception;
+    }
+
+    /**
+     * The purpose that grants {@code walletAddr} access under the secured rule
+     * {@code rule}, or null when it is refused.
+     *
+     * <p>{@code rule} is one scope ({@code "engg.weil"}, or {@code "weil"} for
+     * org-level) or a boolean rule over several, such as
+     * {@code "infrastructure.weil & !finance.weil"} — see {@link SecuredRule}.
+     * It is evaluated "root access first", like the Rust macros: the caller's
+     * org-level key (the bare address) is checked once for every org the rule
+     * names, then each {@code "subgroup.org"} condition passes on that
+     * org-level key or on {@code "<subgroup>_<address>"}. Each org's identity
+     * applet, {@code "identity::<org>"}, is resolved once per call.</p>
+     *
+     * <p>Each key is asked for {@code purposes} in the order given; the purpose
+     * returned is the first one that matched while evaluating the rule. A rule
+     * satisfied without any key matching (only {@code !} conditions) reports
+     * the first purpose listed.</p>
+     *
+     * @throws SecuredRule.ParseException {@code rule} is malformed
+     * @throws SecuredCheckException a check the rule depended on failed, so
+     *     the outcome is unknown; a failure on a branch the rule did not need
+     *     does not throw
+     */
+    public static String grantingPurpose(
+        String walletAddr, String rule, List<String> purposes, String sentinelHost)
         throws IOException, InterruptedException {
+        SecuredRule.Expr expr = SecuredRule.parse(rule);
         String host = sentinelHost != null && !sentinelHost.isEmpty() ? sentinelHost : Constants.SENTINEL_HOST;
         HttpClient httpClient = TlsMode.httpClient();
 
-        int dot = svcName.lastIndexOf('.');
-        String org = dot >= 0 ? svcName.substring(dot + 1) : svcName;
         // The identity applet is looked up by name alone: it belongs to the
-        // organisation, not to the wallet being asked about.
-        ContractId appletId = getAppletIdForName(
-            httpClient, host, "identity::" + (org.isEmpty() ? svcName : org), null);
-
-        for (String key : purposeKeys(walletAddr, svcName)) {
-            if (keyHasPurpose(httpClient, host, appletId, walletAddr, key, purpose)) {
-                return true;
+        // organisation, not to the wallet being asked about. One lookup per
+        // org, its failure remembered too.
+        Map<String, Object> applets = new LinkedHashMap<>();
+        PurposeProbe probe = (org, key, purpose) -> {
+            if (!applets.containsKey(org)) {
+                try {
+                    applets.put(org, getAppletIdForName(httpClient, host, "identity::" + org, null));
+                } catch (Exception e) {
+                    applets.put(org, e);
+                }
             }
+            Object applet = applets.get(org);
+            if (applet instanceof Exception e) {
+                throw new IOException("identity::" + org + " did not resolve: " + e.getMessage(), e);
+            }
+            return keyHasPurpose(httpClient, host, (ContractId) applet, walletAddr, key, purpose);
+        };
+        String granted = grantingPurpose(walletAddr, rule, expr, purposes, probe);
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("secured check interrupted");
         }
-        return false;
+        return granted;
     }
 
-    /** The keys a wallet may be enrolled under: org-level first, then subgroup. */
-    private static List<String> purposeKeys(String walletAddr, String svcName) {
-        int dot = svcName.lastIndexOf('.');
-        String subgroup = dot >= 0 ? svcName.substring(0, dot) : "";
-        return subgroup.isEmpty()
-            ? List.of(walletAddr)
-            : List.of(walletAddr, subgroup + "_" + walletAddr);
+    /** {@link #grantingPurpose(String, String, List, String)} over any probe; for tests. */
+    static String grantingPurpose(
+        String walletAddr, String rule, SecuredRule.Expr expr, List<String> purposes, PurposeProbe probe)
+        throws SecuredCheckException {
+        List<String> matched = new java.util.ArrayList<>();
+        java.util.Set<String> failures = new java.util.LinkedHashSet<>();
+
+        SecuredRule.KeyCheck checkKey = (org, key) -> {
+            boolean unknown = false;
+            for (String purpose : purposes) {
+                try {
+                    if (probe.keyHasPurpose(org, key, purpose)) {
+                        matched.add(purpose);
+                        return Boolean.TRUE;
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    failures.add("interrupted asking " + key + " for " + purpose + " on " + org);
+                    unknown = true;
+                } catch (Exception e) {
+                    failures.add(String.valueOf(e.getMessage()).startsWith("identity::")
+                        ? e.getMessage()
+                        : "key_has_purpose(" + key + ", " + purpose + ") on " + org + " failed: " + e.getMessage());
+                    unknown = true;
+                }
+            }
+            return unknown ? null : Boolean.FALSE;
+        };
+
+        Boolean outcome = SecuredRule.evaluateRootFirst(expr, checkKey, walletAddr);
+        if (Boolean.TRUE.equals(outcome)) {
+            if (!matched.isEmpty()) {
+                return matched.get(0);
+            }
+            return purposes.isEmpty() ? null : purposes.get(0);
+        }
+        if (outcome == null) {
+            throw new SecuredCheckException(rule, List.copyOf(failures));
+        }
+        return null;
     }
 
     private static boolean keyHasPurpose(

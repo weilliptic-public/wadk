@@ -172,6 +172,8 @@ Each record (`AuditAction.record`) holds:
 |---|---|
 | `v`, `hook`, `time` | always |
 | `agent`, `invocation`, `wallet` | when known (almost always) |
+| `trace_id` | when the run is traced: the trace it belongs to, the caller's for a served run that joined it (the trace actions must come before the audit action, as `Weil.plugin` puts them) |
+| `caller_wallet` | on an agent served over A2A: the verified caller |
 | `tool`, `args_sha256`, `result_sha256` | tool hooks |
 | `llm`, `model`, `response_sha256` | `AFTER_MODEL` |
 | `error` | when the event carries one |
@@ -212,8 +214,9 @@ last tool that finished.
 |---|---|---|
 | Start | `USER_MESSAGE` | `weilchain::weil.add_trace(trace_id, root, [])`: a new UUID, the user's prompt as `root`. The applet records the signing wallet as `invoker` |
 | Model response | `AFTER_MODEL` | none: the tools it asks for will follow the last tool that finished |
-| Each tool | `BEFORE_TOOL`, then `AFTER_TOOL` | a node id and parent before it runs, keyed by ADK's function call id; after, `build_trace(trace_id, event)` with `event_type` `tool_call` and `content` `{"args", "result", "tool"}` as Python's `json.dumps(sort_keys=True)` writes it. The arguments carry `"_weil": {"framework": "adk", "tool_call_id": ...}`. A refused tool's refusal is its result |
+| Each tool | `BEFORE_TOOL`, then `AFTER_TOOL` | a node id and parent before it runs, keyed by ADK's function call id; after, `build_trace(trace_id, event)` with `event_type` `tool_call` and `content` `{"args", "result", "tool", "agent", "wallet"}` as Python's `json.dumps(sort_keys=True)` writes it; `agent` and `wallet` say which agent took the step. The arguments carry `"_weil": {"framework": "adk", "tool_call_id": ...}`. A refused tool's refusal is its result |
 | Sub-agent behind an `AgentTool` | its run's `USER_MESSAGE` | `build_trace` with a `subtrace` node, `{"root": request}`, under the tool call that started it; its tools follow that node in the caller's trace, and its run publishes nothing of its own |
+| Agent served over A2A, called by `Weil.remoteTool` or handed over to by `Weil.remoteAgent` | its run's `USER_MESSAGE` | the caller sends its trace id and the tool call's node (for a hand-over, its `remote_agent` node: decided on `BEFORE_AGENT` after the transfer, and written on `AFTER_AGENT` with the remote agent's reply as `result`) as `weil_trace` in the signed message's metadata (the Python SDK sends and reads the same field). The server copies it from the verified message into the run, which adds a `subtrace` node, `{"root": request, "wallet": <served agent>}`, under that node, signed by the served agent; no `add_trace`, and nothing indexed or published: the caller does that once, for the whole tree. Without it, or malformed, the run keeps a trace of its own |
 | End | `AFTER_RUN` (or `RUN_ERROR`) | `index_trace` for similarity search, then `get_trace`, which reads the trace back from the applet through Sentinel, and what it returns published to `publisher::<org>` on topic `audits`; both on the background worker, so the agent does not wait |
 
 | | |
@@ -242,7 +245,7 @@ MCP tool (`ev.tool() instanceof AbstractMcpTool`).
 | | |
 |---|---|
 | Hook | `BEFORE_TOOL`, filtered to the tools it secures |
-| Check | the caller's wallet (the agent's own in a chat) holds Execution, else Management, in the service (`admin`: Management only). A read-only query, not a transaction |
+| Check | the local agent's own wallet (an A2A caller is checked at the server instead) holds Execution, else Management, in the service (`admin`: Management only). A read-only query, not a transaction |
 | Verdict | published fire-and-forget to topic `security`: `"<wallet> passed @secured Execution check for tool <tool> in <svc>"` (or `Management check`, whichever it holds); refused, `"<wallet> failed @secured Execution and Management checks for tool <tool> in <svc>"` |
 | Mode | **blocking, fail-closed**: the tool waits for the check; if the check cannot be made, the tool is refused |
 | Refusal | the tool does not run, and the model gets `{"error": "Permission denied: wallet ... does not have permission to run <tool>. It needs ... permission in <svc>."}` as its result — see §5 |

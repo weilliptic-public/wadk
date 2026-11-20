@@ -144,6 +144,16 @@ public final class AuditAction {
         if (ev.identity() != null) {
             r.put("wallet", ev.identity().address());
         }
+        // The trace this step belongs to, and on a served agent who asked,
+        // so records join up with the trace and with the caller's records.
+        String traceId = com.weilliptic.weilwallet.TraceAction.traceId(ev.invocationId());
+        if (traceId != null) {
+            r.put("trace_id", traceId);
+        }
+        String caller = WeilAgentServer.callerWallet(invocationContext(ev));
+        if (caller != null && (ev.identity() == null || !caller.equals(ev.identity().address()))) {
+            r.put("caller_wallet", caller);
+        }
         if (ev.toolName() != null) {
             r.put("tool", ev.toolName());
             r.put("args_sha256", hashJson(ev.toolArgs()));
@@ -175,6 +185,13 @@ public final class AuditAction {
             putContent(r, ev);
         }
         return r;
+    }
+
+    private static com.google.adk.agents.InvocationContext invocationContext(WeilEvent ev) {
+        if (ev.invocationContext() != null) {
+            return ev.invocationContext();
+        }
+        return ev.callbackContext() != null ? ev.callbackContext().invocationContext() : null;
     }
 
     private static void putContent(Map<String, Object> r, WeilEvent ev) {

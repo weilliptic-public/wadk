@@ -25,7 +25,7 @@ public final class WeilTravelHotels {
     /** The subgroup a caller must be permitted in to reach this agent at all. */
     static final String AGENT_SERVICE = "engg.weil";
 
-    /** The subgroup a caller must be permitted in to use searchHotels. */
+    /** The subgroup this agent's own wallet must be permitted in to run searchHotels. */
     static final String HOTEL_SERVICE = "engg.weil";
 
     public static class Tools {

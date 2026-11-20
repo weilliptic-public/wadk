@@ -58,21 +58,18 @@ func WithCacheTTL(d time.Duration) Option {
 	return func(o *options) { o.cacheTTL = d }
 }
 
-// StrictSubgroups requires the subgroup key itself for a subgroup scope. By
-// default an org-level key also passes, as in the Python SDK and the on-chain
-// #[secured] macro.
+// StrictSubgroups requires the subgroup key itself for a subgroup condition,
+// and skips the org-level shortcut. By default an org-level key also passes,
+// as in the Python SDK and the on-chain #[secured] macro.
 func StrictSubgroups() Option {
 	return func(o *options) { o.strict = true }
 }
 
-// PublishVerdictsAs publishes each verdict to VerdictTopic on the scope's
-// org's publisher applet ("publisher::<org>", as the Python SDK does), signed
-// by publisher (typically the server's own identity), in the background.
+// PublishVerdictsAs publishes each verdict to VerdictTopic on the publisher
+// applet of every org the rule names ("publisher::<org>"), signed by
+// publisher (typically the server's own identity), in the background.
 //
-// Without it no verdicts are published. The Python SDK publishes them as
-// unsigned transactions from the caller's wallet; the chain accepts those
-// and attributes them to the caller, so that would write on chain in
-// another wallet's name. Go never does.
+// Without it no verdicts are published.
 func PublishVerdictsAs(publisher *client.WeilClient) Option {
 	return func(o *options) { o.publisher, o.verdicts = publisher, publisher != nil }
 }
@@ -122,16 +119,17 @@ func newChecker(o *options) *Checker {
 
 var defaultChecker = sync.OnceValue(func() *Checker { return NewChecker() })
 
-// Check returns nil when wallet holds the permission scope and level
-// demand, a *NotPermittedError when it does not, and any other error when
-// the check itself could not be completed.
+// Check returns nil when wallet satisfies the secured rule (one scope like
+// "engg.weil", or a Rule over several) at level, a *NotPermittedError when
+// it does not, and any other error — a *CheckError when a check the rule
+// needed failed — when the outcome could not be decided.
 func (c *Checker) Check(ctx context.Context, wallet, scope string, level Level) error {
 	_, err := c.check(ctx, wallet, scope, level, level.purposes())
 	return err
 }
 
 // Grant is Check that also reports which purpose let wallet in, probing
-// purposes in the order given (Python's _granting_purpose). With no
+// purposes in the order given, and stopping at the first held. With no
 // purposes it probes those level User accepts. A wallet holding none gets
 // "" and a *NotPermittedError.
 func (c *Checker) Grant(ctx context.Context, wallet, scope string, purposes ...string) (string, error) {
@@ -147,20 +145,22 @@ func (c *Checker) Grant(ctx context.Context, wallet, scope string, purposes ...s
 	return c.check(ctx, wallet, scope, level, purposes)
 }
 
-func (c *Checker) check(ctx context.Context, wallet, scope string, level Level, purposes []string) (string, error) {
-	sc, err := ParseScope(scope)
+func (c *Checker) check(ctx context.Context, wallet, rule string, level Level, purposes []string) (string, error) {
+	r, err := parseGateRule(rule)
 	if err != nil {
 		return "", err
 	}
-	granted, err := c.granting(ctx, wallet, sc, purposes)
-	if err != nil {
-		return "", fmt.Errorf("secured: check %s for %s: %w", scope, wallet, err)
+	granted, outcome, failures := c.granting(ctx, wallet, r, purposes)
+	// One verdict per org the rule names, to that org's publisher; an
+	// undecided rule is a failed check, as in the Python SDK.
+	c.publishVerdicts(wallet, rule, Orgs(r), outcome == True)
+	switch outcome {
+	case True:
+		return granted, nil
+	case Unknown:
+		return "", fmt.Errorf("secured: check %s for %s: %w", rule, wallet, &CheckError{Rule: rule, Failures: failures})
 	}
-	c.publishVerdict(wallet, sc, granted != "")
-	if granted == "" {
-		return "", &NotPermittedError{Wallet: wallet, Service: scope, Level: level}
-	}
-	return granted, nil
+	return "", &NotPermittedError{Wallet: wallet, Service: rule, Level: level}
 }
 
 // Allowed is Check as a boolean; err reports only a failed check.
@@ -172,49 +172,89 @@ func (c *Checker) Allowed(ctx context.Context, wallet, scope string, level Level
 	return err == nil, err
 }
 
-// granting returns the first purpose wallet holds in sc, or "".
-func (c *Checker) granting(ctx context.Context, wallet string, sc Scope, purposes []string) (string, error) {
+// CheckError is returned (wrapped) when a rule's outcome could not be
+// decided: a check it depended on failed (identity applet missing, a
+// key_has_purpose call errored) and the rest of the rule could not decide
+// without it. Gates treat it as not permitted.
+// A failure on a branch the rule did not need does not cause one.
+type CheckError struct {
+	Rule     string
+	Failures []string
+}
+
+func (e *CheckError) Error() string {
+	detail := strings.Join(e.Failures, "; ")
+	if detail == "" {
+		detail = "unknown failure"
+	}
+	return fmt.Sprintf("secured check for %q could not be completed: %s", e.Rule, detail)
+}
+
+// granting evaluates r for wallet root-first (EvaluateRootFirst), each key
+// probed for purposes in the order given. granted is the first purpose
+// that matched while evaluating — or, for a rule satisfied with no key
+// matching (only ! conditions), the first one listed.
+func (c *Checker) granting(ctx context.Context, wallet string, r Rule, purposes []string) (granted string, outcome Outcome, failures []string) {
 	if wallet == "" {
-		return "", nil
+		return "", False, nil
 	}
-	// Python's _granting_purpose splits the scope at its last dot for the
-	// identity applet and keys ("a.b.c" → identity::c, key "a.b_<w>"), while
-	// verdicts go to the publisher of the first split; only differs for
-	// scopes with more than one dot.
-	sc = identityScope(sc)
-	identity, err := c.identityApplet(ctx, wallet, sc)
-	if err != nil {
-		return "", err
+	type applet struct {
+		addr string
+		ok   bool
 	}
-	// Org-level keys span every subgroup, so a subgroup scope accepts the
-	// bare address as well as "<subgroup>_<addr>" (unless strict). Probed in
-	// the Python SDK's order: each key in turn, every purpose for it.
-	keys := []string{sc.Key(wallet)}
-	if sc.Subgroup != "" {
-		keys = []string{wallet, sc.Key(wallet)}
-		if c.strict {
-			keys = keys[1:]
+	applets := map[string]applet{}
+	var matched []string
+	appletFor := func(ctx context.Context, org string) (string, bool) {
+		if a, seen := applets[org]; seen {
+			return a.addr, a.ok
 		}
+		addr, err := c.identityApplet(ctx, org)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s did not resolve: %v", identityApplet(org), err))
+		}
+		applets[org] = applet{addr, err == nil}
+		return addr, err == nil
 	}
-	for _, key := range keys {
+	checkKey := func(ctx context.Context, org, key string) Outcome {
+		addr, ok := appletFor(ctx, org)
+		if !ok {
+			return Unknown
+		}
+		unknown := false
 		for _, purpose := range purposes {
-			has, err := c.hasPurpose(ctx, identity, wallet, key, purpose)
+			has, err := c.hasPurpose(ctx, addr, wallet, key, purpose)
 			if err != nil {
-				return "", err
+				failures = append(failures, fmt.Sprintf("key_has_purpose(%q, %s) on %q failed: %v", key, purpose, org, err))
+				unknown = true
+				continue
 			}
 			if has {
-				return purpose, nil
+				matched = append(matched, purpose)
+				return True
 			}
 		}
+		if unknown {
+			return Unknown
+		}
+		return False
 	}
-	return "", nil
+	outcome = evaluateRootFirst(ctx, r, wallet, c.strict, checkKey)
+	if outcome == True {
+		switch {
+		case len(matched) > 0:
+			granted = matched[0]
+		case len(purposes) > 0:
+			granted = purposes[0]
+		}
+	}
+	return granted, outcome, failures
 }
 
 // identityApplet resolves the org's identity applet, which holds the keys
 // and their purposes.
 // It is resolved by name alone, as the Python SDK does.
-func (c *Checker) identityApplet(ctx context.Context, wallet string, sc Scope) (string, error) {
-	cacheKey := sc.Org
+func (c *Checker) identityApplet(ctx context.Context, org string) (string, error) {
+	cacheKey := org
 	c.mu.Lock()
 	if e, ok := c.cache[cacheKey]; ok && time.Now().Before(e.expires) {
 		c.mu.Unlock()
@@ -222,7 +262,7 @@ func (c *Checker) identityApplet(ctx context.Context, wallet string, sc Scope) (
 	}
 	c.mu.Unlock()
 
-	id, err := c.sentinel.ResolveApplet(ctx, sc.IdentityApplet(), "")
+	id, err := c.sentinel.ResolveApplet(ctx, identityApplet(org), "")
 	if err != nil {
 		return "", err
 	}
@@ -270,9 +310,9 @@ func unwrapOk(txnResult string) any {
 	return ok
 }
 
-// publishVerdict records the outcome on VerdictTopic in the background; it
-// never changes the outcome.
-func (c *Checker) publishVerdict(wallet string, sc Scope, passed bool) {
+// publishVerdicts records the outcome on VerdictTopic of each org's
+// publisher applet in the background; it never changes the outcome.
+func (c *Checker) publishVerdicts(wallet, rule string, orgs []string, passed bool) {
 	if !c.verdicts || c.publisher == nil || wallet == "" {
 		return
 	}
@@ -280,30 +320,22 @@ func (c *Checker) publishVerdict(wallet string, sc Scope, passed bool) {
 	if passed {
 		verdict = "passed"
 	}
-	payload := fmt.Sprintf("%s %s @secured check for %s", wallet, verdict, sc)
+	payload := fmt.Sprintf("%s %s @secured check for %s", wallet, verdict, rule)
 	args, _ := client.PythonDumpsValue(struct {
 		Topic   string `json:"topic"`
 		Payload string `json:"payload"`
 	}{VerdictTopic, payload}, false)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		_, err := c.publisher.ExecuteByName(ctx, sc.PublisherApplet(), "publish", string(args), client.ExecuteOptions{NonBlocking: true, HideArgs: true})
-		if err != nil && debugVerdicts {
-			log.Printf("secured: publish verdict: %v", err)
-		}
-	}()
+	for _, org := range orgs {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			_, err := c.publisher.ExecuteByName(ctx, publisherApplet(org), "publish", string(args), client.ExecuteOptions{NonBlocking: true, HideArgs: true})
+			if err != nil && debugVerdicts {
+				log.Printf("secured: publish verdict: %v", err)
+			}
+		}()
+	}
 }
 
 // debugVerdicts logs failed verdict publishes; they are best-effort.
 var debugVerdicts = false
-
-// identityScope re-splits sc at its last dot (Python's rpartition).
-func identityScope(sc Scope) Scope {
-	full := sc.String()
-	i := strings.LastIndex(full, ".")
-	if i < 0 {
-		return sc
-	}
-	return Scope{Org: full[i+1:], Subgroup: full[:i]}
-}

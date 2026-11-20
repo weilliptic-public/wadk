@@ -30,7 +30,7 @@ func CallerFromContext(ctx context.Context) (*client.AuthCaller, bool) {
 }
 
 // WalletFromContext returns the verified caller's account address, or ""
-// outside a verified request (Python: current_wallet_addr).
+// outside a verified request.
 func WalletFromContext(ctx context.Context) string {
 	if c, ok := CallerFromContext(ctx); ok {
 		return c.Address

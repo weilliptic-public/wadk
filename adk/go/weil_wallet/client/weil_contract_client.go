@@ -84,9 +84,8 @@ func (w *WeilContractClient) ExecuteStream(ctx context.Context, methodName strin
 		return nil, err
 	}
 	// A stream may last longer than any whole-request timeout: bound each
-	// read instead (DefaultTimeout without data), as httpx's read timeout
-	// does, and keep the concurrency slot until the stream is closed, as
-	// Python holds its semaphore for the whole iteration.
+	// read instead (DefaultTimeout without data), and keep the concurrency
+	// slot until the stream is closed.
 	ctx, cancel := context.WithCancel(ctx)
 	streamClient := *w.httpClient
 	streamClient.Timeout = 0
@@ -188,11 +187,10 @@ func executePayload(txnHeader *transaction.TransactionHeader, args *ExecuteArgs)
 	}
 
 	// `org` is included **only when present**, mirroring the node's
-	// compute_verify_digest_for_execute. This conditionality preserves
-	// compatibility: a wallet with no active org produces exactly the bytes it
-	// did before org existed, so already-signed transactions still verify.
-	// Writing a nil org unconditionally would change the digest for every
-	// org-less transaction at once.
+	// compute_verify_digest_for_execute: a wallet with no active org omits
+	// the field, so org-less transactions keep their digest. Writing a nil
+	// org unconditionally would change the digest for every org-less
+	// transaction at once.
 	//
 	// Key placement does not matter here — this stays a map[string]any, and
 	// encoding/json sorts map keys, which is what matches the node's BTreeMap.

@@ -9,12 +9,12 @@ import (
 )
 
 // DefaultTimeout bounds each HTTP exchange with Sentinel when no custom
-// http.Client is supplied, as the Python SDK's 60 s. Blocking executions wait
+// http.Client is supplied. Blocking executions wait
 // for the applet to run; use a context deadline for tighter bounds.
 const DefaultTimeout = 60 * time.Second
 
-// DefaultConcurrency is how many transactions a WeilClient submits at once,
-// as the Python SDK's DEFAULT_CONCURRENCY; more wait their turn.
+// DefaultConcurrency is how many transactions a WeilClient submits at once;
+// more wait their turn.
 const DefaultConcurrency = 64
 
 // S3Credentials point Sentinel at a caller-owned bucket holding agent wallets.

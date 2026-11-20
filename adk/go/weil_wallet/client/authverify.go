@@ -63,6 +63,9 @@ type AuthCaller struct {
 	BodySHA256 string
 	Nonce      string
 	Timestamp  time.Time
+	// Trace is the trace context the caller signed (see
+	// TraceContextFromHeaders), or nil.
+	Trace *TraceContext
 }
 
 // VerifyAuthHeaders checks the headers built by AuthHeaders (by any Weil SDK):
@@ -120,6 +123,7 @@ func VerifyAuthHeaders(h http.Header, maxAge time.Duration) (*AuthCaller, error)
 	}
 	caller.BodySHA256, _ = signed["body_sha256"].(string)
 	caller.Nonce, _ = signed["nonce"].(string)
+	caller.Trace = TraceContextFromHeaders(h)
 	return caller, nil
 }
 

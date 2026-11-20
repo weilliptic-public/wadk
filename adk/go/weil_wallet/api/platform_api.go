@@ -15,7 +15,7 @@ import (
 )
 
 // maxErrorBody caps how much of a failed response body is quoted in errors.
-const maxErrorBody = 500 // as the Python SDK truncates
+const maxErrorBody = 500
 
 // HTTPError is returned when Sentinel answers with a non-2xx status.
 type HTTPError struct {
@@ -26,7 +26,7 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string {
 	if e.Endpoint == "execute_smartcontract" {
-		// The Python SDK's wording.
+		// The same wording as the other Weil SDKs.
 		return fmt.Sprintf("failed to submit the transaction: HTTP %d %s", e.StatusCode, e.Body)
 	}
 	if e.Body == "" {

@@ -74,7 +74,7 @@ func securedFor[In, Out any](scope string, level secured.Level, h mcp.ToolHandle
 }
 
 // Wallet returns the verified caller's account address inside a secured
-// tool, or "" (Python: current_wallet_addr).
+// tool, or "".
 func Wallet(ctx context.Context) string {
 	return secured.WalletFromContext(ctx)
 }
@@ -100,9 +100,15 @@ func gate(ctx context.Context, req *mcp.CallToolRequest, scope string, level sec
 	}
 	err := secured.Require(ctx, scope, level)
 	var npe *secured.NotPermittedError
+	var ce *secured.CheckError
 	switch {
 	case err == nil:
 		return ctx, nil, nil
+	case errors.As(err, &ce):
+		// Undecidable (a check the rule needed failed): fail closed, with
+		// the same denial a caller without the permission gets.
+		err = &secured.NotPermittedError{Wallet: secured.WalletFromContext(ctx), Service: scope, Level: level}
+		fallthrough
 	case errors.As(err, &npe):
 		res := &mcp.CallToolResult{IsError: true}
 		res.Content = []mcp.Content{&mcp.TextContent{Text: err.Error()}}
@@ -115,7 +121,7 @@ func gate(ctx context.Context, req *mcp.CallToolRequest, scope string, level sec
 const maxAge = client.MaxAuthAge
 
 func mustScope(scope string) {
-	if _, err := secured.ParseScope(scope); err != nil {
+	if err := secured.ValidateRule(scope); err != nil {
 		panic(err)
 	}
 }

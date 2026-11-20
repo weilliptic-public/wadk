@@ -16,6 +16,12 @@ import com.sun.net.httpserver.HttpServer;
 import com.weilliptic.weilwallet.WeilAuth;
 
 import io.a2a.server.ServerCallContext;
+import io.a2a.server.agentexecution.RequestContext;
+import io.a2a.server.events.EventQueue;
+import io.a2a.spec.JSONRPCError;
+import io.reactivex.rxjava3.core.Maybe;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import io.a2a.server.auth.User;
 import io.a2a.server.events.InMemoryQueueManager;
 import io.a2a.server.requesthandlers.DefaultRequestHandler;
@@ -61,6 +67,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -134,6 +141,17 @@ public final class WeilAgentServer {
      */
     public static final String CALLER_METADATA_KEY = "weil.caller_wallet";
 
+    /**
+     * Key, in the signed A2A message's metadata, of the caller's trace:
+     * {@code {"trace_id", "parent_id"}}. The server copies it into the run's
+     * {@code a2a_metadata} from the verified message only, and the run joins
+     * that trace (see {@link com.weilliptic.weilwallet.TraceAction}).
+     */
+    public static final String TRACE_METADATA_KEY = "weil_trace";
+
+    /** The longest trace or node id accepted from a caller. */
+    private static final int MAX_TRACE_ID_LENGTH = 200;
+
     /** Where ADK's A2A executor puts a request's metadata in the run config. */
     private static final String A2A_METADATA = "a2a_metadata";
 
@@ -200,6 +218,8 @@ public final class WeilAgentServer {
     private final boolean publishPermissionChecks;
 
     private final String publicUrl;
+    /** The path the agent is served under: "" for the root, else like "/catalog". */
+    private final String rpcPath;
     /** Rebuilt, with the wallet, once a wallet that failed to load at start loads. */
     private volatile AgentCard agentCard;
     private volatile boolean cardHasWallet;
@@ -237,24 +257,33 @@ public final class WeilAgentServer {
         // resumability) and plugins, with these plugins put first.
         App app = b.app == null ? null : Weil.withPlugins(b.app, appName, plugins);
 
+        this.rpcPath = normalizePath(b.rpcPath);
         String url = b.publicUrl != null ? b.publicUrl : System.getenv("WEIL_A2A_PUBLIC_URL");
-        this.publicUrl = url != null && !url.isBlank() ? url.trim() : localUrl(bindAddress, port);
+        this.publicUrl = url != null && !url.isBlank() ? url.trim()
+            : localUrl(bindAddress, port).replaceAll("/$", "") + rpcPath + "/";
         String wallet = walletOrNull();
         this.agentCard = buildAgentCard(wallet);
         this.cardHasWallet = wallet != null;
         this.workers = Executors.newCachedThreadPool();
         this.taskStore = new InMemoryTaskStore();
         InMemoryPushNotificationConfigStore pushConfigs = new InMemoryPushNotificationConfigStore();
+        Map<RequestContext, CountDownLatch> runEnds =
+            java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<>());
         AgentExecutor.Builder executorBuilder = new AgentExecutor.Builder()
             .sessionService(new InMemorySessionService())
             .artifactService(new InMemoryArtifactService())
-            .agentExecutorConfig(AgentExecutorConfig.builder().build());
+            .agentExecutorConfig(AgentExecutorConfig.builder()
+                // Called once a run has ended, with its final status: released
+                // only after that status is queued, so the reply carries it.
+                .afterExecuteCallback((context, finalStatus) -> Maybe.just(finalStatus)
+                    .doAfterSuccess(status -> runEnded(runEnds, context)))
+                .build());
         AgentExecutor executor = (app != null
             ? executorBuilder.app(app)
             : executorBuilder.agent(agent).appName(appName).plugins(plugins))
             .build();
         DefaultRequestHandler handler = new DefaultRequestHandler(
-            executor,
+            new RunToEnd(executor, runEnds, b.agentTimeoutSeconds),
             taskStore,
             new InMemoryQueueManager(taskStore),
             pushConfigs,
@@ -315,10 +344,10 @@ public final class WeilAgentServer {
 
     public void start() throws IOException {
         http = HttpServer.create(new InetSocketAddress(bindAddress, port), 0);
-        http.createContext("/", this::handleA2A);
-        http.createContext(AGENT_CARD_PATH, this::handleAgentCard);
-        http.createContext(LEGACY_AGENT_CARD_PATH, this::handleAgentCard);
-        http.createContext(HEALTH_PATH, this::handleHealth);
+        http.createContext(rpcPath + "/", this::handleA2A);
+        http.createContext(rpcPath + AGENT_CARD_PATH, this::handleAgentCard);
+        http.createContext(rpcPath + LEGACY_AGENT_CARD_PATH, this::handleAgentCard);
+        http.createContext(rpcPath + HEALTH_PATH, this::handleHealth);
         http.setExecutor(Executors.newCachedThreadPool());
         http.start();
         System.out.println(agent.name() + " serving A2A at " + publicUrl);
@@ -326,6 +355,11 @@ public final class WeilAgentServer {
         String wallet = walletOrNull();
         System.out.println("  wallet: " + (wallet != null ? wallet
             : "not loaded yet; what needs it fails until it loads (check WEIL_AGENT_KEY or WEIL_WALLET_FILE)"));
+        if (!isWildcard(bindAddress) && isLoopback(bindAddress) && !namesLoopback(publicUrl)) {
+            System.out.println("  warning: the card names " + publicUrl + ", but this listens on "
+                + bindAddress + " only, so callers on other hosts cannot reach it;"
+                + " set WEIL_A2A_BIND=0.0.0.0 (or bindAddress) to take their calls");
+        }
         if (isWildcard(bindAddress) && publicUrl.equals(localUrl(bindAddress, port))) {
             System.out.println("  warning: listening on " + bindAddress + ", but the card names "
                 + publicUrl + ", which callers on other hosts cannot reach; set WEIL_A2A_PUBLIC_URL");
@@ -366,6 +400,30 @@ public final class WeilAgentServer {
         return address.equals("0.0.0.0") || address.equals("::") || address.equals("[::]");
     }
 
+    private static boolean isLoopback(String address) {
+        return address.equals("127.0.0.1") || address.equals("localhost")
+            || address.equals("::1") || address.equals("[::1]");
+    }
+
+    /** Whether {@code url} names this machine, so a loopback listener can serve it. */
+    private static boolean namesLoopback(String url) {
+        try {
+            String host = java.net.URI.create(url).getHost();
+            return host == null || isLoopback(host);
+        } catch (IllegalArgumentException e) {
+            return true;
+        }
+    }
+
+    /** {@code path} as "" for the root, else with one leading slash and none trailing. */
+    static String normalizePath(String path) {
+        if (path == null) {
+            return "";
+        }
+        String p = path.trim().replaceAll("^/+", "").replaceAll("/+$", "");
+        return p.isEmpty() ? "" : "/" + p;
+    }
+
     private static String envOr(String name, String fallback) {
         String value = System.getenv(name);
         return value == null || value.isBlank() ? fallback : value.trim();
@@ -379,6 +437,64 @@ public final class WeilAgentServer {
     }
 
     // ── A2A ──────────────────────────────────────────────────────────────────
+
+    /** Tells the {@link RunToEnd} waiting on {@code context} that its run has ended. */
+    private static void runEnded(Map<RequestContext, CountDownLatch> runEnds, RequestContext context) {
+        CountDownLatch ended = runEnds.get(context);
+        if (ended != null) {
+            ended.countDown();
+        }
+    }
+
+    /**
+     * ADK's executor, returning only once the agent's run has ended.
+     *
+     * <p>ADK's {@code execute} starts the run and returns without waiting for
+     * it. That is enough while the whole run stays on the thread that started
+     * it, but a tool that moves to another thread, as {@link Weil#remoteTool}
+     * does so that the remote calls of one turn overlap, makes {@code execute}
+     * return at that point. The a2a handler then takes the agent as finished:
+     * it closes the event queue, answers the caller with the task still
+     * "working", and drops the run's real answer when it arrives. An agent
+     * served here that calls another agent as a tool would never answer.</p>
+     *
+     * <p>So this waits, after ADK's {@code execute} returns, for the run's
+     * final status to be queued, signalled by ADK's after-execute callback,
+     * for up to the agent timeout.</p>
+     */
+    private static final class RunToEnd implements io.a2a.server.agentexecution.AgentExecutor {
+        private final AgentExecutor delegate;
+        private final Map<RequestContext, CountDownLatch> runEnds;
+        private final int timeoutSeconds;
+
+        RunToEnd(AgentExecutor delegate, Map<RequestContext, CountDownLatch> runEnds, int timeoutSeconds) {
+            this.delegate = delegate;
+            this.runEnds = runEnds;
+            this.timeoutSeconds = timeoutSeconds;
+        }
+
+        @Override
+        public void execute(RequestContext context, EventQueue queue) throws JSONRPCError {
+            CountDownLatch ended = new CountDownLatch(1);
+            runEnds.put(context, ended);
+            try {
+                delegate.execute(context, queue);
+                if (!ended.await(timeoutSeconds, TimeUnit.SECONDS)) {
+                    System.err.println("[weil] A2A run for task " + context.getTaskId()
+                        + " did not end within " + timeoutSeconds + "s");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                runEnds.remove(context);
+            }
+        }
+
+        @Override
+        public void cancel(RequestContext context, EventQueue queue) throws JSONRPCError {
+            delegate.cancel(context, queue);
+        }
+    }
 
     /**
      * How long a blocking {@code message/send} waits for the agent to finish.
@@ -486,8 +602,9 @@ public final class WeilAgentServer {
 
     /** {@code POST /}: one A2A JSON-RPC call, after the Weil checks pass. */
     private void handleA2A(HttpExchange exchange) throws IOException {
-        // "/" is HttpServer's catch-all context, so anything unrouted lands here.
-        if (!"/".equals(exchange.getRequestURI().getPath())) {
+        // The agent's root is a catch-all context, so anything unrouted under it lands here.
+        String path = exchange.getRequestURI().getPath();
+        if (!path.equals(rpcPath + "/") && !path.equals(rpcPath)) {
             respondText(exchange, 404, "not found");
             return;
         }
@@ -610,9 +727,55 @@ public final class WeilAgentServer {
             metadata.putAll(params.metadata());
         }
         metadata.put(CALLER_METADATA_KEY, caller.canonicalAddress());
+        // The caller's trace, only as the signed message carries it: any
+        // copy in the unsigned request metadata is dropped.
+        metadata.remove(TRACE_METADATA_KEY);
+        Map<String, Object> trace = params.message() == null || params.message().getMetadata() == null
+            ? null
+            : validTrace(params.message().getMetadata().get(TRACE_METADATA_KEY));
+        if (trace != null) {
+            metadata.put(TRACE_METADATA_KEY, trace);
+        }
         return new SendMessageRequest(
             request.getJsonrpc(), request.getId(), request.getMethod(),
             new MessageSendParams(params.message(), params.configuration(), metadata));
+    }
+
+    /**
+     * The trace the verified caller of the run behind {@code ctx} sent, as
+     * {@code {"trace_id", "parent_id"}}, for the run to join; null when there
+     * is none, or the run was not started by a served request.
+     */
+    public static Map<String, Object> callerTrace(InvocationContext ctx) {
+        if (ctx == null || ctx.runConfig() == null) {
+            return null;
+        }
+        Object metadata = ctx.runConfig().customMetadata().get(A2A_METADATA);
+        return metadata instanceof Map<?, ?> map ? validTrace(map.get(TRACE_METADATA_KEY)) : null;
+    }
+
+    /**
+     * {@code value} as a trace context, {@code {"trace_id", "parent_id"}}, or
+     * null when it is not one: a non-blank trace id, and a node id that is
+     * absent or non-blank, neither longer than {@value #MAX_TRACE_ID_LENGTH}.
+     */
+    static Map<String, Object> validTrace(Object value) {
+        if (!(value instanceof Map<?, ?> map)) {
+            return null;
+        }
+        Object traceId = map.get("trace_id");
+        Object parentId = map.get("parent_id");
+        if (!(traceId instanceof String id) || id.isBlank() || id.length() > MAX_TRACE_ID_LENGTH) {
+            return null;
+        }
+        if (parentId != null && (!(parentId instanceof String parent)
+            || parent.isBlank() || parent.length() > MAX_TRACE_ID_LENGTH)) {
+            return null;
+        }
+        Map<String, Object> trace = new HashMap<>();
+        trace.put("trace_id", id);
+        trace.put("parent_id", parentId);
+        return trace;
     }
 
     /**
@@ -797,9 +960,11 @@ public final class WeilAgentServer {
             return;
         }
         try {
-            auditQueue.submit(identity,
-                PermissionGate.agentVerdictCall(
-                    checkedWallet, agent.name(), requiredService, grantedBy), null);
+            // One verdict per organisation the service rule names.
+            for (Call verdict : PermissionGate.agentVerdictCalls(
+                checkedWallet, agent.name(), requiredService, grantedBy)) {
+                auditQueue.submit(identity, verdict, null);
+            }
         } catch (Exception ignored) {
             // recording the verdict must not change it
         }
@@ -889,6 +1054,7 @@ public final class WeilAgentServer {
         private int port = portFromEnv(8001);
         private String bindAddress;
         private String publicUrl;
+        private String rpcPath;
         private int agentTimeoutSeconds = (int) WeilA2A.TIMEOUT_SECONDS;
         private String requiredService;
         private String sentinelHost;
@@ -934,6 +1100,56 @@ public final class WeilAgentServer {
          */
         public Builder publicUrl(String publicUrl) {
             this.publicUrl = publicUrl;
+            return this;
+        }
+
+        /**
+         * Serve the agent under {@code path}, such as "catalog": its calls at
+         * {@code /catalog/} and its card at
+         * {@code /catalog/.well-known/agent-card.json}. Defaults to the root.
+         */
+        public Builder rpcPath(String path) {
+            this.rpcPath = path;
+            return this;
+        }
+
+        /**
+         * Where callers reach the agent, in one URL, such as
+         * {@code http://127.0.0.1:8021/} or
+         * {@code https://agents.example.com/catalog}. Sets what goes in the
+         * card ({@link #publicUrl}) and the path served ({@link #rpcPath}).
+         *
+         * <p>An {@code http} URL with a port is served directly, so it also
+         * sets the port listened on. An {@code https} URL, or one without a
+         * port, names a proxy in front of the agent, which listens on
+         * {@link #port} ({@code PORT}, else 8001) instead.</p>
+         *
+         * @throws IllegalArgumentException for a URL that is not http or https,
+         *     has no host, or carries a query or fragment
+         */
+        public Builder url(String url) {
+            java.net.URI uri;
+            try {
+                uri = new java.net.URI(Objects.requireNonNull(url, "url").trim());
+            } catch (java.net.URISyntaxException e) {
+                throw new IllegalArgumentException("not a URL: " + url, e);
+            }
+            String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(java.util.Locale.ROOT);
+            if (!scheme.equals("http") && !scheme.equals("https")) {
+                throw new IllegalArgumentException("want an http or https URL, got: " + url);
+            }
+            if (uri.getHost() == null) {
+                throw new IllegalArgumentException("no host in: " + url);
+            }
+            if (uri.getRawQuery() != null || uri.getRawFragment() != null) {
+                throw new IllegalArgumentException("a query or fragment cannot be served: " + url);
+            }
+            String path = normalizePath(uri.getPath());
+            this.rpcPath = path;
+            this.publicUrl = scheme + "://" + uri.getRawAuthority() + path + "/";
+            if (scheme.equals("http") && uri.getPort() != -1) {
+                this.port = uri.getPort();
+            }
             return this;
         }
 

@@ -8,8 +8,8 @@ server's weil_middleware() verifies before @secured runs.
 Usage:
     export OPENAI_API_KEY=...
     export WEIL_IDENTITY=...
-    python examples/mcp_server.py             # in one terminal
-    python examples/mcp_client_apikey.py      # in another
+    python examples/mcp/server.py             # in one terminal
+    python examples/mcp/client_identity.py      # in another
 """
 
 import asyncio
@@ -29,7 +29,7 @@ MCP_SERVER_URL = "http://localhost:8001/mcp"
 # step 0
 class MyAgent:
     def __init__(self):
-        self.llm = ChatOpenAIfromADK(
+        self.llm = ChatOpenAI(
             model="gpt-4o-mini",
             temperature=0,
             api_key=os.environ["OPENAI_API_KEY"],

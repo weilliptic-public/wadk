@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 import os
 
-# Allow importing weil_wallet when run as script (e.g. python examples/example.py)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Allow importing weil_wallet when run as script (e.g. python examples/mcp/claude_audit_server.py)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from weil_wallet import Wallet, WeilClient
 
@@ -22,12 +22,13 @@ def _make_client() -> WeilClient:
         os.path.join(script_dir, "wallet.wc"),
         "wallet.wc",
         os.path.join(os.path.dirname(script_dir), "wallet.wc"),
+        os.path.join(os.path.dirname(os.path.dirname(script_dir)), "wallet.wc"),
     ):
         if os.path.isfile(candidate):
             wallet = Wallet.from_account_export_file(candidate)
             return WeilClient(wallet, sentinel_host=os.environ.get("SENTINEL_HOST"))
     raise FileNotFoundError(
-        "wallet.wc not found. Place it in examples/, python/, or cwd."
+        "wallet.wc not found. Place it next to this script, in examples/, python/, or cwd."
     )
 
 

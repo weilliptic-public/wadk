@@ -18,8 +18,7 @@ import (
 )
 
 // ErrTraceNeedsOrg is reported when a run's trace cannot be published because
-// its identity is linked to no org and TraceConfig.Publisher is unset (Python:
-// "tool tracing requires a wallet linked to an organization").
+// its identity is linked to no org and TraceConfig.Publisher is unset.
 var ErrTraceNeedsOrg = errors.New("weiladk: tool tracing requires a wallet linked to an organization")
 
 // DefaultTraceTopic is the publisher topic finished traces go to.
@@ -65,16 +64,27 @@ type TraceConfig struct {
 // form a chain, and calls the model asked for together (in one response) are
 // siblings under the same parent. The args of a call carry
 // "_weil": {"framework": "adk", "tool_call_id": <ADK function call ID>}.
+// A sub-agent run as a tool (NewAgentTool) adds a "subtrace" node, content
+// {"root": its request}, under the tool call's node, and its own tool calls
+// are recorded beneath it, in the calling run's trace.
+//
+// Remote agents join the trace too (Python's mixed traces): NewA2A and
+// RemoteAgent.Call sign the run's trace context (TraceContextOf) into each
+// request, and a traced run serving it (SecureA2A, AgentHTTPHandler) adds a
+// "subtrace" node {"root": request} under the caller's node and records its
+// tool calls beneath it, in the caller's trace, which only the caller
+// creates, indexes and publishes.
 //
 // Every call is signed by the identity resolved for the run's root agent (or
-// the fallback identity) when the run starts. The calls queue on the
-// plugin's dispatcher in that order, so the agent never waits on them; use
-// WithFlushAfterRun to have each run end once they have landed. Failures go
-// to the error handler (see WithErrorHandler) and never fail the run. If
-// add_trace fails, nothing more is recorded for that run.
+// the fallback identity) when the run starts. add_trace and build_trace are
+// submitted without waiting for them to run, queued on the plugin's
+// dispatcher in order, so the agent never waits on them; the end of the run
+// waits for the trace to be published. Failures go to the error handler (see
+// WithErrorHandler) and never fail the run. If add_trace fails, nothing more
+// is recorded for that run.
 //
-// Tool calls made inside an agenttool sub-agent are not seen: ADK runs that
-// agent in a runner of its own, without this plugin.
+// Tool calls made inside a stock agenttool sub-agent are not seen: ADK runs
+// that agent in a runner of its own, without this plugin (use NewAgentTool).
 func WithTracing(cfg TraceConfig) PluginOption {
 	if cfg.Topic == "" {
 		cfg.Topic = DefaultTraceTopic
@@ -91,6 +101,7 @@ func WithTracing(cfg TraceConfig) PluginOption {
 // traceRun is one run's trace.
 type traceRun struct {
 	id        string
+	root      string
 	identity  *Identity
 	tracer    Applet
 	publisher Applet
@@ -100,11 +111,25 @@ type traceRun struct {
 	built atomic.Int64
 
 	mu sync.Mutex
-	// tips is the last node recorded on each ADK branch.
+	// tips is the last node recorded on each ADK branch, keyed by the
+	// recording run's branch prefix (see traceRef) and the branch.
 	tips map[string]string
 	// slots holds the node planned for each tool call the model asked for,
 	// by function call ID, until the call is recorded.
 	slots map[string]traceSlot
+}
+
+// traceRef is how a run records into a trace: its own (prefix ""), or, for
+// a sub-agent run as a tool, the calling run's, with its branches kept apart
+// under a prefix of their own.
+type traceRef struct {
+	t      *tracer
+	run    *traceRun
+	prefix string
+	sub    bool
+	// attached is set for a run serving a remote call that carried the
+	// caller's trace context (see beginAttached): sub is set too.
+	attached bool
 }
 
 // traceSlot is a tool call's node: its ID and its parent's ("" for none).
@@ -112,9 +137,9 @@ type traceSlot struct{ id, parent string }
 
 // tipLocked returns the last node recorded on branch or, for a branch with
 // none yet, on the nearest enclosing branch ("a.b" encloses "a.b.c").
-func (r *traceRun) tipLocked(branch string) string {
+func (r *traceRun) tipLocked(prefix, branch string) string {
 	for b := branch; ; {
-		if tip, ok := r.tips[b]; ok {
+		if tip, ok := r.tips[prefix+b]; ok {
 			return tip
 		}
 		if b == "" {
@@ -133,15 +158,139 @@ func (r *traceRun) tipLocked(branch string) string {
 type tracer struct {
 	cfg  *TraceConfig
 	p    *weilPlugin
-	runs sync.Map // invocation ID -> *traceRun
+	runs sync.Map // invocation ID -> *traceRef
+}
+
+// runTraces holds how each traced run in flight records, by invocation ID,
+// for the audit records written during the run and the trace context of the
+// remote calls it makes.
+var runTraces sync.Map // invocation ID → *traceRef
+
+// traceIDOf returns the ID of the trace the run invocationID records into,
+// or "" if it is not traced.
+func traceIDOf(invocationID string) string {
+	if v, ok := runTraces.Load(invocationID); ok {
+		return v.(*traceRef).run.id
+	}
+	return ""
+}
+
+// TraceContextOf returns the trace context a remote call made from ctx
+// carries — Python's current_trace_context(): the trace of the run ctx
+// belongs to, and the node the callee's events go under (the tool call
+// making the call, else the last node on ctx's branch). It is the context
+// ctx already carries (client.WithTraceContext), if any; in a method served
+// by AgentHTTPHandler outside any ADK run, the trace the method borrowed
+// from its caller; nil when ctx is in no trace.
+//
+// NewA2A and RemoteAgent.Call sign it into their requests. For other calls
+// to Weil agents, pass client.WithTraceContext(ctx, weiladk.TraceContextOf(ctx))
+// to the signing client.
+func TraceContextOf(ctx context.Context) *client.TraceContext {
+	if ctx == nil {
+		return nil
+	}
+	if tc := client.TraceContextFrom(ctx); tc != nil {
+		return tc
+	}
+	var v any
+	if inv, ok := ctx.(interface{ InvocationID() string }); ok {
+		v, ok = runTraces.Load(inv.InvocationID())
+	}
+	if v == nil {
+		// A method served by AgentHTTPHandler, outside any ADK run: the
+		// trace it borrowed, under the event it recorded last.
+		if bt := borrowedTraceFrom(ctx); bt != nil {
+			return bt.context()
+		}
+		return nil
+	}
+	ref := v.(*traceRef)
+	branch, functionCallID := "", ""
+	if b, ok := ctx.(interface{ Branch() string }); ok {
+		branch = b.Branch()
+	}
+	if f, ok := ctx.(interface{ FunctionCallID() string }); ok {
+		functionCallID = f.FunctionCallID()
+	}
+	run := ref.run
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	parent := ""
+	if slot, ok := run.slots[functionCallID]; ok && functionCallID != "" {
+		parent = slot.id
+	} else {
+		parent = run.tipLocked(ref.prefix, branch)
+	}
+	return &client.TraceContext{TraceID: run.id, ParentID: parent}
+}
+
+// contextWithTrace returns ctx carrying TraceContextOf(ctx), once the calls
+// recorded so far in that trace have been submitted (at most
+// traceSyncTimeout), so the callee's events land after the nodes they hang
+// under.
+func contextWithTrace(ctx context.Context) context.Context {
+	tc := TraceContextOf(ctx)
+	if tc == nil {
+		return ctx
+	}
+	if inv, ok := ctx.(interface{ InvocationID() string }); ok {
+		if v, ok := runTraces.Load(inv.InvocationID()); ok {
+			v.(*traceRef).sync(ctx)
+		}
+	}
+	return client.WithTraceContext(ctx, tc)
+}
+
+// traceSyncTimeout bounds how long a remote call waits for its trace's
+// queued calls to be submitted.
+const traceSyncTimeout = 10 * time.Second
+
+// sync waits until the calls queued so far on the trace's lane have run, or
+// traceSyncTimeout passes.
+func (ref *traceRef) sync(ctx context.Context) {
+	if ref.t == nil {
+		return
+	}
+	done := make(chan struct{})
+	if err := ref.t.p.opts.dispatcher.submitOrdered(ctx, "trace:"+ref.run.id, func(context.Context) error {
+		close(done)
+		return nil
+	}); err != nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(traceSyncTimeout):
+	case <-ctx.Done():
+	}
 }
 
 func (t *tracer) report(ev *Event, err error) {
 	t.p.opts.onError(ev, "trace", err)
 }
 
-// begin starts a trace for the run ev belongs to.
+func (t *tracer) ref(invocationID string) (*traceRef, bool) {
+	v, ok := t.runs.Load(invocationID)
+	if !ok {
+		return nil, false
+	}
+	return v.(*traceRef), true
+}
+
+// begin starts a trace for the run ev belongs to or, for a sub-agent run as
+// a tool of a traced run, a subtrace in that run's trace.
 func (t *tracer) begin(ev *Event) {
+	if at, ok := ev.Context().Value(agentToolKey{}).(*agentToolRun); ok {
+		if parent, ok := t.ref(at.invocationID); ok {
+			t.beginSub(ev, at, parent)
+			return
+		}
+	}
+	if tc := attachedTraceContext(ev.Context()); tc != nil {
+		t.beginAttached(ev, tc)
+		return
+	}
 	id, err := t.p.resolveIdentity(nil, ev)
 	if err != nil {
 		t.report(ev, err)
@@ -153,22 +302,95 @@ func (t *tracer) begin(ev *Event) {
 			publisher = AppletName("publisher::" + org.Name)
 		}
 	}
-	run := &traceRun{id: uuid.NewString(), identity: id, tracer: t.cfg.Applet, publisher: publisher,
-		tips: map[string]string{}, slots: map[string]traceSlot{}}
-	t.runs.Store(ev.InvocationID, run)
+	run := &traceRun{id: uuid.NewString(), root: traceRoot(ev.UserContent), identity: id, tracer: t.cfg.Applet,
+		publisher: publisher, tips: map[string]string{}, slots: map[string]traceSlot{}}
+	ref := &traceRef{t: t, run: run}
+	t.runs.Store(ev.InvocationID, ref)
+	runTraces.Store(ev.InvocationID, ref)
 
 	args := pyArgs(struct {
 		TraceID string   `json:"trace_id"`
 		Root    string   `json:"root"`
 		Trace   []string `json:"trace"`
-	}{run.id, traceRoot(ev.UserContent), []string{}})
+	}{run.id, run.root, []string{}})
 	t.submit(ev, run, func(ctx context.Context) error {
-		if _, err := t.invoke(ctx, run, Call{Applet: run.tracer, Method: "add_trace", Args: args}); err != nil {
+		if _, err := t.invoke(ctx, run, Call{Applet: run.tracer, Method: "add_trace", Args: args, FireAndForget: true}); err != nil {
 			run.broken.Store(true)
 			return err
 		}
 		return nil
 	})
+}
+
+// beginSub records a sub-agent run (NewAgentTool) into the calling run's
+// trace: a "subtrace" node {"root": request} under the tool call's node, the
+// parent of the sub-run's tool calls. A sub-run whose request is the calling
+// run's own root adds no node; its calls go under the tool call's node.
+func (t *tracer) beginSub(ev *Event, at *agentToolRun, parent *traceRef) {
+	run := parent.run
+	root := traceRoot(ev.UserContent)
+	ref := &traceRef{t: t, run: run, prefix: uuid.NewString() + ":", sub: true}
+
+	run.mu.Lock()
+	slot, ok := run.slots[at.functionCallID]
+	if !ok {
+		slot = traceSlot{id: uuid.NewString(), parent: run.tipLocked(parent.prefix, at.branch)}
+		if at.functionCallID != "" {
+			run.slots[at.functionCallID] = slot
+		}
+	}
+	tip := slot.id
+	var node *TraceNode
+	if root != run.root {
+		n, err := newTraceNode(uuid.NewString(), slot.id, "subtrace", map[string]any{"root": root})
+		if err != nil {
+			run.mu.Unlock()
+			t.report(ev, fmt.Errorf("encode subtrace: %w", err))
+			return
+		}
+		node, tip = &n, n.ID
+	}
+	run.tips[ref.prefix] = tip
+	run.mu.Unlock()
+
+	t.runs.Store(ev.InvocationID, ref)
+	runTraces.Store(ev.InvocationID, ref)
+	if node != nil {
+		t.build(ev, run, *node)
+	}
+}
+
+// beginAttached records a run serving a remote call (SecureA2A,
+// AgentHTTPHandler) whose caller signed its trace context into the caller's
+// trace, as the Python SDK's attach_trace_context does: a "subtrace" node
+// {"root": request} under the caller's node, the parent of the run's tool
+// calls. The run borrows the trace: it never creates, indexes or publishes
+// it; the caller's run does.
+func (t *tracer) beginAttached(ev *Event, tc *client.TraceContext) {
+	id, err := t.p.resolveIdentity(nil, ev)
+	if err != nil {
+		t.report(ev, err)
+		return
+	}
+	run := &traceRun{id: tc.TraceID, identity: id, tracer: t.cfg.Applet,
+		tips: map[string]string{}, slots: map[string]traceSlot{}}
+	ref := &traceRef{t: t, run: run, sub: true, attached: true}
+	tip := tc.ParentID
+	var node *TraceNode
+	if root := traceRoot(ev.UserContent); root != "" {
+		n, err := newTraceNode(uuid.NewString(), tc.ParentID, "subtrace", map[string]any{"root": root})
+		if err != nil {
+			t.report(ev, fmt.Errorf("encode subtrace: %w", err))
+			return
+		}
+		node, tip = &n, n.ID
+	}
+	run.tips[""] = tip
+	t.runs.Store(ev.InvocationID, ref)
+	runTraces.Store(ev.InvocationID, ref)
+	if node != nil {
+		t.build(ev, run, *node)
+	}
 }
 
 // plan reserves a node for each tool call in a model response, under the
@@ -179,14 +401,14 @@ func (t *tracer) plan(ev *Event, resp *model.LLMResponse) {
 	if resp == nil || resp.Content == nil {
 		return
 	}
-	v, ok := t.runs.Load(ev.InvocationID)
+	ref, ok := t.ref(ev.InvocationID)
 	if !ok {
 		return
 	}
-	run := v.(*traceRun)
+	run := ref.run
 	run.mu.Lock()
 	defer run.mu.Unlock()
-	parent := run.tipLocked(ev.Branch)
+	parent := run.tipLocked(ref.prefix, ev.Branch)
 	for _, p := range resp.Content.Parts {
 		if p == nil || p.FunctionCall == nil || p.FunctionCall.ID == "" {
 			continue
@@ -200,27 +422,28 @@ func (t *tracer) plan(ev *Event, resp *model.LLMResponse) {
 // place returns the node for the tool call ev reports, planned by plan or,
 // for a call it did not see, new under the branch's last node; either way the
 // node becomes the branch's last.
-func (run *traceRun) place(ev *Event) traceSlot {
+func (ref *traceRef) place(ev *Event) traceSlot {
+	run := ref.run
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	slot, ok := run.slots[ev.FunctionCallID]
 	if ok {
 		delete(run.slots, ev.FunctionCallID)
 	} else {
-		slot = traceSlot{id: uuid.NewString(), parent: run.tipLocked(ev.Branch)}
+		slot = traceSlot{id: uuid.NewString(), parent: run.tipLocked(ref.prefix, ev.Branch)}
 	}
-	run.tips[ev.Branch] = slot.id
+	run.tips[ref.prefix+ev.Branch] = slot.id
 	return slot
 }
 
 // record adds a tool call to the run's trace. result is what the model
 // receives for the call.
 func (t *tracer) record(ev *Event, result map[string]any) {
-	v, ok := t.runs.Load(ev.InvocationID)
+	ref, ok := t.ref(ev.InvocationID)
 	if !ok {
 		return
 	}
-	run := v.(*traceRun)
+	run := ref.run
 	if t.cfg.When != nil && !t.cfg.When(ev) {
 		// Not recorded, but the call's planned node is no longer needed.
 		run.mu.Lock()
@@ -228,12 +451,18 @@ func (t *tracer) record(ev *Event, result map[string]any) {
 		run.mu.Unlock()
 		return
 	}
-	slot := run.place(ev)
+	slot := ref.place(ev)
 	event, err := toolCallNode(slot.id, slot.parent, ev.ToolName(), traceArgs(ev.ToolArgs, ev.FunctionCallID), returnValue(ev, result))
 	if err != nil {
 		t.report(ev, fmt.Errorf("encode tool call: %w", err))
 		return
 	}
+	t.build(ev, run, event)
+}
+
+// build appends event to the run's trace with build_trace, submitted without
+// waiting for it to run.
+func (t *tracer) build(ev *Event, run *traceRun, event TraceNode) {
 	args := pyArgs(struct {
 		TraceID string    `json:"trace_id"`
 		Event   TraceNode `json:"event"`
@@ -242,7 +471,7 @@ func (t *tracer) record(ev *Event, result map[string]any) {
 		if run.broken.Load() {
 			return nil
 		}
-		if _, err := t.invoke(ctx, run, Call{Applet: run.tracer, Method: "build_trace", Args: args}); err != nil {
+		if _, err := t.invoke(ctx, run, Call{Applet: run.tracer, Method: "build_trace", Args: args, FireAndForget: true}); err != nil {
 			return err
 		}
 		run.built.Add(1)
@@ -250,17 +479,33 @@ func (t *tracer) record(ev *Event, result map[string]any) {
 	})
 }
 
-// finish fetches the run's trace, indexes it and publishes it.
-func (t *tracer) finish(ev *Event) {
+// finish fetches the run's trace, indexes it and publishes it, and returns a
+// channel closed once that is done (or has failed). A sub-run's subtrace is
+// part of the calling run's trace, which that run finishes. A run attached
+// to a remote caller's trace only waits for its own calls to be submitted,
+// so they land before its reply lets the caller finish the trace.
+func (t *tracer) finish(ev *Event) <-chan struct{} {
+	done := make(chan struct{})
 	v, ok := t.runs.LoadAndDelete(ev.InvocationID)
-	if !ok {
-		return
+	runTraces.Delete(ev.InvocationID)
+	if ok && v.(*traceRef).attached {
+		ref := v.(*traceRef)
+		go func() {
+			defer close(done)
+			ref.sync(context.WithoutCancel(ev.Context()))
+		}()
+		return done
 	}
-	run := v.(*traceRun)
+	if !ok || v.(*traceRef).sub {
+		close(done)
+		return done
+	}
+	run := v.(*traceRef).run
 	topic := t.cfg.Topic
 	report := *ev
 	report.Identity = run.identity
-	t.submit(ev, run, func(ctx context.Context) error {
+	if !t.submit(ev, run, func(ctx context.Context) error {
+		defer close(done)
 		if run.broken.Load() {
 			return nil
 		}
@@ -293,7 +538,10 @@ func (t *tracer) finish(ev *Event) {
 				Payload string `json:"payload"`
 			}{topic, string(payload)})})
 		return err
-	})
+	}) {
+		close(done)
+	}
+	return done
 }
 
 // settledTrace reads the run's trace until it holds every event build_trace
@@ -360,8 +608,9 @@ func (t *tracer) invoke(ctx context.Context, run *traceRun, call Call) (*Result,
 	return t.p.opts.dispatcher.invoke(ctx, run.identity, call)
 }
 
-// submit queues fn on the run's lane, so a trace's calls land in order.
-func (t *tracer) submit(ev *Event, run *traceRun, fn func(context.Context) error) {
+// submit queues fn on the run's lane, so a trace's calls land in order, and
+// reports whether it was queued.
+func (t *tracer) submit(ev *Event, run *traceRun, fn func(context.Context) error) bool {
 	// Report with a copy: ADK may reuse the hook's payload once it returns.
 	report := *ev
 	report.Identity = run.identity
@@ -374,7 +623,9 @@ func (t *tracer) submit(ev *Event, run *traceRun, fn func(context.Context) error
 	})
 	if err != nil {
 		t.report(&report, err)
+		return false
 	}
+	return true
 }
 
 type traceIDArgs struct {
@@ -409,12 +660,17 @@ func ToolCallNode(id, parent, tool string, args, result map[string]any) (TraceNo
 }
 
 func toolCallNode(id, parent, tool string, args map[string]any, result any) (TraceNode, error) {
-	b, err := client.PythonDumpsValue(map[string]any{"tool": tool, "args": args, "result": result}, true)
-	content := string(b)
+	return newTraceNode(id, parent, "tool_call", map[string]any{"tool": tool, "args": args, "result": result})
+}
+
+// newTraceNode is the TraceNode of type eventType whose content is the JSON of
+// content, keys sorted, as the Python SDK stores it.
+func newTraceNode(id, parent, eventType string, content any) (TraceNode, error) {
+	b, err := client.PythonDumpsValue(content, true)
 	if err != nil {
 		return TraceNode{}, err
 	}
-	n := TraceNode{ID: id, EventType: "tool_call", Content: content}
+	n := TraceNode{ID: id, EventType: eventType, Content: string(b)}
 	if parent != "" {
 		n.ParentID = &parent
 	}

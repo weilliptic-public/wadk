@@ -67,7 +67,7 @@ func (s *RemoteSigner) Sign(ctx context.Context, _ *wallet.Account, payload map[
 	}
 
 	body := map[string]any{"payload": payload, "wallet": s.Wallet}
-	if s.Credentials != nil { // sent only when set, as the Python SDK does
+	if s.Credentials != nil { // sent only when set
 		body["credentials"] = s.Credentials
 	}
 	raw, err := api.PostJSONRaw(ctx, s.HTTPClient, s.SentinelHost, "sign_payload", body)

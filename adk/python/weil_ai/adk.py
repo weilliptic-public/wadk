@@ -16,6 +16,7 @@ from .auth import (
     MAX_TIMESTAMP_AGE_SECONDS,
     _body_sha256,
     full_address_from_headers,
+    trace_context_from_headers,
     verify_weil_request,
 )
 from .mcp import (
@@ -27,15 +28,18 @@ from .mcp import (
 )
 from .memory import append_unique_tools, make_adk_pensieve_tools
 from .tracer import (
+    attach_trace_context,
     arecord_tool_call,
     begin_trace,
     current_parent_id,
+    current_trace_context,
     current_trace_id,
     extract_prompt,
     finish_trace,
     reset_trace_parent,
     set_trace_parent,
 )
+from .usage import adk_token_usage, adk_usage_metadata
 
 
 _SECURE_A2A_ATTR = "__weil_secure_a2a__"
@@ -325,9 +329,22 @@ class WeilA2AMiddleware:
             sentinel_host=getattr(self.agent, "_sentinel_host"),
             verify=getattr(self.agent, "_verify"),
         )
+        trace_context = trace_context_from_headers(headers)
+        trace = None
         try:
+            if trace_context is not None:
+                trace = attach_trace_context(
+                    self.agent,
+                    trace_context["trace_id"],
+                    trace_context.get("parent_id"),
+                )
             await self.app(scope, _replay_body(body), send)
         finally:
+            if trace is not None:
+                try:
+                    await finish_trace(trace)
+                except Exception:
+                    pass
             reset_current_wallet_addr(tokens)
 
 
@@ -344,7 +361,10 @@ def _patch_remote_agent(*, owner: Any, remote_agent: Any, audit: bool) -> None:
 
     async def before_request(ctx: Any, a2a_request: Any, parameters: Any) -> tuple[Any, Any]:
         request_payload = _model_to_data(a2a_request)
-        headers = await owner.aget_auth_headers(body=request_payload)
+        headers = await owner.aget_auth_headers(
+            body=request_payload,
+            trace_context=current_trace_context(),
+        )
         _add_request_headers(parameters, headers)
         if audit:
             await _audit(
@@ -405,7 +425,18 @@ def _compose_agent_callbacks(
     The caller (set by the inbound middleware) is authorized at the A2A
     boundary; inside the agent, @secured tools authorize as the agent itself.
     """
-    _compose_tool_callbacks(weil_agent, inner, audit=audit, parent=parent)
+    tool_usage_by_call_id: dict[str, Any] = {}
+    # Usage of model responses with no tool calls (e.g. the final answer),
+    # keyed by run, recorded at adk.agent.after.
+    usage_handles: dict[Any, list] = {}
+    _compose_model_callbacks(inner, tool_usage_by_call_id, usage_handles)
+    _compose_tool_callbacks(
+        weil_agent,
+        inner,
+        audit=audit,
+        parent=parent,
+        tool_usage_by_call_id=tool_usage_by_call_id,
+    )
     if not audit:
         return
 
@@ -418,6 +449,7 @@ def _compose_agent_callbacks(
         run_id = _callback_run_key(ctx)
         trace = begin_trace(weil_agent, _trace_root(ctx))
         trace_handles[run_id] = trace
+        usage_handles[run_id] = []
         _set_trace_handle(ctx, trace)
         if audit:
             await _audit(
@@ -436,6 +468,7 @@ def _compose_agent_callbacks(
     async def after_wrapper(*args: Any, **kwargs: Any) -> Any:
         ctx = _first_context(args, kwargs)
         run_id = _callback_run_key(ctx)
+        usages = usage_handles.pop(run_id, None) or []
         try:
             result = await _maybe_call(after, *args, **kwargs)
             if audit:
@@ -447,7 +480,10 @@ def _compose_agent_callbacks(
                     service=service,
                     wallet=_own_wallet(weil_agent),
                     caller_wallet=_caller_wallet(weil_agent, parent),
+                    usage_metadata=[usage for usage, _ in usages] or None,
                 )
+                for _, token_usage in usages:
+                    await _record_token_usage(weil_agent, token_usage)
             return result
         finally:
             trace = trace_handles.pop(run_id, None) or _get_trace_handle(ctx)
@@ -462,12 +498,24 @@ def _compose_agent_callbacks(
 
 
 def _compose_tool_callbacks(
-    weil_agent: Any, inner: Any, *, audit: bool, parent: Any = None
+    weil_agent: Any,
+    inner: Any,
+    *,
+    audit: bool,
+    parent: Any = None,
+    tool_usage_by_call_id: Optional[dict[str, Any]] = None,
 ) -> None:
     """Run @secured tools as *weil_agent* and audit them with their arguments.
 
-    Only tools guarded by ``@secured_user``/``@secured_admin`` are touched;
-    other tools pass straight through to any callbacks already installed.
+    Every tool call is charged the token usage of the model response that
+    requested it (once per response). Tools guarded by
+    ``@secured_user``/``@secured_admin`` and agents exposed as tools
+    (``AgentTool``, or ``mode='single_turn'``/``'task'`` sub-agents that ADK
+    wraps automatically) are also audited; other tools get no audit record and
+    otherwise pass straight through to any callbacks already installed. Agent
+    tools are audited by metadata only
+    (their request and reply may carry user content), and do not swap the
+    wallet ContextVar: the sub-agent's own tools authorize as that sub-agent.
 
     A secured tool runs with the acting agent's wallet in the ContextVar. The
     token returned when it is set is kept until ADK's matching after-tool
@@ -479,6 +527,7 @@ def _compose_tool_callbacks(
 
     before = getattr(inner, "before_tool_callback", None)
     after = getattr(inner, "after_tool_callback", None)
+    usage_by_call_id = tool_usage_by_call_id if tool_usage_by_call_id is not None else {}
     # Pair each before-tool context token with its after-tool callback.
     tokens: dict[Any, Any] = {}
     tool_trace_contexts: dict[Any, tuple[str, Optional[str], Any]] = {}
@@ -498,6 +547,12 @@ def _compose_tool_callbacks(
         )
         secured = _secured_tool_info(tool)
         try:
+            if secured is None and audit and (agent_info := _agent_tool_info(tool)):
+                await _audit(
+                    weil_agent,
+                    "adk.tool.before",
+                    **_tool_context(weil_agent, inner, tool, tool_context, agent_info, parent),
+                )
             if secured is not None:
                 if audit:
                     await _audit(
@@ -540,16 +595,28 @@ def _compose_tool_callbacks(
                 event_id=event_id,
                 parent_id=parent_id,
             )
-            secured = _secured_tool_info(tool)
-            if audit and secured is not None:
-                await _audit(
-                    weil_agent,
-                    "adk.tool.after",
-                    **_tool_context(weil_agent, inner, tool, tool_context, secured, parent),
-                    # A user after-callback may replace the tool result; record
-                    # what the model actually receives.
-                    response=final_response,
+            if audit:
+                # Every tool call is charged the usage of the model response
+                # that requested it; only secured and agent tools also get an
+                # audit record.
+                usage_metadata, token_usage = _claim_model_usage(
+                    usage_by_call_id, _tool_call_id(tool_context)
                 )
+                secured = _secured_tool_info(tool)
+                agent_info = _agent_tool_info(tool) if secured is None else None
+                if secured is not None or agent_info is not None:
+                    await _audit(
+                        weil_agent,
+                        "adk.tool.after",
+                        **_tool_context(
+                            weil_agent, inner, tool, tool_context, secured or agent_info, parent
+                        ),
+                        # A user after-callback may replace the tool result; record
+                        # what the model actually receives. Agent tools: metadata only.
+                        response=final_response if secured is not None else None,
+                        usage_metadata=usage_metadata,
+                    )
+                await _record_token_usage(weil_agent, token_usage)
             return result
         finally:
             if parent_token is not None and not restored:
@@ -559,6 +626,98 @@ def _compose_tool_callbacks(
 
     _set_callback(inner, "before_tool_callback", before_tool_wrapper)
     _set_callback(inner, "after_tool_callback", after_tool_wrapper)
+
+
+def _compose_model_callbacks(
+    inner: Any, usage_by_call_id: dict[str, Any], usage_handles: dict[Any, list]
+) -> None:
+    if not hasattr(inner, "after_model_callback"):
+        return
+
+    after = getattr(inner, "after_model_callback", None)
+
+    async def after_model_wrapper(*args: Any, **kwargs: Any) -> Any:
+        result = await _maybe_call(after, *args, **kwargs)
+        llm_response = _model_callback_response(args, kwargs)
+        final_response = result if result is not None else llm_response
+        run_usages = usage_handles.get(_callback_run_key(_first_context(args, kwargs)))
+        _remember_adk_model_usage(final_response, usage_by_call_id, run_usages)
+        return result
+
+    _set_callback(inner, "after_model_callback", after_model_wrapper)
+
+
+def _model_callback_response(args: tuple, kwargs: dict) -> Any:
+    if "llm_response" in kwargs:
+        return kwargs["llm_response"]
+    return args[1] if len(args) > 1 else None
+
+
+def _remember_adk_model_usage(
+    response: Any, usage_by_call_id: dict[str, Any], run_usages: Optional[list] = None
+) -> None:
+    """Map each function-call id in *response* to the response's usage.
+
+    ``usage_metadata`` is the raw dump for the audit record; ``token_usage`` is
+    ``(model, TokenUsage, timestamp)`` for agent_registry, or None if it has no
+    tokens. The timestamp is taken here, when the model response arrives.
+    All function calls of one response share one entry, so the response is
+    charged once however many tools it calls (see ``_claim_model_usage``).
+    A response with no function calls (e.g. the final answer) is appended to
+    *run_usages* instead, to be recorded at adk.agent.after.
+    """
+    usage = adk_usage_metadata(response)
+    if usage is None or not hasattr(response, "get_function_calls"):
+        return
+    token_usage = adk_token_usage(response)
+    if token_usage is not None:
+        token_usage = (*token_usage, _now_iso())
+    function_calls = response.get_function_calls()
+    if not function_calls:
+        if run_usages is not None:
+            run_usages.append((usage, token_usage))
+        return
+    entry = {"usage": usage, "token_usage": token_usage, "claimed": False}
+    for function_call in function_calls:
+        call_id = getattr(function_call, "id", None)
+        if call_id:
+            usage_by_call_id[str(call_id)] = entry
+
+
+def _claim_model_usage(
+    usage_by_call_id: dict[str, Any], call_id: Optional[str]
+) -> tuple[Any, Any]:
+    """``(usage_metadata, token_usage)`` of the model response that requested
+    *call_id*, removing the call's entry. Returns ``(None, None)`` when there is
+    none, or when another tool call from the same response already claimed it.
+    """
+    entry = usage_by_call_id.pop(call_id, None) if call_id else None
+    if entry is None or entry["claimed"]:
+        return None, None
+    entry["claimed"] = True
+    return entry["usage"], entry["token_usage"]
+
+
+def _agent_tool_info(tool: Any) -> Optional[dict[str, Any]]:
+    """Audit fields for an agent exposed as a tool, or None for other tools.
+
+    Covers ``AgentTool`` and its subclasses, including the
+    ``_SingleTurnAgentTool``/``_TaskAgentTool`` ADK adds for sub-agents with
+    ``mode='single_turn'``/``'task'``. Matched by class name so this works
+    without importing ADK and across ADK versions.
+    """
+    agent = getattr(tool, "agent", None)
+    if agent is None or not any(cls.__name__ == "AgentTool" for cls in type(tool).__mro__):
+        return None
+    proxy = getattr(agent, "__weil_agent__", None)
+    return {
+        "tool_kind": "agent",
+        "sub_agent": getattr(agent, "name", None) or None,
+        "sub_agent_mode": str(getattr(agent, "mode", None) or "") or None,
+        "sub_agent_wallet": (
+            _own_wallet(proxy) if proxy is not None and _has_own_identity(proxy) else None
+        ),
+    }
 
 
 def _tool_callback_args(args: tuple, kwargs: dict) -> tuple[Any, Any, Any]:
@@ -760,6 +919,21 @@ async def _audit(weil: Any, event: str, **fields: Any) -> None:
             **{k: v for k, v in {"trace_id": current_trace_id(), **fields}.items() if v is not None},
         }
         result = weil._audit_async(json.dumps(payload, default=repr))
+        if inspect.isawaitable(result):
+            await result
+    except Exception:
+        return
+
+
+async def _record_token_usage(weil: Any, token_usage: Any) -> None:
+    """Send ``(model, TokenUsage, timestamp)`` to ``agent_registry::weil`` on
+    the agent's home pod. A no-op when *token_usage* is None; failures are
+    swallowed so usage tracking never breaks an agent run."""
+    if token_usage is None:
+        return
+    try:
+        model, usage, timestamp = token_usage
+        result = weil._record_token_usage_async(model, usage, timestamp)
         if inspect.isawaitable(result):
             await result
     except Exception:

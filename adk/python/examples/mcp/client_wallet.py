@@ -5,10 +5,10 @@ weil_middleware() can verify ownership before any tool is called.
 
 Usage:
     # start the server first
-    python examples/mcp_server.py
+    python examples/mcp/server.py
 
     # then run this client
-    python examples/mcp_client.py
+    python examples/mcp/client_wallet.py
 """
 
 import asyncio
@@ -32,12 +32,13 @@ def create_weil_client() -> WeilClient:
         os.path.join(script_dir, "wallet.wc"),
         "wallet.wc",
         os.path.join(os.path.dirname(script_dir), "wallet.wc"),
+        os.path.join(os.path.dirname(os.path.dirname(script_dir)), "wallet.wc"),
     ):
         if os.path.isfile(candidate):
             wallet = Wallet.from_account_export_file(candidate)
             return WeilClient(wallet)
     raise FileNotFoundError(
-        "wallet.wc not found. Place it in examples/, python/, or cwd."
+        "wallet.wc not found. Place it next to this script, in examples/, python/, or cwd."
     )
 
 

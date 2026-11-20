@@ -19,7 +19,7 @@ import (
 	"github.com/weilliptic-public/wadk/adk/go/weil_adk/examples/ported/adk_team/internal/team"
 )
 
-// settings.py
+// Settings.
 var (
 	githubBaseURL      = "https://api.github.com"
 	owner, repo        string
@@ -61,8 +61,6 @@ func loadSettings() {
 		OnRequest: func() { apiCallCount.Add(1) },
 	}
 }
-
-// utils.py
 
 var (
 	github       *team.HTTP
@@ -162,8 +160,6 @@ func getTargetIssues(owner, repo string) ([]int, error) {
 	}
 	return numbers, nil
 }
-
-// agent.py
 
 //go:embed PROMPT_INSTRUCTION.txt
 var promptTemplate string

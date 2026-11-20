@@ -127,7 +127,7 @@ var (
 
 // DefaultSentinelHost is the Sentinel the examples use when
 // WEIL_SENTINEL_HOST is not set: the dev platform.
-const DefaultSentinelHost = "https://sentinel.weilliptic.ai"
+const DefaultSentinelHost = ""//https://sentinel.weilliptic.ai
 
 // SentinelHost is WEIL_SENTINEL_HOST, or DefaultSentinelHost.
 func SentinelHost() string {

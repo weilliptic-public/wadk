@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
-REPO_ROOT = EXAMPLE_DIR.parent
+REPO_ROOT = EXAMPLE_DIR.parents[1]
 sys.path = [path for path in sys.path if Path(path or ".").resolve() != EXAMPLE_DIR]
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -80,7 +80,7 @@ def install_graph_trace_logger() -> None:
     weil_tracer.build_trace = logging_build_trace
 
 
-@weil_ai.agent(identity=IDENTITY, verify=VERIFY_SENTINEL_TLS)
+@weil_ai.agent(identity=IDENTITY, verify=False)
 def create_order_agent():
     model = ChatOpenAI(
         model=MODEL,

@@ -5,11 +5,11 @@ Loads the wallet securely (native secure memory) either from a wallet.wc file
 or from the Agent Registry via an agent identity (masked wallet + remote signing).
 
 Examples:
-    python examples/test_secure_wallet_linux.py --wallet wallet.wc
-    python examples/test_secure_wallet_linux.py --wallet wallet.wc --mode no-core
-    python examples/test_secure_wallet_linux.py --wallet wallet.wc --mode inspect-core
-    python examples/test_secure_wallet_linux.py --identity "$WEIL_IDENTITY"
-    python examples/test_secure_wallet_linux.py --identity "$WEIL_IDENTITY" --mode no-core
+    python examples/wallet/test_secure_wallet_linux.py --wallet wallet.wc
+    python examples/wallet/test_secure_wallet_linux.py --wallet wallet.wc --mode no-core
+    python examples/wallet/test_secure_wallet_linux.py --wallet wallet.wc --mode inspect-core
+    python examples/wallet/test_secure_wallet_linux.py --identity "$WEIL_IDENTITY"
+    python examples/wallet/test_secure_wallet_linux.py --identity "$WEIL_IDENTITY" --mode no-core
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from weil_ai import WeilAgent
 from weil_wallet import Wallet
@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--sentinel",
-        default="https://sentinel-local.weilliptic.ai",
+        default="https://sentinel.weilliptic.ai",
     )
     parser.add_argument(
         "--mode",

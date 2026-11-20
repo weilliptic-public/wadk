@@ -11,14 +11,14 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import weil_ai
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
-_KEY = Path(__file__).resolve().parent.parent / "private_key.wc"
+_KEY = Path(__file__).resolve().parents[2] / "wallet.wc"
 
 
 @tool

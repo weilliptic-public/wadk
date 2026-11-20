@@ -72,6 +72,10 @@ type Action struct {
 	Timeout time.Duration
 	// Identity, if set, overrides the plugin's resolver for this action.
 	Identity IdentityResolver
+
+	// background submits the call as an audit entry (submitAudit), which
+	// the end of the agent's run waits for, instead of on the dispatcher.
+	background bool
 }
 
 func (a *Action) label() string {

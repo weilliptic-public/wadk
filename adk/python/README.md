@@ -325,14 +325,14 @@ async def call_tool(name: str, arguments: dict):
 
 ## Examples
 
-| File                          | Description                                           |
-| ----------------------------- | ----------------------------------------------------- |
-| `examples/example.py`         | Basic wallet setup and contract execution             |
-| `examples/example_derived.py` | Mnemonic wallet derivation and account usage          |
-| `examples/langchain.py`       | LangChain agent wrapped with `@weil_ai.agent`         |
-| `examples/claude_mcp.py`      | Stdio MCP server with on-chain audit logging          |
-| `examples/mcp_server.py`      | HTTP MCP server with `weil_middleware` and `@secured` |
-| `examples/mcp_client.py`      | MCP client using signed auth headers                  |
-| `examples/audit_example.py`   | Direct audit log submission                           |
-| `examples/agent_trace.py`     | Agent tracing example                                 |
-| `examples/verify_me.py`       | Standalone signature verification                     |
+| File                                  | Description                                           |
+| ------------------------------------- | ----------------------------------------------------- |
+| `examples/wallet/contract_call.py`    | Basic wallet setup and contract execution             |
+| `examples/wallet/derived_accounts.py` | Mnemonic wallet derivation and account usage          |
+| `examples/langchain/basic_agent.py`   | LangChain agent wrapped with `@weil_ai.agent`         |
+| `examples/mcp/claude_audit_server.py` | Stdio MCP server with on-chain audit logging          |
+| `examples/mcp/server.py`              | HTTP MCP server with `weil_middleware` and `@secured` |
+| `examples/mcp/client_wallet.py`       | MCP client using signed auth headers                  |
+| `examples/audit/basic_audit.py`       | Direct audit log submission                           |
+| `examples/tracer/agent_trace.py`      | Agent tracing example                                 |
+| `examples/auth/verify_signature.py`   | Standalone signature verification                     |

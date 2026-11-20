@@ -146,7 +146,7 @@ system instruction, so the agent needs none of its own.
 | The root agent and its `subAgents` | Yes: the whole tree in the run |
 | A local agent behind `Weil.agentTool(agent)` | Yes: it is handed the plugins; its run is a `subtrace` node in the caller's trace |
 | A local agent behind ADK's `AgentTool.create(agent)` | **No**: not audited, gated or traced. If it holds `@WeilSecured` tools, the call is refused rather than run unchecked |
-| A remote agent (`remoteTool`, `remoteAgent`) | No: it runs in its own process, with its own plugin and wallet |
+| A remote agent (`remoteTool`, `remoteAgent`) | Its own process, plugin and wallet audit and gate it. Both carry the caller's trace, so the remote run is a `subtrace` node in the caller's trace and publishes nothing of its own. A `remoteAgent` hand-over also adds a `remote_agent` node after the transfer, holding the remote agent's reply |
 
 ### 2.3 Built by hand: `WeilPlugin.builder`
 
@@ -190,8 +190,9 @@ Two levels:
 
 Both ask the chain whether a wallet holds **Execution** or **Management** (or
 **Management** only, for admin) in a subgroup written `"<subgroup>.<org>"`,
-such as `engg.weil`. On a served agent the wallet checked is the caller's,
-otherwise the agent's own. Every verdict is published to the `security` topic.
+such as `engg.weil`. The agent level checks the A2A caller's wallet; the tool
+level checks the local agent's own wallet, whether or not it was called over
+A2A. Every verdict is published to the `security` topic.
 
 ### 3.1 Agent level: who may call
 

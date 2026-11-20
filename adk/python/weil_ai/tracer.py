@@ -22,6 +22,8 @@ from weil_wallet import WeilClient
 from weil_wallet.contract import ContractId
 from weil_wallet.transaction import TransactionResult
 
+from .mcp import _run_sync
+
 
 @dataclass
 class TraceState:
@@ -57,6 +59,7 @@ class TraceHandle:
     active: bool
     handle_token: Optional[contextvars.Token] = None
     parent_token: Optional[contextvars.Token] = None
+    publish_on_finish: bool = True
 
 
 _CURRENT_TRACE: contextvars.ContextVar[Optional[TraceState]] = contextvars.ContextVar(
@@ -138,6 +141,54 @@ def current_trace_id() -> Optional[str]:
     return state.trace_id if state is not None else None
 
 
+def current_trace_context() -> Optional[dict[str, str]]:
+    """Return the signed propagation context for outbound remote calls."""
+    state = _CURRENT_TRACE.get()
+    if state is None:
+        return None
+    context = {"trace_id": state.trace_id}
+    parent_id = current_parent_id()
+    if parent_id is not None:
+        context["parent_id"] = parent_id
+    return context
+
+
+def attach_trace_context(
+    owner: Any,
+    trace_id: Any,
+    parent_id: Any = None,
+    *,
+    root: Any = "",
+) -> Optional[TraceHandle]:
+    """Borrow an existing trace for the current process-local context.
+
+    Remote callees use this after verifying an inbound request. The returned
+    handle lets framework callbacks append events to ``trace_id`` but never
+    creates, indexes, or publishes the trace; the creator remains responsible
+    for finalization.
+    """
+    if not trace_id:
+        return None
+    if _CURRENT_TRACE.get() is not None:
+        return TraceHandle(owner=owner, token=None, active=False)
+    state = TraceState(
+        trace_id=str(trace_id),
+        root=serialize_root(root),
+        initialized=True,
+    )
+    handle = TraceHandle(
+        owner=owner,
+        token=_CURRENT_TRACE.set(state),
+        active=True,
+        publish_on_finish=False,
+    )
+    handle.handle_token = _CURRENT_HANDLE.set(handle)
+    handle.parent_token = _CURRENT_PARENT_ID.set(
+        str(parent_id) if parent_id is not None else None
+    )
+    return handle
+
+
 def current_parent_id() -> Optional[str]:
     """Return the parent node id for new events in the current execution branch."""
     parent_id = _CURRENT_PARENT_ID.get()
@@ -189,6 +240,8 @@ async def finish_trace(handle: TraceHandle) -> Optional[TransactionResult]:
             return None
         if not state.initialized:
             return None
+        if not handle.publish_on_finish:
+            return None
         return await _finish_initialized_trace(handle.owner, state)
     finally:
         handle.active = False
@@ -211,13 +264,13 @@ def finish_trace_sync(handle: TraceHandle) -> Optional[TransactionResult]:
             _CURRENT_PARENT_ID.reset(handle.parent_token)
             handle.parent_token = None
         return None
-    from .mcp import _run_sync
-
     state = _CURRENT_TRACE.get()
     try:
         if state is None:
             return None
         if not state.initialized:
+            return None
+        if not handle.publish_on_finish:
             return None
         return _run_sync(_finish_initialized_trace(handle.owner, state))
     finally:
@@ -393,15 +446,17 @@ def _parent_key(parent_id: Any) -> str:
     return "__root__" if parent_id is None else str(parent_id)
 
 
-async def initialize_trace(owner: Any, state: TraceState) -> TransactionResult:
+async def initialize_trace(owner: Any, state: TraceState) -> None:
     """Create the trace record in the tracer contract.
 
-    The trace starts with the run root and an empty event list. On success,
-    ``state.initialized`` is set so future tool events can be appended
-    incrementally.
+    The trace starts with the run root and an empty event list. The submission
+    is non-blocking, so its response does not guarantee execution has finished.
+    Once submission returns, ``state.initialized`` permits tool events to be
+    submitted incrementally.
     """
     contract_id = await _tracer_contract_id(owner, state)
-    result = await _execute_tracer(
+    state.contract_id = contract_id
+    await _execute_tracer(
         owner,
         state,
         "add_trace",
@@ -410,18 +465,15 @@ async def initialize_trace(owner: Any, state: TraceState) -> TransactionResult:
             "root": state.root,
             "trace": [],
         },
+        is_non_blocking=True,
     )
     state.initialized = True
-    state.contract_id = contract_id
-    return result
 
 
-def initialize_trace_sync(owner: Any, state: TraceState) -> Optional[TransactionResult]:
+def initialize_trace_sync(owner: Any, state: TraceState) -> None:
     """Synchronous bridge for :func:`initialize_trace`."""
-    from .mcp import _run_sync
 
-    return _run_sync(initialize_trace(owner, state))
-
+    _run_sync(initialize_trace(owner, state))
 
 async def build_trace(
     owner: Any,
@@ -437,6 +489,7 @@ async def build_trace(
             "trace_id": state.trace_id,
             "event": contract_trace_event(event),
         },
+        is_non_blocking=True,
     )
 
 
@@ -446,8 +499,6 @@ def build_trace_sync(
     event: str,
 ) -> Optional[TransactionResult]:
     """Synchronous bridge for :func:`build_trace`."""
-    from .mcp import _run_sync
-
     return _run_sync(build_trace(owner, state, event))
 
 
@@ -505,13 +556,15 @@ async def _finish_initialized_trace(owner: Any, state: TraceState) -> Transactio
     return await publish_trace(owner, trace)
 
 
-async def submit_trace(owner: Any, state: TraceState) -> TransactionResult:
+async def submit_trace(owner: Any, state: TraceState) -> Optional[TransactionResult]:
     """Initialize a trace and append events already present in ``state``.
 
     This is a compatibility helper for callers that build ``TraceState.trace``
-    before initializing the contract-backed trace.
+    before initializing the contract-backed trace. Returns the last build
+    result, or None when there are no events.
     """
-    result = await initialize_trace(owner, state)
+    await initialize_trace(owner, state)
+    result = None
     for event in state.trace:
         result = await build_trace(owner, state, event)
     return result

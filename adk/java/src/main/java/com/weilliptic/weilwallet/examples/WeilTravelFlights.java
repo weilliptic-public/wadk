@@ -28,7 +28,7 @@ public final class WeilTravelFlights {
     /** The subgroup a caller must be permitted in to reach this agent at all. */
     static final String AGENT_SERVICE = "engg.weil";
 
-    /** The subgroup a caller must be permitted in to use searchFlights. */
+    /** The subgroup this agent's own wallet must be permitted in to run searchFlights. */
     static final String FLIGHT_SERVICE = "finance.weil";
 
     public static class Tools {

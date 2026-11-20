@@ -3,16 +3,22 @@
 //
 // A caller proves its wallet with signed auth headers (client.AuthHeaders);
 // Middleware verifies them and puts the caller in the request context. A
-// gate (Require, or the MCP and ADK wrappers built on it) then asks the
-// org's identity applet (identity::<org>) key_has_purpose for the purpose the
-// scope demands:
+// gate (Require, or the MCP and ADK wrappers built on it) then asks each
+// org's identity applet (identity::<org>) key_has_purpose for the purpose
+// the rule demands:
 //
 //	"engg.weil"  → subgroup "engg" of org "weil": key "engg_<wallet>"
 //	"weil"       → org-level: key "<wallet>"
 //
+// A rule is one scope or a boolean Rule over several, e.g.
+// "(engg.weil | legal.weil) & !contractors.weil" — the same language and
+// evaluation as Python's weil_ai.secured_expr and the Rust macros.
+//
 // User level accepts the Execution or Management purpose, Admin level only
 // Management. As in the on-chain #[secured] macro, an org-level key also
-// satisfies a subgroup scope (see StrictSubgroups).
+// satisfies a subgroup condition, and a wallet with org-level access in
+// every org a rule names passes without the rule being evaluated (see
+// StrictSubgroups).
 package secured
 
 import (
@@ -26,11 +32,9 @@ import (
 type Level int
 
 const (
-	// User accepts keys with the Execution or Management purpose
-	// (Python: secured_user).
+	// User accepts keys with the Execution or Management purpose.
 	User Level = iota
-	// Admin accepts only keys with the Management purpose
-	// (Python: secured_admin).
+	// Admin accepts only keys with the Management purpose.
 	Admin
 )
 
@@ -56,58 +60,35 @@ func (l Level) purposes() []string {
 	return []string{PurposeManagement, PurposeExecution}
 }
 
-// Scope is a parsed "subgroup.org" or "org" service scope.
-type Scope struct {
-	Org      string
-	Subgroup string
+// ValidateRule reports whether rule is a valid gate rule: it parses, and
+// uses dot syntax ("subgroup.org", never an applet name like
+// "identity::weil"). Gates call it when they are built, so a malformed rule
+// fails then rather than on the first call. Errors match ErrBadRule.
+func ValidateRule(rule string) error {
+	_, err := parseGateRule(rule)
+	return err
 }
 
-// ParseScope parses "subgroup.org" or "org". It is not an applet name: the
-// org's identity applet is identity::<org>.
-func ParseScope(s string) (Scope, error) {
-	v := strings.TrimSpace(s)
-	switch {
-	case v == "":
-		return Scope{}, errors.New("secured: scope must not be empty")
-	case strings.Contains(v, "::"):
-		return Scope{}, fmt.Errorf(`secured: scope %q must use dot syntax, e.g. "subgroup.org"`, s)
-	case !strings.Contains(v, "."):
-		return Scope{Org: v}, nil
+func parseGateRule(rule string) (Rule, error) {
+	if strings.Contains(rule, "::") {
+		return nil, badRule(`scope %q must use dot syntax, e.g. "subgroup.org"`, rule)
 	}
-	subgroup, org, _ := strings.Cut(v, ".")
-	if subgroup == "" || org == "" {
-		return Scope{}, fmt.Errorf(`secured: scope %q must be "subgroup.org" or "org"`, s)
-	}
-	return Scope{Org: org, Subgroup: subgroup}, nil
+	return ParseRule(rule)
 }
 
-func (s Scope) String() string {
-	if s.Subgroup == "" {
-		return s.Org
-	}
-	return s.Subgroup + "." + s.Org
-}
+// identityApplet is the service name of org's identity applet, which holds
+// the keys and their purposes.
+func identityApplet(org string) string { return "identity::" + org }
 
-// IdentityApplet is the service name of the org's identity applet.
-func (s Scope) IdentityApplet() string { return "identity::" + s.Org }
-
-// PublisherApplet is the service name of the org's publisher applet, where
+// publisherApplet is the service name of org's publisher applet, where
 // secured-check verdicts go.
-func (s Scope) PublisherApplet() string { return "publisher::" + s.Org }
-
-// Key is the identity-applet key of wallet within the scope.
-func (s Scope) Key(wallet string) string {
-	if s.Subgroup == "" {
-		return wallet
-	}
-	return s.Subgroup + "_" + wallet
-}
+func publisherApplet(org string) string { return "publisher::" + org }
 
 // ErrNotPermitted is matched by every *NotPermittedError.
 var ErrNotPermitted = errors.New("wallet not permitted")
 
 // NotPermittedError is returned when a caller lacks the permission a gate
-// demands (Python: WalletNotPermittedError, same message).
+// demands. Its message is the one the other Weil SDKs give.
 type NotPermittedError struct {
 	Wallet  string
 	Service string
@@ -120,14 +101,14 @@ func (e *NotPermittedError) Error() string {
 
 func (e *NotPermittedError) Is(target error) bool { return target == ErrNotPermitted }
 
-// Require checks that the verified caller in ctx (see Middleware) holds the
-// permission scope and level demand, using the Checker in ctx (or the
+// Require checks that the verified caller in ctx (see Middleware) satisfies
+// rule at level, using the Checker in ctx (or the
 // default one). It is the gate secured_user / secured_admin run before a
 // tool; a missing caller is denied.
-func Require(ctx context.Context, scope string, level Level) error {
+func Require(ctx context.Context, rule string, level Level) error {
 	caller, ok := CallerFromContext(ctx)
 	if !ok {
-		return &NotPermittedError{Service: scope, Level: level}
+		return &NotPermittedError{Service: rule, Level: level}
 	}
-	return checkerFrom(ctx).Check(ctx, caller.Address, scope, level)
+	return checkerFrom(ctx).Check(ctx, caller.Address, rule, level)
 }

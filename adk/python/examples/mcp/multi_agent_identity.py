@@ -1,6 +1,6 @@
 """Multiple identity agents calling a secured MCP tool.
 
-Run ``examples/mcp_server.py`` separately, then provide identities for agents
+Run ``examples/mcp/server.py`` separately, then provide identities for agents
 that should both pass and fail ``@secured("engg.weil")``.
 """
 

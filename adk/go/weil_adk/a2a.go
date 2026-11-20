@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -35,8 +36,8 @@ import (
 //
 //	Python (weil_ai)                          Go (weiladk)
 //	agent.setup_secure_a2a()  (caller)        weiladk.NewA2A(id, remoteagent.A2AConfig{...})
-//	agent.to_secure_a2a(service=...)          weiladk.SecureA2A(handler, agent, weiladk.WithService(...))
-//	                                          + weiladk.NewExecutor(adka2a.ExecutorConfig{...})
+//	agent.setup_secure_a2a(service=...)       weiladk.SecureA2A(handler, agent, weiladk.WithService(...))
+//	  + agent.to_secure_a2a()                 + weiladk.NewExecutor(adka2a.ExecutorConfig{...})
 //	@secured_user / @secured_admin on tools   weiladk.SecuredUser / weiladk.SecuredAdmin
 //	caller_wallet in audit records            weiladk.CallerFromContext(ctx)
 //
@@ -57,10 +58,11 @@ import (
 type Caller = client.AuthCaller
 
 // CallerFromContext returns who invoked the agent acting in ctx — what the
-// Python SDK records as caller_wallet:
+// audit records carry as caller_wallet:
 //
 //   - for an agent with an identity of its own (Bind) nested under another
-//     bound agent, that enclosing agent's wallet;
+//     bound agent, or run as a tool of one (NewAgentTool), that enclosing
+//     agent's wallet;
 //   - otherwise, in a run serving an A2A request (SecureA2A), the request's
 //     verified caller;
 //   - otherwise (a local run of the root agent) none.
@@ -74,6 +76,11 @@ func CallerFromContext(ctx context.Context) (*Caller, bool) {
 	if a := actingAgent(ctx); a != nil && boundTo(a) != nil {
 		if parent := enclosingOf(a); parent != nil {
 			return &Caller{Address: parent.Address(), Canonical: true}, true
+		}
+		// A sub-agent run as a tool (NewAgentTool) is called by the agent
+		// whose tool it is.
+		if at, ok := ctx.Value(agentToolKey{}).(*agentToolRun); ok && at.caller != nil {
+			return &Caller{Address: at.caller.Address(), Canonical: true}, true
 		}
 	}
 	return secured.CallerFromContext(ctx)
@@ -114,7 +121,8 @@ func newA2AOptions(opts []A2AOption) *a2aOptions {
 
 // WithService gates a served agent on its callers holding the Execution or
 // Management purpose in scope ("subgroup.org" or "org"), as
-// to_secure_a2a(service=...) does. Without it any verified caller is served.
+// setup_secure_a2a(service=...) does. Without it any verified caller is
+// served.
 func WithService(scope string) A2AOption {
 	return func(o *a2aOptions) { o.service = scope }
 }
@@ -126,9 +134,8 @@ func WithAuthorize(f func(ctx context.Context, caller *Caller) error) A2AOption 
 	return func(o *a2aOptions) { o.authorize = f }
 }
 
-// AllowAnonymousCallers no longer has any effect: as in the Python SDK, a
-// request without a caller identity is always refused, so no run starts
-// without a named caller.
+// AllowAnonymousCallers has no effect: a request without a caller identity
+// is always refused, so no run starts without a named caller.
 //
 // Deprecated: anonymous requests are refused; sign them (NewA2A,
 // Identity.HTTPClient).
@@ -168,16 +175,18 @@ func WithoutAudit() A2AOption {
 	return func(o *a2aOptions) { o.noAudit = true }
 }
 
-// WithoutAgentAudit stops only the adk.agent.* and adk.tool.* records of a
-// served agent (NewExecutor, ToSecureA2A), keeping the a2a.* records of the
-// gate — Python's setup_secure_a2a(audit=False) behind to_secure_a2a.
+// WithoutAgentAudit stops only the adk.agent.* and adk.tool.* records, and
+// the run traces, of a served agent (NewExecutor, ToSecureA2A), keeping the
+// a2a.* records of the gate — Python's setup_secure_a2a(audit=False) behind
+// to_secure_a2a.
 func WithoutAgentAudit() A2AOption {
 	return func(o *a2aOptions) { o.noAgentAudit = true }
 }
 
 // WithAuditDispatcher runs the executor plugin's queued work (run traces) on
-// d instead of the default dispatcher. Audit records are not queued: they are
-// submitted inline, in order, as the Python SDK awaits them.
+// d instead of the default dispatcher. Audit records do not use it: each is
+// submitted in the background and the end of the agent's run waits for them
+// (see FlushAudits).
 func WithAuditDispatcher(d *Dispatcher) A2AOption {
 	return func(o *a2aOptions) { o.dispatcher = d }
 }
@@ -240,44 +249,72 @@ func NewA2A(id *Identity, cfg remoteagent.A2AConfig, opts ...A2AOption) (agent.A
 		return nil, errors.New("weiladk: NewA2A signs requests through its own ClientProvider; leave A2AConfig.ClientProvider unset")
 	}
 
-	// Python's audits name the remote agent only: its target_url always
-	// comes out empty (the ADK config it reads has no url), so it is left
-	// out here too.
-	targetFields := func() map[string]any { return map[string]any{"target": cfg.Name} }
+	// The audits name the remote agent only: there is no target_url, as the
+	// Python SDK's always comes out empty (the ADK config it reads has no
+	// url).
+	targetFields := func() map[string]any { return map[string]any{"target": nilIfEmpty(cfg.Name)} }
+
+	// The trace context of the run sending each message, by message ID,
+	// signed into the request so the remote agent records into the same
+	// trace (Python: before_request's trace_context=current_trace_context()).
+	traceContexts := &sync.Map{}
+	cfg.BeforeRequestCallbacks = append(slices.Clone(cfg.BeforeRequestCallbacks),
+		func(ctx agent.Context, req *a2a.SendMessageRequest) (*session.Event, error) {
+			if req != nil && req.Message != nil {
+				if tc := client.TraceContextFrom(contextWithTrace(ctx)); tc != nil {
+					traceContexts.Store(req.Message.ID, tc)
+				}
+			}
+			return nil, nil
+		})
 
 	transport := &client.AuthTransport{Client: id.client}
+	interceptors := []a2aclient.CallInterceptor{emptyPartFilter{}, traceInterceptor{contexts: traceContexts}}
 	if !o.noAudit {
+		// The trace of the run sending each message, by message ID, for the
+		// records of its request and reply.
+		traces := &sync.Map{}
+		cfg.BeforeRequestCallbacks = append(slices.Clone(cfg.BeforeRequestCallbacks),
+			func(ctx agent.Context, req *a2a.SendMessageRequest) (*session.Event, error) {
+				if req != nil && req.Message != nil {
+					if trace := traceIDOf(ctx.InvocationID()); trace != "" {
+						traces.Store(req.Message.ID, trace)
+					}
+				}
+				return nil, nil
+			})
 		transport.OnSigned = func(req *http.Request, signed any) {
 			if req.Method != http.MethodPost {
 				return
 			}
 			msg := messageFields(signed)
-			// Python audits from the send-message interceptor: requests
-			// that carry no A2A message (tasks/get, cancel...) are not
-			// audited.
+			// Only send-message requests are audited: requests that carry no
+			// A2A message (tasks/get, cancel...) are not.
 			if msg["message_id"] == nil {
 				return
 			}
 			fields := merge(map[string]any{
 				"direction":          "outbound",
 				"wallet":             id.Address(),
-				"signed_body_sha256": shortHash(req.Header.Get(client.HeaderBodySHA256)),
+				"signed_body_sha256": nilIfEmpty(shortHash(req.Header.Get(client.HeaderBodySHA256))),
 			}, targetFields(), msg)
+			if trace, ok := traces.Load(msg["message_id"]); ok {
+				fields["trace_id"] = trace
+			}
 			o.audit(id, "a2a.request.signed", fields)
 		}
-		cfg.AfterRequestCallbacks = append(slices.Clone(cfg.AfterRequestCallbacks),
-			func(ctx agent.Context, req *a2a.SendMessageRequest, resp *session.Event, err error) (*session.Event, error) {
-				if resp != nil && resp.Partial {
-					return nil, nil
-				}
-				o.audit(id, "a2a.response.received", merge(map[string]any{
-					"direction": "inbound",
-					"wallet":    id.Address(),
-				}, targetFields(), responseFields(resp, err)))
-				return nil, nil
-			})
+		// Runs first on each reply, so it sees the reply as received.
+		interceptors = append(interceptors, &responseAudit{record: func(messageID string, fields map[string]any) {
+			if trace, ok := traces.LoadAndDelete(messageID); ok {
+				fields["trace_id"] = trace
+			}
+			o.audit(id, "a2a.response.received", merge(map[string]any{
+				"direction": "inbound",
+				"wallet":    id.Address(),
+			}, targetFields(), fields))
+		}})
 	}
-	cfg.ClientProvider = remoteagent.NewA2AClientProvider(A2AClientFactory(&http.Client{Transport: transport}))
+	cfg.ClientProvider = remoteagent.NewA2AClientProvider(a2aClientFactory(&http.Client{Transport: transport}, interceptors...))
 
 	a, err := remoteagent.NewA2A(cfg)
 	if err != nil {
@@ -291,11 +328,157 @@ func NewA2A(id *Identity, cfg remoteagent.A2AConfig, opts ...A2AOption) (agent.A
 // transports use httpClient — e.g. one from Identity.HTTPClient, for A2A
 // clients built by hand.
 func A2AClientFactory(httpClient *http.Client) *a2aclient.Factory {
+	return a2aClientFactory(httpClient, emptyPartFilter{})
+}
+
+func a2aClientFactory(httpClient *http.Client, interceptors ...a2aclient.CallInterceptor) *a2aclient.Factory {
 	return a2aclient.NewFactory(
 		a2aclient.WithJSONRPCTransport(httpClient),
 		a2aclient.WithRESTTransport(httpClient),
-		a2aclient.WithCallInterceptors(emptyPartFilter{}),
+		a2aclient.WithCallInterceptors(interceptors...),
 	)
+}
+
+// traceInterceptor hands each send-message request the trace context
+// recorded for its message, for AuthTransport to sign.
+type traceInterceptor struct {
+	a2aclient.PassthroughInterceptor
+	contexts *sync.Map // message ID → *client.TraceContext
+}
+
+func (ti traceInterceptor) Before(ctx context.Context, req *a2aclient.Request) (context.Context, any, error) {
+	if p, ok := req.Payload.(*a2a.SendMessageRequest); ok && p != nil && p.Message != nil {
+		if tc, ok := ti.contexts.LoadAndDelete(p.Message.ID); ok {
+			ctx = client.WithTraceContext(ctx, tc.(*client.TraceContext))
+		}
+	}
+	return ctx, nil, nil
+}
+
+// responseAudit writes one a2a.response.received record per message sent,
+// for its final reply: a task in a terminal state, or a reply that is not a
+// task (a message). A streamed reply is assembled into its task first, and
+// the record carries that task's state and ID and the digest of its JSON.
+type responseAudit struct {
+	a2aclient.PassthroughInterceptor
+	record func(messageID string, fields map[string]any)
+}
+
+// responseStream is one send-message call's reply, as assembled so far.
+type responseStream struct {
+	messageID string
+	task      *a2a.Task
+	done      bool
+}
+
+type responseStreamKey struct{}
+
+func (ra *responseAudit) Before(ctx context.Context, req *a2aclient.Request) (context.Context, any, error) {
+	if smr, ok := req.Payload.(*a2a.SendMessageRequest); ok && smr != nil && smr.Message != nil {
+		ctx = context.WithValue(ctx, responseStreamKey{}, &responseStream{messageID: smr.Message.ID})
+	}
+	return ctx, nil, nil
+}
+
+func (ra *responseAudit) After(ctx context.Context, resp *a2aclient.Response) error {
+	rs, ok := ctx.Value(responseStreamKey{}).(*responseStream)
+	if !ok || rs.done || resp.Err != nil || resp.Payload == nil {
+		return nil
+	}
+	var reply any
+	state := ""
+	switch v := resp.Payload.(type) {
+	case *a2a.Task:
+		rs.task = cloneTask(v)
+	case *a2a.TaskStatusUpdateEvent:
+		t := rs.taskFor(v.TaskID, v.ContextID)
+		if t.Status.Message != nil {
+			t.History = append(t.History, t.Status.Message)
+		}
+		if v.Metadata != nil {
+			if t.Metadata == nil {
+				t.Metadata = map[string]any{}
+			}
+			for k, val := range v.Metadata {
+				t.Metadata[k] = val
+			}
+		}
+		t.Status = v.Status
+	case *a2a.TaskArtifactUpdateEvent:
+		t := rs.taskFor(v.TaskID, v.ContextID)
+		appendArtifact(t, v)
+	case *a2a.Message:
+		reply = v
+	default:
+		return nil
+	}
+	fields := map[string]any{}
+	if reply == nil {
+		state = taskState(rs.task.Status.State)
+		if !rs.task.Status.State.Terminal() {
+			return nil
+		}
+		reply = rs.task
+		fields["task_state"] = state
+		fields["task_id"] = nilIfEmpty(string(rs.task.ID))
+	}
+	rs.done = true
+	if raw, err := json.Marshal(reply); err == nil {
+		if sum, err := client.BodySHA256(json.RawMessage(raw)); err == nil {
+			fields["response_sha256"] = shortHash(sum)
+		}
+	}
+	ra.record(rs.messageID, fields)
+	return nil
+}
+
+// taskFor is the task a streamed update belongs to, created when the stream
+// did not start with one.
+func (rs *responseStream) taskFor(id a2a.TaskID, contextID string) *a2a.Task {
+	if rs.task == nil {
+		rs.task = &a2a.Task{ID: id, ContextID: contextID}
+	}
+	return rs.task
+}
+
+func cloneTask(t *a2a.Task) *a2a.Task {
+	if t == nil {
+		return &a2a.Task{}
+	}
+	c := *t
+	c.History = slices.Clone(t.History)
+	c.Artifacts = slices.Clone(t.Artifacts)
+	return &c
+}
+
+// appendArtifact applies an artifact update to t: a new artifact, or more
+// parts for one it has when the update appends.
+func appendArtifact(t *a2a.Task, u *a2a.TaskArtifactUpdateEvent) {
+	if u.Artifact == nil {
+		return
+	}
+	for i, a := range t.Artifacts {
+		if a == nil || a.ID != u.Artifact.ID {
+			continue
+		}
+		if u.Append {
+			merged := *a
+			merged.Parts = append(slices.Clone(a.Parts), u.Artifact.Parts...)
+			t.Artifacts[i] = &merged
+		} else {
+			t.Artifacts[i] = u.Artifact
+		}
+		return
+	}
+	if !u.Append {
+		t.Artifacts = append(t.Artifacts, u.Artifact)
+	}
+}
+
+// taskState names an A2A task state in lower case without its
+// "TASK_STATE_" prefix ("completed", "input_required").
+func taskState(s a2a.TaskState) string {
+	return strings.TrimPrefix(strings.ToLower(string(s)), "task_state_")
 }
 
 // emptyPartFilter drops reply parts that carry no content, such as the
@@ -432,8 +615,8 @@ func rootCause(err error) error {
 	}
 }
 
-// errorType names an error's type for audits, as Python's
-// type(exc).__name__ does: "AppletError" for *transaction.AppletError.
+// errorType names an error's type for audits, without its package or
+// pointer: "AppletError" for *transaction.AppletError.
 func errorType(err error) string {
 	t := fmt.Sprintf("%T", err)
 	if i := strings.LastIndex(t, "."); i >= 0 {
@@ -443,15 +626,15 @@ func errorType(err error) string {
 }
 
 // auditKeyOrder is the order the Python SDK writes each audit record's
-// fields in (its _audit keyword order, after "event" and "ts"); fields it
-// does not write come last, sorted.
+// fields in, after "event", "ts" and "trace_id"; fields it does not write
+// come last, sorted.
 var auditKeyOrder = func() map[string][]string {
 	request := []string{"path", "peer", "user_agent", "body_bytes", "body_sha256", "rpc_method", "rpc_id", "message_id", "task_id", "context_id"}
 	serving := []string{"agent", "agent_wallet"}
 	caller := []string{"wallet", "wallet_header", "wallet_source"}
 	check := []string{"service", "permission_check", "required_purposes", "sentinel_host"}
 	verify := []string{"reason", "missing_headers", "timestamp", "timestamp_skew_s", "max_age_s", "signed_body_sha256", "actual_body_sha256", "detail"}
-	tool := []string{"agent", "tool", "tool_call_id", "service", "access", "wallet", "caller_wallet"}
+	tool := []string{"agent", "tool", "tool_call_id", "service", "access", "tool_kind", "sub_agent", "sub_agent_mode", "sub_agent_wallet", "wallet", "caller_wallet"}
 	agentRun := []string{"agent", "agent_type", "service", "wallet", "caller_wallet"}
 	cat := func(parts ...[]string) []string {
 		var out []string
@@ -462,9 +645,9 @@ var auditKeyOrder = func() map[string][]string {
 	}
 	return map[string][]string{
 		"adk.agent.before":      agentRun,
-		"adk.agent.after":       agentRun,
+		"adk.agent.after":       cat(agentRun, []string{"usage_metadata"}),
 		"adk.tool.before":       cat(tool, []string{"args"}),
-		"adk.tool.after":        cat(tool, []string{"response"}),
+		"adk.tool.after":        cat(tool, []string{"response", "usage_metadata"}),
 		"a2a.request.signed":    {"direction", "wallet", "signed_body_sha256", "target", "message_id", "task_id", "context_id"},
 		"a2a.response.received": {"direction", "wallet", "task_state", "task_id", "response_sha256", "target"},
 		"a2a.request.accepted":  cat([]string{"outcome", "status", "service", "purpose", "verified", "permission_checked"}, caller, request, serving),
@@ -475,12 +658,14 @@ var auditKeyOrder = func() map[string][]string {
 }()
 
 // encodeAuditRecord writes an audit record as the Python SDK's
-// json.dumps({"event", "ts", **fields}) does: its key order, ", " and ": "
-// separators, non-ASCII escaped, empty fields left out.
+// json.dumps({"event", "ts", "trace_id", **fields}) does: its key order,
+// ", " and ": " separators, non-ASCII escaped, fields with no value (nil)
+// left out. trace_id, in fields, names the trace of the run the record was
+// written in.
 func encodeAuditRecord(event string, at time.Time, fields map[string]any) (string, error) {
 	keys := []string{}
 	seen := map[string]bool{}
-	for _, k := range auditKeyOrder[event] {
+	for _, k := range append([]string{"trace_id"}, auditKeyOrder[event]...) {
 		if v, ok := fields[k]; ok && !emptyField(v) && !seen[k] {
 			keys, seen[k] = append(keys, k), true
 		}
@@ -500,7 +685,7 @@ func encodeAuditRecord(event string, at time.Time, fields map[string]any) (strin
 	raw.WriteString(`{"event":`)
 	_ = enc.Encode(event)
 	raw.WriteString(`,"ts":`)
-	_ = enc.Encode(at.UTC().Format("2006-01-02T15:04:05.000Z"))
+	_ = enc.Encode(auditTime(at))
 	for _, k := range keys {
 		raw.WriteByte(',')
 		_ = enc.Encode(k)
@@ -544,7 +729,7 @@ func SecureA2A(next http.Handler, served agent.Agent, opts ...A2AOption) (http.H
 		return nil, fmt.Errorf("%w: bind the served agent, or pass WithServerIdentity", ErrNoIdentity)
 	}
 	if o.service != "" {
-		if _, err := secured.ParseScope(o.service); err != nil {
+		if err := secured.ValidateRule(o.service); err != nil {
 			return nil, err
 		}
 	}
@@ -554,9 +739,9 @@ func SecureA2A(next http.Handler, served agent.Agent, opts ...A2AOption) (http.H
 	if gate == nil {
 		gate = secured.NewChecker(secured.UsingSentinel(id.client.Sentinel()), secured.WithoutVerdicts())
 	}
-	serving := map[string]any{"agent_wallet": id.Address()}
+	serving := map[string]any{"agent_wallet": nilIfEmpty(id.Address())}
 	if served != nil {
-		serving["agent"] = served.Name()
+		serving["agent"] = nilIfEmpty(served.Name())
 	}
 	nonces := newNonceSet(o.maxAge)
 
@@ -596,12 +781,8 @@ func SecureA2A(next http.Handler, served agent.Agent, opts ...A2AOption) (http.H
 			}
 		}
 		if err != nil {
-			var shownWallet any
-			if headerWallet != "" {
-				shownWallet = headerWallet
-			}
 			fields := merge(map[string]any{"outcome": "rejected", "status": 401, "stage": "verify",
-				"wallet": shownWallet, "service": o.service}, verifyFailure(r.Header, signed, err))
+				"wallet": nilIfEmpty(headerWallet), "service": nilIfEmpty(o.service)}, verifyFailure(r.Header, signed, err))
 			o.audit(id, "a2a.verify.failed", merge(fields, request, serving))
 			shown := headerWallet
 			if shown == "" {
@@ -610,10 +791,10 @@ func SecureA2A(next http.Handler, served agent.Agent, opts ...A2AOption) (http.H
 			writePlain(w, http.StatusUnauthorized, fmt.Sprintf("Wallet address verification failed for wallet '%s'", shown))
 			return
 		}
-		callerFields := map[string]any{"wallet": caller.Address}
+		callerFields := map[string]any{"wallet": nilIfEmpty(caller.Address)}
 		if caller.Canonical {
 			callerFields["wallet_source"] = "signed_canonical"
-			callerFields["wallet_header"] = headerWallet
+			callerFields["wallet_header"] = nilIfEmpty(headerWallet)
 		} else {
 			callerFields["wallet_source"] = "header"
 		}
@@ -662,10 +843,10 @@ func SecureA2A(next http.Handler, served agent.Agent, opts ...A2AOption) (http.H
 			}
 		}
 
-		accepted := map[string]any{"outcome": "accepted", "status": 200, "service": o.service,
+		accepted := map[string]any{"outcome": "accepted", "status": 200, "service": nilIfEmpty(o.service),
 			"verified": !o.skipVerify, "permission_checked": o.service != "",
-			// The purpose that let the caller in ("" without a service gate).
-			"purpose": granted}
+			// The purpose that let the caller in (none without a service gate).
+			"purpose": nilIfEmpty(granted)}
 		o.audit(id, "a2a.request.accepted", merge(accepted, callerFields, request, serving))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}), nil
@@ -699,9 +880,9 @@ func NewExecutor(cfg adka2a.ExecutorConfig, opts ...A2AOption) (*adka2a.Executor
 		return ctx, nil
 	}
 
-	// Python's setup_secure_a2a on the served agent: agent and secured-tool
-	// audits (unless WithoutAudit) and run traces. It goes first, so a user
-	// plugin that short-circuits a hook cannot hide the audit.
+	// setup_secure_a2a on the served agent: agent and tool audits and run
+	// traces (unless WithoutAudit or WithoutAgentAudit). It goes first, so a
+	// user plugin that short-circuits a hook cannot hide the audit.
 	p, err := NewPlugin(plugin.Config{Name: "weil_a2a"},
 		WithSecureA2A(SecureA2AConfig{Service: o.service, DisableAudit: o.noAudit || o.noAgentAudit}),
 		WithFallbackIdentity(Static(id)),
@@ -715,43 +896,56 @@ func NewExecutor(cfg adka2a.ExecutorConfig, opts ...A2AOption) (*adka2a.Executor
 
 // AgentAuditAction records each local agent run as the Python SDK does
 // (adk.agent.before / adk.agent.after events), with the A2A caller that
-// triggered it. NewExecutor installs it; add it to a calling agent's plugin
-// to audit that side too.
+// triggered it. Each record is stamped when its hook fires and submitted in
+// the background; the end of the agent's run waits for it (see FlushAudits).
+// WithSecureA2A writes these records itself; add this action to another
+// plugin to audit agent runs without the rest.
 func AgentAuditAction(service string) Action {
 	return Action{
-		Name:  "a2a_agent_audit",
-		Hooks: []Hook{HookBeforeAgent, HookAfterAgent},
-		// Inline, as Python awaits it; the audit call itself is fire and
-		// forget, and a failure never fails the hook (FailOpen).
-		Mode: Blocking,
+		Name:       "a2a_agent_audit",
+		Hooks:      []Hook{HookBeforeAgent, HookAfterAgent},
+		Mode:       NonBlocking,
+		background: true,
 		Build: func(ev *Event) (*Call, error) {
-			a := actingAgent(ev.Context())
-			// Remote A2A agents are audited by their own server.
-			if _, remote := remoteIdentities.Load(a); remote || agentType(a) == "RemoteA2aAgent" {
+			event, fields, ok := agentAuditFields(ev, service)
+			if !ok {
 				return nil, nil
 			}
-			event := "adk.agent.before"
-			if ev.Hook == HookAfterAgent {
-				event = "adk.agent.after"
-			}
-			// Only the root agent is served under the service scope.
-			svc := ""
-			// Names are unique within an agent tree.
-			if root, ok := runRoots.Load(ev.InvocationID); !ok || root.(agent.Agent).Name() == ev.AgentName {
-				svc = service
-			}
-			fields := map[string]any{
-				"agent": ev.AgentName, "agent_type": agentType(a), "service": svc,
-			}
-			if ev.Identity != nil {
-				fields["wallet"] = ev.Identity.Address()
-			}
-			if ev.Caller != nil && (ev.Identity == nil || ev.Caller.Address != ev.Identity.Address()) {
-				fields["caller_wallet"] = ev.Caller.Address
-			}
-			return auditCall(ev.Identity, event, fields)
+			return auditCallAt(ev.Identity, event, fields, ev.Time)
 		},
 	}
+}
+
+// agentAuditFields are the adk.agent.before / adk.agent.after record of the
+// agent run ev reports, or false for a remote A2A agent, which its own
+// server audits.
+func agentAuditFields(ev *Event, service string) (string, map[string]any, bool) {
+	a := actingAgent(ev.Context())
+	if _, remote := remoteIdentities.Load(a); remote || agentType(a) == "RemoteA2aAgent" {
+		return "", nil, false
+	}
+	event := "adk.agent.before"
+	if ev.Hook == HookAfterAgent {
+		event = "adk.agent.after"
+	}
+	// Only the root agent is served under the service scope; a sub-agent
+	// run as a tool is not a root. Names are unique within an agent tree.
+	var svc any
+	if root, ok := runRoots.Load(ev.InvocationID); (!ok || root.(agent.Agent).Name() == ev.AgentName) &&
+		ev.Context().Value(agentToolKey{}) == nil {
+		svc = nilIfEmpty(service)
+	}
+	fields := map[string]any{
+		"agent": nilIfEmpty(ev.AgentName), "agent_type": nilIfEmpty(agentType(a)), "service": svc,
+		"trace_id": nilIfEmpty(traceIDOf(ev.InvocationID)),
+	}
+	if ev.Identity != nil {
+		fields["wallet"] = ev.Identity.Address()
+	}
+	if ev.Caller != nil && (ev.Identity == nil || ev.Caller.Address != ev.Identity.Address()) {
+		fields["caller_wallet"] = ev.Caller.Address
+	}
+	return event, fields, true
 }
 
 // ── Audit records ────────────────────────────────────────────────────────
@@ -788,24 +982,32 @@ func auditCallAt(id *Identity, event string, fields map[string]any, at time.Time
 	if id != nil {
 		org = id.Org()
 	}
-	// Arguments public, as the Python SDK submits audits. The call waits for
-	// the auditor to run the entry: a submission the platform accepted can
-	// still be lost before it runs, and only waiting shows it.
+	// Arguments public. The call waits for the auditor to run the entry: a
+	// submission the platform accepted can still be lost before it runs, and
+	// only waiting shows it.
 	return &Call{Applet: Auditor, Method: "audit", Args: pyArgs(client.AuditArgs(string(log), org)), Retry: client.DurableRetry}, nil
 }
 
+// emptyField reports a field with no value: nil, or a nil map, slice or
+// pointer. Empty strings and lists are values; use nilIfEmpty for a field
+// that has none when empty.
 func emptyField(v any) bool {
-	switch x := v.(type) {
-	case nil:
+	if v == nil {
 		return true
-	case string:
-		return x == ""
-	case []string:
-		return len(x) == 0
-	case map[string]any:
-		return x == nil // Python's None
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Pointer, reflect.Interface:
+		return rv.IsNil()
 	}
 	return false
+}
+
+// nilIfEmpty is s, or nil (no value) when s is "".
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func merge(maps ...map[string]any) map[string]any {
@@ -852,7 +1054,7 @@ func messageFields(signed any) map[string]any {
 }
 
 func requestFields(r *http.Request, body []byte, signed any) map[string]any {
-	f := map[string]any{"path": r.URL.Path, "user_agent": r.UserAgent()}
+	f := map[string]any{"path": nilIfEmpty(r.URL.Path), "user_agent": nilIfEmpty(r.UserAgent())}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		f["peer"] = host
 	}
@@ -867,7 +1069,7 @@ func requestFields(r *http.Request, body []byte, signed any) map[string]any {
 		ID     any    `json:"id"`
 	}
 	if json.Unmarshal(body, &envelope) == nil {
-		// Empty or zero values are left out, as Python's `or None` does.
+		// Empty or zero values are left out.
 		if envelope.Method != "" {
 			f["rpc_method"] = envelope.Method
 		}
@@ -876,28 +1078,6 @@ func requestFields(r *http.Request, body []byte, signed any) map[string]any {
 		}
 	}
 	return merge(f, messageFields(signed))
-}
-
-// responseFields describes a remote reply the way the Python SDK audits it:
-// the final task state, the task id and a digest to later prove a stored
-// reply is the one received. ADK hands the callback a session event, not the
-// A2A task, so the state is "failed" for an error and "completed" otherwise,
-// and the digest is of the reply's content.
-func responseFields(resp *session.Event, err error) map[string]any {
-	f := map[string]any{"task_state": "completed"}
-	if err != nil || (resp != nil && resp.ErrorMessage != "") {
-		f["task_state"] = "failed"
-	}
-	if resp == nil {
-		return f
-	}
-	if resp.Content != nil {
-		f["response_sha256"] = shortHash(HashJSON(resp.Content))
-	}
-	if v, ok := resp.CustomMetadata["a2a:task_id"]; ok {
-		f["task_id"] = v
-	}
-	return f
 }
 
 // nonceSet accepts each nonce once while its headers can still be fresh.

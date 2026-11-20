@@ -10,7 +10,7 @@ import uuid
 import time
 from typing import Any, Iterator, Optional, Union
 
-from .adk import _caller_wallet, _elapsed_ms, _now_iso, _own_wallet
+from .adk import _caller_wallet, _elapsed_ms, _now_iso, _own_wallet, _record_token_usage
 from .mcp import _secured_tool_info, reset_current_wallet_addr, set_current_wallet_addr
 from .memory import append_unique_tools, make_langchain_pensieve_tools
 from .tracer import (
@@ -25,6 +25,7 @@ from .tracer import (
     root_from_call,
     trace_parent,
 )
+from .usage import langchain_token_usage, langchain_usage_metadata
 
 
 _FACTORY_IDENTITY: contextvars.ContextVar[Any] = contextvars.ContextVar(
@@ -64,7 +65,8 @@ def create_agent(
         from langchain.agents import create_agent as langchain_create_agent
     except ImportError as exc:
         raise ImportError(
-            "langchain is required for weil_ai.langchain.create_agent(); install langchain"
+            "langchain is required for weil_ai.langchain.create_agent(); "
+            "install langchain or weil-ai[langchain]"
         ) from exc
 
     owner = _current_identity()
@@ -96,6 +98,7 @@ def secure_middleware(
         ) from exc
 
     resolved_owner = owner or _current_identity()
+    tool_usage_by_call_id: dict[str, Any] = {}
 
     class WeilLangChainMiddleware(AgentMiddleware):
         @property
@@ -122,21 +125,37 @@ def secure_middleware(
 
         def after_agent(self, state: Any, runtime: Any) -> None:
             if audit:
+                usage_metadata, token_usage = _final_message_usage(state)
                 _run_sync_audit(
                     resolved_owner,
                     "langchain.agent.after",
                     **_agent_context(resolved_owner, state, final=True),
+                    usage_metadata=usage_metadata,
                 )
+                _run_sync_record_token_usage(resolved_owner, token_usage)
             return None
 
         async def aafter_agent(self, state: Any, runtime: Any) -> None:
             if audit:
+                usage_metadata, token_usage = _final_message_usage(state)
                 await _audit(
                     resolved_owner,
                     "langchain.agent.after",
                     **_agent_context(resolved_owner, state, final=True),
+                    usage_metadata=usage_metadata,
                 )
+                await _record_token_usage(resolved_owner, token_usage)
             return None
+
+        def wrap_model_call(self, request: Any, handler: Any) -> Any:
+            result = handler(request)
+            _remember_langchain_model_usage(result, tool_usage_by_call_id)
+            return result
+
+        async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+            result = await handler(request)
+            _remember_langchain_model_usage(result, tool_usage_by_call_id)
+            return result
 
         def wrap_tool_call(self, request: Any, handler: Any) -> Any:
             tokens = _set_langchain_wallet_context(resolved_owner, verify=verify)
@@ -175,12 +194,23 @@ def secure_middleware(
                 )
                 
                 if audit:
+                    usage_metadata, token_usage = (
+                        tool_usage_by_call_id.pop(framework_call_id, None) or (None, None)
+                    )
                     _run_sync_audit(
                         resolved_owner,
                         "langchain.tool.after",
-                        **{**_tool_context(resolved_owner, request), **_secured_tool_response(request, result)},
+                        **{
+                            **_tool_context(resolved_owner, request),
+                            **_secured_tool_response(
+                                request,
+                                result,
+                            ),
+                        },
+                        usage_metadata=usage_metadata,
                         elapsed_ms=_elapsed_ms(started),
                     )
+                    _run_sync_record_token_usage(resolved_owner, token_usage)
                 return result
             finally:
                 reset_current_wallet_addr(tokens)
@@ -221,12 +251,23 @@ def secure_middleware(
                     parent_id=parent_id,
                 )
                 if audit:
+                    usage_metadata, token_usage = (
+                        tool_usage_by_call_id.pop(framework_call_id, None) or (None, None)
+                    )
                     await _audit(
                         resolved_owner,
                         "langchain.tool.after",
-                        **{**_tool_context(resolved_owner, request), **_secured_tool_response(request, result)},
+                        **{
+                            **_tool_context(resolved_owner, request),
+                            **_secured_tool_response(
+                                request,
+                                result,
+                            ),
+                        },
+                        usage_metadata=usage_metadata,
                         elapsed_ms=_elapsed_ms(started),
                     )
+                    await _record_token_usage(resolved_owner, token_usage)
                 return result
             finally:
                 reset_current_wallet_addr(tokens)
@@ -527,6 +568,17 @@ def _run_sync_audit(owner: Any, event: str, **fields: Any) -> None:
         return
 
 
+def _run_sync_record_token_usage(owner: Any, token_usage: Any) -> None:
+    if token_usage is None:
+        return
+    try:
+        from .mcp import _run_sync
+
+        _run_sync(_record_token_usage(owner, token_usage))
+    except Exception:
+        return
+
+
 def _run_context() -> dict[str, Any]:
     """LangGraph agent name, best effort (empty outside a graph run)."""
     try:
@@ -634,6 +686,58 @@ def _tool_result(result: Any) -> Any:
     return _decode_json(getattr(result, "content", result))
 
 
+def _remember_langchain_model_usage(
+    response: Any,
+    usage_by_call_id: dict[str, Any],
+) -> None:
+    messages = getattr(response, "result", None)
+    if messages is None:
+        messages = [response]
+    if not isinstance(messages, list):
+        return
+
+    for message in messages:
+        usage = langchain_usage_metadata(message)
+        if usage is None:
+            continue
+        # (raw dump for the audit record, (model, TokenUsage, timestamp) for
+        # agent_registry). The timestamp is taken when the model response arrives.
+        token_usage = langchain_token_usage(message)
+        if token_usage is not None:
+            token_usage = (*token_usage, _now_iso())
+        for tool_call in getattr(message, "tool_calls", None) or []:
+            call_id = _langchain_message_tool_call_id(tool_call)
+            if call_id:
+                usage_by_call_id[call_id] = (usage, token_usage)
+
+
+def _final_message_usage(state: Any) -> tuple[Any, Any]:
+    """``(usage_metadata, token_usage)`` of the run's final model answer.
+
+    Usage of model responses with tool calls is recorded at langchain.tool.after;
+    the final answer (last message, no tool calls) is recorded here.
+    """
+    messages = state.get("messages") if isinstance(state, dict) else None
+    last = messages[-1] if messages else None
+    if last is None or getattr(last, "tool_calls", None):
+        return None, None
+    usage = langchain_usage_metadata(last)
+    if usage is None:
+        return None, None
+    token_usage = langchain_token_usage(last)
+    if token_usage is not None:
+        token_usage = (*token_usage, _now_iso())
+    return usage, token_usage
+
+
+def _langchain_message_tool_call_id(tool_call: Any) -> Optional[str]:
+    if isinstance(tool_call, dict):
+        value = tool_call.get("id")
+    else:
+        value = getattr(tool_call, "id", None)
+    return str(value) if value else None
+
+
 def _secured_tool_args(request: Any) -> dict[str, Any]:
     """Arguments of a @secured tool call, for the before-tool audit record."""
     secured = _secured_tool_info(getattr(request, "tool", None))
@@ -647,16 +751,20 @@ def _secured_tool_args(request: Any) -> dict[str, Any]:
     }
 
 
-def _secured_tool_response(request: Any, result: Any) -> dict[str, Any]:
+def _secured_tool_response(
+    request: Any,
+    result: Any,
+) -> dict[str, Any]:
     """Response of a @secured tool call, for the after-tool audit record."""
     secured = _secured_tool_info(getattr(request, "tool", None))
     if secured is None:
         return {}
+    response = _decode_json(getattr(result, "content", result))
     return {
         **secured,
         "tool_call_id": _tool_call_id(request),
         "status": getattr(result, "status", None),
-        "response": _decode_json(getattr(result, "content", result)),
+        "response": response,
     }
 
 

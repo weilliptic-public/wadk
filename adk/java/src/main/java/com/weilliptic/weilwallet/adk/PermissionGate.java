@@ -1,12 +1,12 @@
 package com.weilliptic.weilwallet.adk;
 
 import com.google.adk.agents.BaseAgent;
-import com.google.adk.agents.InvocationContext;
 import com.google.adk.agents.LlmAgent;
 import com.google.adk.tools.AgentTool;
 import com.google.adk.tools.BaseTool;
 import com.google.adk.tools.FunctionTool;
 
+import com.weilliptic.weilwallet.SecuredRule;
 import com.weilliptic.weilwallet.WeilClient;
 
 import java.lang.reflect.Field;
@@ -37,11 +37,11 @@ import java.util.function.Predicate;
  * <p>{@link #on} mirrors the Python SDK's {@code @secured_user};
  * {@link #admin} mirrors {@code @secured_admin} and accepts Management only.</p>
  *
- * <p>The wallet checked is the caller's: on an agent served by
- * {@link WeilAgentServer}, the wallet the server verified for the request
- * (see {@link WeilAgentServer#callerWallet}). A run nobody called over A2A,
- * such as a local conversation, has no caller, and the agent's own wallet is
- * checked instead.</p>
+ * <p>The wallet checked is the local agent's own, the one this run acts as,
+ * whether or not it was called over A2A. On an agent served by
+ * {@link WeilAgentServer}, the caller is checked once, at the server's
+ * service gate (see {@link WeilAgentServer#callerWallet}), and not again by
+ * the agent's tool gates.</p>
  */
 public final class PermissionGate {
 
@@ -73,7 +73,16 @@ public final class PermissionGate {
      */
     public static Call agentVerdictCall(
         String checkedWallet, String agentName, String svcName, String grantedBy) {
-        return verdictCall(checkedWallet, "agent " + agentName, svcName, false, grantedBy);
+        return agentVerdictCalls(checkedWallet, agentName, svcName, grantedBy).get(0);
+    }
+
+    /**
+     * {@link #agentVerdictCall}, once for every organisation {@code svcName}
+     * names: a rule over several orgs publishes its verdict to each.
+     */
+    public static List<Call> agentVerdictCalls(
+        String checkedWallet, String agentName, String svcName, String grantedBy) {
+        return verdictCalls(checkedWallet, "agent " + agentName, svcName, false, grantedBy);
     }
 
     /**
@@ -93,42 +102,75 @@ public final class PermissionGate {
      */
     public static Call toolVerdictCall(
         String checkedWallet, String toolName, String svcName, boolean admin, String grantedBy) {
-        return verdictCall(checkedWallet, "tool " + (toolName == null ? "(unnamed)" : toolName),
+        return toolVerdictCalls(checkedWallet, toolName, svcName, admin, grantedBy).get(0);
+    }
+
+    /**
+     * {@link #toolVerdictCall}, once for every organisation {@code svcName}
+     * names: a rule over several orgs publishes its verdict to each.
+     */
+    public static List<Call> toolVerdictCalls(
+        String checkedWallet, String toolName, String svcName, boolean admin, String grantedBy) {
+        return verdictCalls(checkedWallet, "tool " + (toolName == null ? "(unnamed)" : toolName),
             svcName, admin, grantedBy);
     }
 
     /**
-     * Published through the checked service's own organisation,
+     * Published through each checked organisation's own publisher,
      * {@code publisher::<org>} ("finance.weil" goes to publisher::weil), as
      * the Python SDK publishes its verdicts.
      */
-    private static Call verdictCall(
+    private static List<Call> verdictCalls(
         String checkedWallet, String target, String svcName, boolean admin, String grantedBy) {
         String checks = grantedBy != null ? grantedBy + " check"
             : admin ? "Management check" : "Execution and Management checks";
-        return Call.to(Applet.byName(publisherFor(svcName)), "publish")
-            .args(Map.of(
-                "topic", SECURED_CHECK_TOPIC,
-                "payload", checkedWallet + " " + (grantedBy != null ? "passed" : "failed")
-                    + " @secured " + checks + " for " + target + " in " + svcName))
-            .hideArgs(false)
-            .fireAndForget(true)
-            .build();
+        List<Call> calls = new ArrayList<>();
+        for (String publisher : publishersFor(svcName)) {
+            calls.add(Call.to(Applet.byName(publisher), "publish")
+                .args(Map.of(
+                    "topic", SECURED_CHECK_TOPIC,
+                    "payload", checkedWallet + " " + (grantedBy != null ? "passed" : "failed")
+                        + " @secured " + checks + " for " + target + " in " + svcName))
+                .hideArgs(false)
+                .fireAndForget(true)
+                .build());
+        }
+        return calls;
     }
 
-    /** {@code publisher::<org>} for a {@code "<subgroup>.<org>"} service. */
+    /** {@code publisher::<org>} for a {@code "<subgroup>.<org>"} service; the first org of a rule. */
     static String publisherFor(String svcName) {
-        String svc = svcName.trim();
-        int dot = svc.lastIndexOf('.');
-        return "publisher::" + (dot >= 0 ? svc.substring(dot + 1) : svc);
+        return publishersFor(svcName).get(0);
     }
 
     /**
-     * Gate every tool call on {@code svcName}, checking the caller's wallet.
+     * {@code publisher::<org>} for every organisation a secured rule names,
+     * sorted. A name that does not parse as a rule keeps the old reading:
+     * the part after the last dot.
+     */
+    static List<String> publishersFor(String svcName) {
+        List<String> publishers = new ArrayList<>();
+        try {
+            for (String org : SecuredRule.orgs(SecuredRule.parse(svcName))) {
+                publishers.add("publisher::" + org);
+            }
+        } catch (SecuredRule.ParseException notARule) {
+            String svc = svcName.trim();
+            int dot = svc.lastIndexOf('.');
+            publishers.add("publisher::" + (dot >= 0 ? svc.substring(dot + 1) : svc));
+        }
+        return publishers;
+    }
+
+    /**
+     * Gate every tool call on {@code svcName}, checking the local agent's own wallet.
      *
      * <p>{@code svcName} is a subgroup within an organisation, such as
      * "engg.weil", which is resolved against that organisation's identity
-     * applet — not the name of an applet itself.</p>
+     * applet — not the name of an applet itself — or a boolean rule over
+     * several, such as {@code "infrastructure.weil & !finance.weil"}, with the
+     * same meaning as the Rust {@code #[secured_user]} macro (see
+     * {@link com.weilliptic.weilwallet.SecuredRule}).</p>
      */
     public static WeilAction on(String svcName, WeilIdentity identity) {
         return on(svcName, identity, null, null);
@@ -295,8 +337,9 @@ public final class PermissionGate {
         boolean allowExecution) throws Exception {
         String wallet = checkedWallet(ev, identity);
         String grantedBy = grantedBy(wallet, svcName, sentinelHost, allowExecution);
-        publishVerdict(identity,
-            toolVerdictCall(wallet, ev.toolName(), svcName, !allowExecution, grantedBy));
+        for (Call verdict : toolVerdictCalls(wallet, ev.toolName(), svcName, !allowExecution, grantedBy)) {
+            publishVerdict(identity, verdict);
+        }
         if (grantedBy == null) {
             throw new WeilAction.VetoException(
                 "Permission denied: wallet " + wallet + " does not have permission to run "
@@ -314,24 +357,21 @@ public final class PermissionGate {
     static String grantedBy(
         String wallet, String svcName, String sentinelHost, boolean allowExecution)
         throws Exception {
-        if (allowExecution && WeilClient.walletHasExecutionPermission(wallet, svcName, sentinelHost)) {
-            return "Execution";
-        }
-        if (WeilClient.walletHasManagementPermission(wallet, svcName, sentinelHost)) {
-            return "Management";
-        }
-        return null;
+        // One evaluation with both purposes, so each key counts on either —
+        // as the Rust macros do. Two single-purpose passes would refuse
+        // "a & b" for a wallet with Execution on a and Management on b.
+        return WeilClient.grantingPurpose(
+            wallet, svcName,
+            allowExecution ? List.of("Execution", "Management") : List.of("Management"),
+            sentinelHost);
     }
 
-    /** The served request's verified caller, else the wallet this run acts as. */
+    /**
+     * The wallet this run acts as: the local agent's own. A served agent's
+     * A2A caller is checked once, by {@link WeilAgentServer}'s service gate,
+     * and not again here.
+     */
     private static String checkedWallet(WeilEvent ev, WeilIdentity identity) {
-        InvocationContext ctx = ev.invocationContext() != null
-            ? ev.invocationContext()
-            : ev.callbackContext() != null ? ev.callbackContext().invocationContext() : null;
-        String caller = WeilAgentServer.callerWallet(ctx);
-        if (caller != null) {
-            return caller;
-        }
         return ev.identity() != null ? ev.identity().address() : identity.address();
     }
 

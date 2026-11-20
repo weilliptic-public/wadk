@@ -32,7 +32,7 @@ import java.util.function.Supplier;
  *
  * <pre>{@code
  * public static class Tools {
- *     @WeilSecured("engg.weil")                 // only callers permitted there
+ *     @WeilSecured("engg.weil")                 // only if this agent's wallet is permitted there
  *     public static Map<String, Object> searchFlights(...) { ... }
  * }
  *
@@ -126,10 +126,12 @@ public final class Weil {
         WeilPlugin plugin = WeilPlugin.builder(id)
             .name("weil-audit")
             .inBackground()
-            .withActions(AuditAction.withContent())
             // One trace per run, published to "audits" when it ends. Best
             // effort: a trace that cannot be written never stops the agent.
+            // Before the audit records, so each of them, the first included,
+            // can name the trace it belongs to.
             .withActions(TraceAction.actions())
+            .withActions(AuditAction.withContent())
             .withActions(PermissionGate.annotated(id, System.getenv("SENTINEL_HOST")))
             .withActions(extra)
             .onError((ev, action, err) ->
@@ -226,6 +228,23 @@ public final class Weil {
     }
 
     /**
+     * Serve {@code agent} over A2A where callers reach it at {@code url},
+     * callers checked on {@code service}: as Python's
+     * {@code to_secure_a2a(host=..., port=..., protocol=..., rpc_path=...)}.
+     *
+     * <p>{@code url} goes in the agent card, and its path is the path served,
+     * such as {@code http://127.0.0.1:8021/} or
+     * {@code https://agents.example.com/catalog}. An {@code http} URL with a
+     * port is served directly on that port; an {@code https} one, or one
+     * without a port, names a proxy in front, and the agent listens on
+     * {@code PORT} (else 8001). See {@link WeilAgentServer.Builder#url}.</p>
+     */
+    public static void toSecureA2a(BaseAgent agent, String url, String service, WeilAction... extra)
+        throws IOException {
+        secureA2aServer(agent, service, extra).url(url).build().start();
+    }
+
+    /**
      * As {@link #secureA2aServer(BaseAgent, String, WeilAction...)}, for an ADK
      * {@link App}: its root agent is served with the App's settings (context
      * caching, event compaction, resumability) and plugins kept, the Weil
@@ -251,6 +270,12 @@ public final class Weil {
     public static void toSecureA2a(App app, int port, String service, WeilAction... extra)
         throws IOException {
         secureA2aServer(app, service, extra).port(port).build().start();
+    }
+
+    /** As {@link #toSecureA2a(BaseAgent, String, String, WeilAction...)}, for an ADK {@link App}. */
+    public static void toSecureA2a(App app, String url, String service, WeilAction... extra)
+        throws IOException {
+        secureA2aServer(app, service, extra).url(url).build().start();
     }
 
     /** Serve an ADK {@link App} over A2A on {@code port}, callers checked on WEIL_SERVICE. */
@@ -473,10 +498,12 @@ public final class Weil {
 
     /**
      * Another Weil agent, served over A2A at {@code url}, as a sub-agent the
-     * conversation is handed to, every call signed with this wallet.
+     * conversation is handed to, every call signed with this wallet. Each
+     * call carries this run's trace, so the remote agent's run is part of it
+     * (see {@link WeilRemoteAgent}).
      */
     public static BaseAgent remoteAgent(String name, String url, String description) {
-        return WeilA2A.remoteAgent(name, url, identity(), description);
+        return new WeilRemoteAgent(WeilA2A.remoteAgent(name, url, identity(), description));
     }
 
     /**
@@ -495,8 +522,7 @@ public final class Weil {
      * Execution or Management in {@code service}, such as
      * {@code "finance.weil"}: the agent-level check, carried by the tool as
      * {@code @WeilSecured} is by a method, so no gate is matched by name.
-     * The wallet is the A2A caller's on a served agent, else the agent's own;
-     * refused, the agent never starts and the model is told why.
+     * The wallet checked is the local agent's own; refused, the agent never starts and the model is told why.
      */
     public static AgentTool agentTool(BaseAgent agent, String service) {
         return new SecuredAgentTool(agent, service);

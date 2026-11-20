@@ -26,7 +26,7 @@ import java.util.Map;
  * agent searches through whatever its organisation, as in the Go SDK.
  * WEIL_SEARCH_APPLET names another, by service name or contract address. The
  * call is signed by this agent's wallet ({@link Weil#identity()}); the
- * permission check, on {@link #SEARCH_SERVICE}, is of the caller's.</p>
+ * permission check, on {@link #SEARCH_SERVICE}, is of this agent's own wallet.</p>
  *
  * <pre>{@code
  * .tools(FunctionTool.create(WebSearchTools.class, "webSearch"))

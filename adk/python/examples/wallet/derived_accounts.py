@@ -2,8 +2,8 @@
 """Example: mnemonic wallet with derived accounts; confirm both can execute contract methods.
 
 Run from python/ directory:
-  cd python && python examples/example_derived.py
-Or: PYTHONPATH=python python examples/example_derived.py
+  cd python && python examples/wallet/derived_accounts.py
+Or: PYTHONPATH=python python examples/wallet/derived_accounts.py
 """
 
 import asyncio
@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 # Allow importing weil_wallet when run as script
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from weil_wallet import (
     ContractId,

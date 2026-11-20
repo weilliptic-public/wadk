@@ -29,7 +29,11 @@ type pluginOptions struct {
 	flushTimeout time.Duration
 	onError      func(ev *Event, action string, err error)
 	tracing      *TraceConfig
-	secureAudit  bool // audit secured tool calls (WithSecureA2A)
+	// secureAudit writes the adk.agent.* and adk.tool.* audit records and
+	// records token usage (WithSecureA2A); secureService is the scope the
+	// root agent is served under.
+	secureAudit   bool
+	secureService string
 }
 
 // WithActions adds declarative Actions to the plugin. On each hook, the
@@ -51,9 +55,11 @@ func WithDispatcher(d *Dispatcher) PluginOption {
 	return func(o *pluginOptions) { o.dispatcher = d }
 }
 
-// WithFlushAfterRun makes the end of each run wait, up to timeout, until
-// queued calls have landed. The dispatcher is shared, so this also waits for
-// calls queued by concurrent runs.
+// WithFlushAfterRun makes the end of each run also wait, up to timeout, until
+// the calls queued on the plugin's dispatcher — NonBlocking actions and
+// Submit calls — have landed. The dispatcher is shared, so this also waits
+// for calls queued by concurrent runs. Without it a run still waits for its
+// audit entries (see FlushAudits) and for its trace to be published.
 func WithFlushAfterRun(timeout time.Duration) PluginOption {
 	return func(o *pluginOptions) { o.flush, o.flushTimeout = true, timeout }
 }
@@ -132,6 +138,12 @@ type weilPlugin struct {
 	byHook   map[Hook][]*Action
 	trace    *tracer // nil unless WithTracing
 	self     *plugin.Plugin
+	// usage holds model responses' token usage until it is recorded
+	// (WithSecureA2A).
+	usage usageLedger
+	// agentTools holds the audit fields of the agents run as tools in
+	// flight, by function call ID, from adk.tool.before to adk.tool.after.
+	agentTools sync.Map // function call ID → map[string]any
 	// durable counts each run's queued calls with their own retry policy
 	// (audit entries), which the run waits for before it ends.
 	durable sync.Map // invocation ID → *runDurable
@@ -183,11 +195,11 @@ func (p *weilPlugin) trackDurable(invocationID string) func() {
 	}
 }
 
-// awaitDurable waits until the run's queued audit entries have been
-// accepted (or have failed for good), so a run never ends with its audit
-// trail still in memory — as the Python SDK awaits each entry. Under heavy
-// load this wait is the platform's queue; past SignedTxnTTL the run ends and
-// the entries carry on in the background.
+// awaitDurable waits until the run's calls queued on the dispatcher with
+// their own retry policy (e.g. AuditAction entries) have been accepted, or
+// have failed for good, so a run never ends with its audit trail still in
+// memory. Under heavy load this wait is the platform's queue; past
+// SignedTxnTTL the run ends and the calls carry on in the background.
 func (p *weilPlugin) awaitDurable(ev *Event) {
 	v, ok := p.durable.LoadAndDelete(ev.InvocationID)
 	if !ok {
@@ -308,10 +320,16 @@ func (p *weilPlugin) config() plugin.Config {
 				p.opts.onError(ev, "after_run", err)
 			}
 			p.flushFinished(ic.InvocationID())
-			if p.trace != nil {
-				p.trace.finish(ev)
+			p.usage.drop(ic.InvocationID())
+			// The run's audit entries land before it ends, then its trace is
+			// published.
+			if p.opts.secureAudit {
+				flushAuditsFor(func(err error) { p.opts.onError(ev, "audit", err) })
 			}
 			p.awaitDurable(ev)
+			if p.trace != nil {
+				<-p.trace.finish(ev)
+			}
 			if !p.opts.flush {
 				return
 			}
@@ -339,9 +357,13 @@ func (p *weilPlugin) config() plugin.Config {
 			return nil, p.fire(ev)
 		}
 	}
-	if u.BeforeAgentCallback != nil || p.has(HookBeforeAgent) {
+	if u.BeforeAgentCallback != nil || p.has(HookBeforeAgent) || p.opts.secureAudit {
 		c.BeforeAgentCallback = func(ctx agent.Context) (*genai.Content, error) {
 			ctx = p.agentCtx(ctx)
+			// Audited before the user's callback, which may skip the agent.
+			if p.opts.secureAudit {
+				p.agentStart(eventFromAgentContext(HookBeforeAgent, ctx))
+			}
 			if u.BeforeAgentCallback != nil {
 				if out, err := u.BeforeAgentCallback(ctx); out != nil || err != nil {
 					return out, err
@@ -350,15 +372,23 @@ func (p *weilPlugin) config() plugin.Config {
 			return nil, p.fire(eventFromAgentContext(HookBeforeAgent, ctx))
 		}
 	}
-	if u.AfterAgentCallback != nil || p.has(HookAfterAgent) {
+	if u.AfterAgentCallback != nil || p.has(HookAfterAgent) || p.opts.secureAudit {
 		c.AfterAgentCallback = func(ctx agent.Context) (*genai.Content, error) {
 			ctx = p.agentCtx(ctx)
+			ev := eventFromAgentContext(HookAfterAgent, ctx)
+			var out *genai.Content
+			var err error
 			if u.AfterAgentCallback != nil {
-				if out, err := u.AfterAgentCallback(ctx); out != nil || err != nil {
-					return out, err
-				}
+				out, err = u.AfterAgentCallback(ctx)
 			}
-			return nil, p.fire(eventFromAgentContext(HookAfterAgent, ctx))
+			// Audited whatever the user's callback returned, unless it failed.
+			if p.opts.secureAudit {
+				p.agentEnd(ev, err == nil)
+			}
+			if out != nil || err != nil {
+				return out, err
+			}
+			return nil, p.fire(ev)
 		}
 	}
 	if u.BeforeModelCallback != nil || p.has(HookBeforeModel) {
@@ -374,22 +404,20 @@ func (p *weilPlugin) config() plugin.Config {
 			return nil, p.fire(ev)
 		}
 	}
-	if u.AfterModelCallback != nil || p.has(HookAfterModel) || p.trace != nil {
+	if u.AfterModelCallback != nil || p.has(HookAfterModel) || p.trace != nil || p.opts.secureAudit {
 		c.AfterModelCallback = func(ctx agent.Context, resp *model.LLMResponse, respErr error) (*model.LLMResponse, error) {
 			ctx = p.agentCtx(ctx)
 			ev := eventFromAgentContext(HookAfterModel, ctx)
 			ev.LLMResponse, ev.Err = resp, respErr
 			if u.AfterModelCallback != nil {
 				if out, err := u.AfterModelCallback(ctx, resp, respErr); out != nil || err != nil {
-					if p.trace != nil && out != nil {
-						p.trace.plan(ev, out)
+					if out != nil {
+						p.modelResponse(ev, out)
 					}
 					return out, err
 				}
 			}
-			if p.trace != nil {
-				p.trace.plan(ev, resp)
-			}
+			p.modelResponse(ev, resp)
 			if !p.has(HookAfterModel) {
 				return nil, nil
 			}
@@ -412,8 +440,9 @@ func (p *weilPlugin) config() plugin.Config {
 	if u.BeforeToolCallback != nil || p.has(HookBeforeTool) || p.opts.secureAudit {
 		c.BeforeToolCallback = func(ctx agent.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 			ctx = p.agentCtx(ctx)
-			if p.opts.secureAudit && ctx.FunctionCallID() != "" {
-				toolAudits.Store(ctx.FunctionCallID(), pendingToolAudit{p: p, ev: toolEvent(HookBeforeTool, ctx, t, args)})
+			// Audited before the user's callback, which may skip the tool.
+			if p.opts.secureAudit {
+				p.toolStart(toolEvent(HookBeforeTool, ctx, t, args))
 			}
 			if u.BeforeToolCallback != nil {
 				if out, err := u.BeforeToolCallback(ctx, t, args); out != nil || err != nil {
@@ -471,9 +500,9 @@ type finishedCall struct {
 // afterTool notes a finished tool call. It is traced and audited from its
 // function response event (onToolResponses), so a replacement by any
 // after-tool callback — the agent's own run after the plugin's in ADK-Go —
-// is what gets recorded, as in Python. A call that failed, and that no
-// callback replaced, is not traced and audits only adk.tool.before: Python's
-// ADK runs no after-tool callback on an exception.
+// is what gets recorded. A call that failed, and that no callback replaced,
+// is not traced, audits only adk.tool.before and is charged no token usage,
+// as no after-tool callback runs on an exception in the Python SDK's ADK.
 func (p *weilPlugin) afterTool(ev *Event, final map[string]any, ok bool) {
 	toolAudits.Delete(ev.FunctionCallID)
 	if p.trace == nil && !p.opts.secureAudit {
@@ -530,22 +559,7 @@ func (p *weilPlugin) recordTool(ev *Event, final map[string]any, ok bool) {
 		takeSecuredCall(ev.FunctionCallID)
 		return
 	}
-	id, err := p.resolveIdentity(nil, ev)
-	if err != nil {
-		if _, found := takeSecuredCall(ev.FunctionCallID); found {
-			p.opts.onError(ev, "tool_audit", err)
-		}
-		return
-	}
-	audited := *ev
-	audited.Identity = id
-	// Inline and in order, as Python awaits each; the calls are fire and
-	// forget, so this waits only for the platform to take them.
-	for _, call := range toolAuditCalls(&audited, final, ok) {
-		if _, err := id.Invoke(context.WithoutCancel(ev.Context()), *call); err != nil {
-			p.opts.onError(ev, "tool_audit", err)
-		}
-	}
+	p.toolEnd(ev, final, ok)
 }
 
 // modelSees is the function response ADK hands the model for a tool call
@@ -620,6 +634,11 @@ func (p *weilPlugin) runAction(a *Action, shared *Event) error {
 		return nil
 	}
 
+	if a.background {
+		label := a.label()
+		submitAudit(ev.Identity, *call, func(err error) { p.opts.onError(&ev, label, err) })
+		return nil
+	}
 	if a.Mode == Blocking {
 		return p.runBlocking(a, &ev, call, fail)
 	}

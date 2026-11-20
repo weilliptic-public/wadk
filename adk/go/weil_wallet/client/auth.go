@@ -37,6 +37,9 @@ const MaxAuthAge = 5 * time.Minute
 // rides inside the signature; X-Wallet-Address is the key-derived address
 // the signature recovers to. Servers reject headers older than MaxAuthAge,
 // so build them per request.
+//
+// When ctx carries a trace context (WithTraceContext), it is signed into the
+// message as "trace" and mirrored in HeaderTraceID / HeaderTraceParentID.
 func (w *WeilClient) AuthHeaders(ctx context.Context) (map[string]string, error) {
 	return w.authHeaders(ctx, nil)
 }
@@ -70,6 +73,10 @@ func (w *WeilClient) authHeaders(ctx context.Context, body any) (map[string]stri
 		payload["body_sha256"] = sum
 		payload["nonce"] = hex.EncodeToString(nonce)
 	}
+	trace := TraceContextFrom(ctx)
+	if trace != nil {
+		payload["trace"] = trace.signed()
+	}
 
 	message, err := CanonicalJSON(payload)
 	if err != nil {
@@ -89,6 +96,12 @@ func (w *WeilClient) authHeaders(ctx context.Context, body any) (map[string]stri
 	if body != nil {
 		headers[HeaderBodySHA256] = payload["body_sha256"].(string)
 		headers[HeaderNonce] = payload["nonce"].(string)
+	}
+	if trace != nil {
+		headers[HeaderTraceID] = trace.TraceID
+		if trace.ParentID != "" {
+			headers[HeaderTraceParentID] = trace.ParentID
+		}
 	}
 	return headers, nil
 }

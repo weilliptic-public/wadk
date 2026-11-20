@@ -22,6 +22,9 @@ import io.a2a.client.transport.spi.interceptors.ClientCallInterceptor;
 import io.a2a.client.transport.spi.interceptors.PayloadAndHeaders;
 import io.a2a.spec.AgentCapabilities;
 import io.a2a.spec.AgentCard;
+import io.a2a.spec.Message;
+import io.a2a.spec.MessageSendParams;
+import io.a2a.spec.SendMessageRequest;
 import io.a2a.spec.TransportProtocol;
 import io.a2a.util.Utils;
 
@@ -99,6 +102,89 @@ public final class WeilA2A {
         } catch (NumberFormatException e) {
             return fallback;
         }
+    }
+
+    /**
+     * The trace a remote call being sent on this thread belongs to, for
+     * {@link Signer} to put in the message: set by {@link RemoteTool} and
+     * {@link WeilRemoteAgent} around the call, which ADK's remote agent sends
+     * on the thread that starts it.
+     * Unset, as on a call started some other way, the message goes without
+     * it and the remote agent keeps a trace of its own.
+     */
+    private static final ThreadLocal<Map<String, Object>> OUTGOING_TRACE = new ThreadLocal<>();
+
+    /**
+     * {@code call}, subscribed with {@code trace} as the trace the remote
+     * calls it sends belong to.
+     */
+    private static <T> Single<T> withOutgoingTrace(Single<T> call, Map<String, Object> trace) {
+        if (trace == null) {
+            return call;
+        }
+        return new Single<T>() {
+            @Override
+            protected void subscribeActual(io.reactivex.rxjava3.core.SingleObserver<? super T> observer) {
+                Map<String, Object> previous = OUTGOING_TRACE.get();
+                OUTGOING_TRACE.set(trace);
+                try {
+                    call.subscribe(observer);
+                } finally {
+                    if (previous == null) {
+                        OUTGOING_TRACE.remove();
+                    } else {
+                        OUTGOING_TRACE.set(previous);
+                    }
+                }
+            }
+        };
+    }
+
+    /** As {@link #withOutgoingTrace(Single, Map)}, for a remote agent's events. */
+    static <T> io.reactivex.rxjava3.core.Flowable<T> withOutgoingTrace(
+        io.reactivex.rxjava3.core.Flowable<T> call, Map<String, Object> trace) {
+        if (trace == null) {
+            return call;
+        }
+        return new io.reactivex.rxjava3.core.Flowable<T>() {
+            @Override
+            protected void subscribeActual(org.reactivestreams.Subscriber<? super T> subscriber) {
+                Map<String, Object> previous = OUTGOING_TRACE.get();
+                OUTGOING_TRACE.set(trace);
+                try {
+                    call.subscribe(subscriber);
+                } finally {
+                    if (previous == null) {
+                        OUTGOING_TRACE.remove();
+                    } else {
+                        OUTGOING_TRACE.set(previous);
+                    }
+                }
+            }
+        };
+    }
+
+    /**
+     * {@code payload} with the outgoing trace, if one is set, in its message's
+     * metadata under {@link WeilAgentServer#TRACE_METADATA_KEY}: done before
+     * signing, so the signature covers it.
+     */
+    private static Object withTrace(Object payload) {
+        Map<String, Object> trace = OUTGOING_TRACE.get();
+        if (trace == null || !(payload instanceof SendMessageRequest request)
+            || request.getParams() == null || request.getParams().message() == null) {
+            return payload;
+        }
+        MessageSendParams params = request.getParams();
+        Message message = params.message();
+        Map<String, Object> metadata = new HashMap<>();
+        if (message.getMetadata() != null) {
+            metadata.putAll(message.getMetadata());
+        }
+        metadata.put(WeilAgentServer.TRACE_METADATA_KEY, trace);
+        Message traced = new Message.Builder(message).metadata(metadata).build();
+        return new SendMessageRequest(request.getJsonrpc(), request.getId(), request.getMethod(),
+            new MessageSendParams(traced, params.configuration(), params.metadata()));
     }
 
     /**
@@ -188,7 +274,14 @@ public final class WeilA2A {
     public static AgentCard fetchCard(String url) {
         String base = cardBase(url);
         try {
-            return new A2ACardResolver(new JdkA2AHttpClient(), base).getAgentCard();
+            // The resolver resolves the card path against the base, which
+            // drops a path the base has, so the base is split: an agent
+            // served under /catalog has its card at /catalog/.well-known/...
+            java.net.URI uri = java.net.URI.create(base);
+            String origin = uri.getScheme() + "://" + uri.getRawAuthority();
+            String cardPath = WeilAgentServer.normalizePath(uri.getRawPath())
+                + WeilAgentServer.AGENT_CARD_PATH;
+            return new A2ACardResolver(new JdkA2AHttpClient(), origin, cardPath).getAgentCard();
         } catch (Exception e) {
             throw new IllegalStateException(
                 "could not read the A2A agent card at " + base + ": " + e.getMessage(), e);
@@ -217,7 +310,8 @@ public final class WeilA2A {
         try {
             return fetchCard(url);
         } catch (IllegalStateException e) {
-            String base = cardBase(url);
+            // The served root ends in a slash; without it a path is not routed.
+            String base = cardBase(url).replaceAll("/+$", "") + "/";
             System.err.println("[weil-a2a] " + e.getMessage()
                 + "; calling " + base + " anyway, which fails until it is up");
             return new AgentCard.Builder()
@@ -280,7 +374,13 @@ public final class WeilA2A {
             long started = System.currentTimeMillis();
             return Single.defer(() -> {
                     trace(name() + ": tool call started");
-                    return delegate.runAsync(args, toolContext);
+                    // The caller's trace and this call's node, so the remote
+                    // agent adds its run to this trace.
+                    Map<String, Object> callerTrace = toolContext == null ? null
+                        : com.weilliptic.weilwallet.TraceAction.remoteContext(
+                            toolContext.invocationContext().invocationId(),
+                            toolContext.functionCallId().orElse(null));
+                    return withOutgoingTrace(delegate.runAsync(args, toolContext), callerTrace);
                 })
                 // ADK's remote agent waits for its HTTP reply on the thread
                 // that starts it, and by default ADK starts the tools of one
@@ -451,6 +551,7 @@ public final class WeilA2A {
             AgentCard agentCard,
             ClientCallContext clientCallContext) {
 
+            payload = withTrace(payload);
             JsonNode wire;
             try {
                 wire = Utils.OBJECT_MAPPER.readTree(Utils.OBJECT_MAPPER.writeValueAsString(payload));

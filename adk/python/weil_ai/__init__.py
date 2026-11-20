@@ -4,6 +4,7 @@ from .agents import WeilAgent, agent_http_app, weil_agent
 from .agents import weil_agent as agent
 from .auth import build_auth_headers, verify_weil_signature
 from .mcp import (
+    SecuredCheckError,
     audit,
     current_wallet_addr,
     audit_payload,
@@ -12,6 +13,7 @@ from .mcp import (
     secured_user,
     weil_middleware,
 )
+from .secured_expr import SecuredExprError
 from weil_wallet.pensieve import PENSIEVE_APPLET_SVC_NAME, Pensieve
 
 from .memory import (
@@ -35,6 +37,8 @@ __all__ = [
     "secured",
     "secured_user",
     "secured_admin",
+    "SecuredCheckError",
+    "SecuredExprError",
     "weil_middleware",
     "current_wallet_addr",
     # pensieve

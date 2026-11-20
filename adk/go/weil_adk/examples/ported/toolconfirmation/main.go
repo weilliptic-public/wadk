@@ -44,7 +44,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"time"
 
 	"google.golang.org/genai"
 
@@ -200,8 +199,7 @@ func main() {
 	}
 
 	secure, err := weiladk.NewPlugin(plugin.Config{}, // weil: Python's setup_secure_a2a() on the local runner
-		weiladk.WithSecureA2A(weiladk.SecureA2AConfig{}),
-		weiladk.WithFlushAfterRun(time.Minute))
+		weiladk.WithSecureA2A(weiladk.SecureA2AConfig{}))
 	if err != nil {
 		log.Fatalf("Failed to create plugin: %v", err)
 	}

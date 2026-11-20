@@ -36,7 +36,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -180,8 +179,7 @@ func main() {
 // audits, and a trace of each run.
 func runLocal(ctx context.Context, root agent.Agent) {
 	p, err := weiladk.NewPlugin(plugin.Config{},
-		weiladk.WithSecureA2A(weiladk.SecureA2AConfig{}),
-		weiladk.WithFlushAfterRun(time.Minute))
+		weiladk.WithSecureA2A(weiladk.SecureA2AConfig{}))
 	if err != nil {
 		log.Fatalf("Failed to create plugin: %v", err)
 	}

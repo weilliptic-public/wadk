@@ -12,8 +12,10 @@ import com.weilliptic.weilwallet.adk.Call;
 import com.weilliptic.weilwallet.adk.Hook;
 import com.weilliptic.weilwallet.adk.StreamAudit;
 import com.weilliptic.weilwallet.adk.WeilAction;
+import com.weilliptic.weilwallet.adk.WeilAgentServer;
 import com.weilliptic.weilwallet.adk.WeilEvent;
 import com.weilliptic.weilwallet.adk.WeilPlugin;
+import com.weilliptic.weilwallet.adk.WeilRemoteAgent;
 import com.weilliptic.weilwallet.adk.WeilResult;
 
 import java.util.ArrayList;
@@ -22,6 +24,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -70,6 +73,19 @@ import java.util.concurrent.ConcurrentLinkedDeque;
  * is best effort: a failure is reported through the plugin's {@code onError}
  * and never stops the agent.</p>
  *
+ * <p>Over A2A the trace follows the call. {@link
+ * com.weilliptic.weilwallet.adk.Weil#remoteTool} sends this run's trace id and
+ * the tool call's node in the signed message, as {@code weil_trace}, and so
+ * does {@link com.weilliptic.weilwallet.adk.Weil#remoteAgent} when the
+ * conversation is handed over: its hand-over is a {@code remote_agent} node,
+ * {@code {"remote_agent", "result", "agent", "wallet"}}, after the transfer, with the remote agent's
+ * reply as its result. The
+ * agent {@link WeilAgentServer} serves adds its run to that trace instead of
+ * starting one: a {@code subtrace} node, {@code {"root": request, "agent",
+ * "wallet"}}, under the caller's node, signed by the served agent. Only the run
+ * that started the trace indexes and publishes it, so one prompt is one trace
+ * however many agents it reaches.</p>
+ *
  * <p>The actions are non-blocking and only build the calls; the plugin's
  * {@link com.weilliptic.weilwallet.adk.Dispatcher} sends them. On the
  * ordered background queue {@link com.weilliptic.weilwallet.adk.Weil#plugin}
@@ -108,12 +124,18 @@ public final class TraceAction {
         final Map<String, Node> calls = new HashMap<>();
         /** Set by the first of after_run and run_error to index the trace. */
         boolean indexed;
+        /**
+         * True for a served run that adds to its A2A caller's trace: the caller
+         * started it, and indexes and publishes it, so this run does neither.
+         */
+        final boolean joined;
 
         /** A run with a trace of its own. */
         Run(String root) {
             this.owner = this;
             this.traceId = UUID.randomUUID().toString();
             this.root = root;
+            this.joined = false;
         }
 
         /** A run that adds to {@code owner}'s trace, its tools following {@code base}. */
@@ -123,6 +145,17 @@ public final class TraceAction {
             this.root = root;
             this.last = base;
             this.turnParent = base;
+            this.joined = owner.joined;
+        }
+
+        /** A served run that adds to the remote caller's trace {@code traceId}, its tools following {@code base}. */
+        Run(String traceId, String root, String base) {
+            this.owner = this;
+            this.traceId = traceId;
+            this.root = root;
+            this.last = base;
+            this.turnParent = base;
+            this.joined = true;
         }
 
         boolean ownsTrace() {
@@ -136,7 +169,21 @@ public final class TraceAction {
     /** An {@link AgentTool} call whose sub-agent run has not started yet. */
     private record Pending(String root, Run run, String parentId) {}
 
+    /** Every TraceAction made, so a remote call can find the trace of the run it is part of. */
+    private static final Set<TraceAction> LIVE = ConcurrentHashMap.newKeySet();
+
     private final Map<String, Run> runs = new ConcurrentHashMap<>();
+    /**
+     * The trace of each of the last runs to end, by run, so the records made
+     * as a run ends, after its trace is let go, still name it.
+     */
+    private final Map<String, String> ended = java.util.Collections.synchronizedMap(
+        new java.util.LinkedHashMap<String, String>() {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                return size() > 1000;
+            }
+        });
     /** {@link AgentTool} calls in flight, by the request their sub-agent will start with. */
     private final Map<String, Deque<Pending>> pending = new ConcurrentHashMap<>();
 
@@ -144,7 +191,92 @@ public final class TraceAction {
 
     /** The actions that trace every run, for {@link WeilPlugin.Builder#withActions}. */
     public static WeilAction[] actions() {
-        return new TraceAction().build();
+        TraceAction trace = new TraceAction();
+        LIVE.add(trace);
+        return trace.build();
+    }
+
+    /**
+     * The id of the trace run {@code invocationId} is part of, for audit
+     * records to name; null when the run is not traced or its trace has not
+     * started. A sub-agent's run, and a served run that joined its caller's
+     * trace, name that trace.
+     */
+    public static String traceId(String invocationId) {
+        if (invocationId == null) {
+            return null;
+        }
+        for (TraceAction trace : LIVE) {
+            Run run = trace.runs.get(invocationId);
+            if (run != null && run.owner.started) {
+                return run.traceId;
+            }
+            String ended = trace.ended.get(invocationId);
+            if (ended != null) {
+                return ended;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * What a hand-over to remote agent {@code agentName} in run
+     * {@code invocationId} carries so that agent joins this trace: the trace
+     * id, and the hand-over's own node as parent. Null when the run is not
+     * traced.
+     */
+    public static Map<String, Object> remoteAgentContext(String invocationId, String agentName) {
+        if (invocationId == null) {
+            return null;
+        }
+        for (TraceAction trace : LIVE) {
+            Run run = trace.runs.get(invocationId);
+            if (run == null || !run.owner.started) {
+                continue;
+            }
+            String parent;
+            synchronized (run.owner) {
+                Node node = run.calls.get(agentKey(agentName));
+                parent = node != null ? node.id() : run.last;
+            }
+            Map<String, Object> context = new HashMap<>();
+            context.put("trace_id", run.traceId);
+            context.put("parent_id", parent);
+            return context;
+        }
+        return null;
+    }
+
+    private static String agentKey(String agentName) {
+        return "agent:" + agentName;
+    }
+
+    /**
+     * What a remote call made by tool call {@code functionCallId} of run
+     * {@code invocationId} carries so the remote agent joins this trace:
+     * {@code {"trace_id", "parent_id"}}, the parent being that tool call's
+     * node. Null when the run is not traced, or its trace was never started.
+     */
+    public static Map<String, Object> remoteContext(String invocationId, String functionCallId) {
+        if (invocationId == null) {
+            return null;
+        }
+        for (TraceAction trace : LIVE) {
+            Run run = trace.runs.get(invocationId);
+            if (run == null || !run.owner.started) {
+                continue;
+            }
+            String parent;
+            synchronized (run.owner) {
+                Node node = functionCallId == null ? null : run.calls.get("call:" + functionCallId);
+                parent = node != null ? node.id() : run.turnParent;
+            }
+            Map<String, Object> context = new HashMap<>();
+            context.put("trace_id", run.traceId);
+            context.put("parent_id", parent);
+            return context;
+        }
+        return null;
     }
 
     private WeilAction[] build() {
@@ -172,6 +304,15 @@ public final class TraceAction {
             WeilAction.named("trace:tool").on(Hook.AFTER_TOOL, Hook.TOOL_ERROR).nonBlocking()
                 .build(this::afterTool)
                 .done(),
+            WeilAction.named("trace:remote-agent-start").on(Hook.BEFORE_AGENT).nonBlocking()
+                .build(ev -> {
+                    beforeRemoteAgent(ev);
+                    return null;
+                })
+                .done(),
+            WeilAction.named("trace:remote-agent").on(Hook.AFTER_AGENT).nonBlocking()
+                .build(this::afterRemoteAgent)
+                .done(),
             WeilAction.named("trace:index").on(Hook.AFTER_RUN, Hook.RUN_ERROR).nonBlocking()
                 .build(this::index)
                 .done(),
@@ -190,7 +331,11 @@ public final class TraceAction {
         String root = root(ev);
         Pending parent = claim(root);
         if (parent != null) {
-            return startChild(runId, root, parent);
+            return startChild(runId, root, parent, ev);
+        }
+        Map<String, Object> remote = WeilAgentServer.callerTrace(invocationContext(ev));
+        if (remote != null) {
+            return startJoined(runId, root, remote, ev);
         }
         Run run = new Run(root);
         if (runs.putIfAbsent(runId, run) != null) {
@@ -204,8 +349,34 @@ public final class TraceAction {
         return call("add_trace", args);
     }
 
+    /**
+     * A served run whose A2A caller sent its trace: a {@code subtrace} node in
+     * that trace, under the caller's node, naming this agent's wallet, since
+     * the applet does not record who wrote a node. No {@code add_trace}: the
+     * trace exists, and {@code add_trace} would replace it.
+     */
+    private Call startJoined(String runId, String root, Map<String, Object> remote, WeilEvent ev) {
+        String nodeId = UUID.randomUUID().toString();
+        Run run = new Run((String) remote.get("trace_id"), root, nodeId);
+        if (runs.putIfAbsent(runId, run) != null) {
+            return null;
+        }
+        run.started = true;
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("root", root);
+        putWho(content, ev);
+        return addNode(run, node(nodeId, (String) remote.get("parent_id"), "subtrace", content));
+    }
+
+    private static com.google.adk.agents.InvocationContext invocationContext(WeilEvent ev) {
+        if (ev.invocationContext() != null) {
+            return ev.invocationContext();
+        }
+        return ev.callbackContext() != null ? ev.callbackContext().invocationContext() : null;
+    }
+
     /** A sub-agent run behind an {@link AgentTool}: a {@code subtrace} node in its caller's trace. */
-    private Call startChild(String runId, String root, Pending parent) {
+    private Call startChild(String runId, String root, Pending parent, WeilEvent ev) {
         Run owner = parent.run().owner;
         // A sub-agent asked the trace's own question adds no node, as in Python.
         if (root.equals(owner.root)) {
@@ -218,6 +389,7 @@ public final class TraceAction {
         }
         Map<String, Object> content = new LinkedHashMap<>();
         content.put("root", root);
+        putWho(content, ev);
         return addNode(owner, node(nodeId, parent.parentId(), "subtrace", content));
     }
 
@@ -278,14 +450,87 @@ public final class TraceAction {
         content.put("tool", ev.toolName());
         content.put("args", jsonable(withMetadata(ev.toolArgs(), ev.toolCallId())));
         content.put("result", jsonable(ev.toolResult()));
+        putWho(content, ev);
         return addNode(run.owner, node(node.id(), node.parentId(), "tool_call", content));
+    }
+
+    /**
+     * A hand-over to a remote agent starts: its node is decided now, after
+     * the transfer that led to it, so the call can name it as the parent the
+     * remote agent's run hangs under.
+     */
+    private void beforeRemoteAgent(WeilEvent ev) {
+        if (!(ev.agent() instanceof WeilRemoteAgent)) {
+            return;
+        }
+        Run run = run(ev);
+        if (run == null || !run.owner.started) {
+            return;
+        }
+        synchronized (run.owner) {
+            run.calls.put(agentKey(ev.agent().name()),
+                new Node(UUID.randomUUID().toString(), run.last, null));
+        }
+    }
+
+    /** The hand-over ends: its node, with the remote agent's reply as the result. */
+    private Call afterRemoteAgent(WeilEvent ev) {
+        if (!(ev.agent() instanceof WeilRemoteAgent)) {
+            return null;
+        }
+        Run run = run(ev);
+        if (run == null || !run.owner.started) {
+            return null;
+        }
+        String name = ev.agent().name();
+        Node node;
+        synchronized (run.owner) {
+            node = run.calls.remove(agentKey(name));
+            if (node == null) {
+                return null;
+            }
+            run.last = node.id();
+        }
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("remote_agent", name);
+        content.put("result", reply(invocationContext(ev), name));
+        // Taken by the agent that handed over, which this event is not about.
+        com.google.adk.agents.BaseAgent caller = ev.agent().parentAgent();
+        if (caller != null) {
+            content.put("agent", caller.name());
+        }
+        if (ev.identity() != null) {
+            content.put("wallet", ev.identity().address());
+        }
+        return addNode(run.owner, node(node.id(), node.parentId(), "remote_agent", content));
+    }
+
+    /** The text of the last event {@code agentName} wrote in this session, or null. */
+    private static String reply(com.google.adk.agents.InvocationContext ctx, String agentName) {
+        if (ctx == null || ctx.session() == null) {
+            return null;
+        }
+        List<com.google.adk.events.Event> events = ctx.session().events();
+        for (int i = events.size() - 1; i >= 0; i--) {
+            com.google.adk.events.Event event = events.get(i);
+            if (!agentName.equals(event.author())) {
+                continue;
+            }
+            List<String> texts = new ArrayList<>();
+            event.content().flatMap(Content::parts).orElse(List.of())
+                .forEach(part -> part.text().filter(t -> !t.isBlank()).ifPresent(texts::add));
+            if (!texts.isEmpty()) {
+                return String.join("\n", texts);
+            }
+        }
+        return null;
     }
 
     /** {@code index_trace} for a run's own trace, once, at its end; the publish follows it. */
     private Call index(WeilEvent ev) {
         Run run = run(ev);
-        if (run == null || !run.ownsTrace() || !run.started) {
-            return null; // a sub-agent's run is indexed with its caller's
+        if (run == null || !run.ownsTrace() || !run.started || run.joined) {
+            return null; // a sub-agent's or a joined run is indexed with its caller's
         }
         synchronized (run) {
             if (run.indexed) {
@@ -302,8 +547,11 @@ public final class TraceAction {
      */
     private Call getTrace(WeilEvent ev) {
         Run run = ev.invocationId() == null ? null : runs.remove(ev.invocationId());
-        if (run == null || !run.ownsTrace() || !run.started) {
-            return null; // a sub-agent's run is published with its caller's
+        if (run != null && run.owner.started) {
+            ended.put(ev.invocationId(), run.traceId);
+        }
+        if (run == null || !run.ownsTrace() || !run.started || run.joined) {
+            return null; // a sub-agent's or a joined run is published with its caller's
         }
         return Call.to(TRACER, "get_trace")
             .args(Map.of("trace_id", run.traceId))
@@ -341,6 +589,20 @@ public final class TraceAction {
         args.put("trace_id", owner.traceId);
         args.put("event", event);
         return call("build_trace", args);
+    }
+
+    /**
+     * Who made a node: the agent's name and the wallet it acts as, so a step
+     * says which agent took it even where agents share a wallet. The applet
+     * does not record who wrote a node.
+     */
+    private static void putWho(Map<String, Object> content, WeilEvent ev) {
+        if (ev.agentName() != null) {
+            content.put("agent", ev.agentName());
+        }
+        if (ev.identity() != null) {
+            content.put("wallet", ev.identity().address());
+        }
     }
 
     /** The applet's {@code TraceEvent} record. */

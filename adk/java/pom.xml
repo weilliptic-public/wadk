@@ -6,7 +6,7 @@
 
     <groupId>ai.weilliptic</groupId>
     <artifactId>weil-wallet</artifactId>
-    <version>0.2.2</version>
+    <version>0.2.3</version>
     <packaging>jar</packaging>
     <name>Weil Wallet SDK for Java</name>
     <description>WeilChain wallet, client, and agent with audit capabilities</description>

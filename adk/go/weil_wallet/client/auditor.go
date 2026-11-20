@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"time"
 
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/transaction"
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/wallet"
@@ -16,14 +17,15 @@ const AuditorApplet = "auditor::weil"
 // public, as the Python SDK's client.audit(log) does, and waits for the
 // auditor to run it: a submission the platform accepted can still be lost
 // before it runs, and only waiting shows it. A lost entry is resent with
-// the same transaction ID (DurableRetry); an entry the auditor rejects is
-// returned as a *transaction.AppletError.
+// the same transaction ID (DurableRetry), and auditor::weil is resolved
+// under the same policy. An entry the auditor rejects is returned as a
+// *transaction.AppletError (see transaction.RejectedBy).
 func (w *WeilClient) Audit(log string) error {
 	res, err := w.AuditContext(context.Background(), log, ExecuteOptions{Retry: DurableRetry})
 	if err != nil {
 		return err
 	}
-	return res.Decode(nil)
+	return transaction.RejectedBy(res.TxnResult)
 }
 
 // AuditArgs are the auditor applet's `audit` arguments for log, tagged with
@@ -44,13 +46,42 @@ func AuditArgs(log string, org *wallet.OrgInfo) any {
 }
 
 // AuditContext submits a log entry to the auditor applet's `audit` method,
-// tagged with the active account's org and subgroup.
+// tagged with the active account's org and subgroup. With opts.Retry set,
+// resolving the auditor is retried under it too, so a cold client's first
+// entry is not lost to a congested get_applet_address.
 func (w *WeilClient) AuditContext(ctx context.Context, log string, opts ExecuteOptions) (*transaction.TransactionResult, error) {
 	argsBytes, err := PythonDumpsValue(AuditArgs(log, w.Org()), false)
 	if err != nil {
 		return nil, err
 	}
-	return w.ExecuteByName(ctx, AuditorApplet, "audit", string(argsBytes), opts)
+	contractID, err := w.resolveAppletRetrying(ctx, AuditorApplet, opts.Retry)
+	if err != nil {
+		return nil, err
+	}
+	return w.ExecuteContext(ctx, contractID, "audit", string(argsBytes), opts)
+}
+
+// resolveAppletRetrying is ResolveApplet, retried under policy while
+// Sentinel cannot be reached, for at most SignedTxnTTL.
+func (w *WeilClient) resolveAppletRetrying(ctx context.Context, svcName string, policy RetryPolicy) (string, error) {
+	if !policy.enabled() {
+		return w.ResolveApplet(ctx, svcName)
+	}
+	ctx, cancel := context.WithTimeout(ctx, SignedTxnTTL)
+	defer cancel()
+	backoff, maxBackoff := backoffs(policy)
+	for attempt := 1; ; attempt++ {
+		id, err := w.ResolveApplet(ctx, svcName)
+		if err == nil || attempt >= policy.MaxAttempts || ctx.Err() != nil || !TransportFailure(err) {
+			return id, err
+		}
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return id, err
+		}
+		backoff = min(backoff*2, maxBackoff)
+	}
 }
 
 // ReceiptRef locates a receipt persisted by PersistReceipt.

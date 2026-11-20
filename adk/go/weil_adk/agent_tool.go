@@ -45,7 +45,10 @@ type AgentToolConfig struct {
 // schema's object — and returns {"result": text of its last reply}, or the
 // parsed object when it has an output schema. As in Python, state the
 // sub-run changes is copied back to the caller, and artifacts go to the
-// caller's session. An unbound sub-agent acts as the agent that called it.
+// caller's session. An unbound sub-agent acts as the agent that called it;
+// a bound one names that agent as its caller (CallerFromContext), and its
+// audit records carry no service. Under WithTracing the sub-run is recorded
+// in the calling run's trace (see WithTracing).
 func NewAgentTool(a agent.Agent, cfg *AgentToolConfig) tool.Tool {
 	if cfg == nil {
 		cfg = &AgentToolConfig{}
@@ -136,9 +139,11 @@ func (t *weilAgentTool) Run(ctx agent.Context, args any) (map[string]any, error)
 	}
 
 	// The sub-run acts as the caller's identity unless its agent has its own.
-	runCtx := context.Context(ctx)
+	runCtx := context.WithValue(ctx, agentToolKey{}, &agentToolRun{
+		caller: IdentityOf(ctx), invocationID: ctx.InvocationID(), functionCallID: ctx.FunctionCallID(), branch: ctx.Branch(),
+	})
 	if id := IdentityOf(ctx); id != nil {
-		runCtx = ContextWithIdentity(ctx, id)
+		runCtx = ContextWithIdentity(runCtx, id)
 	}
 
 	var last *session.Event
@@ -243,6 +248,18 @@ var (
 	errNoParentArtifacts     = fmt.Errorf("weiladk: the calling agent has no artifact service")
 	errArtifactOpUnsupported = fmt.Errorf("weiladk: a sub-agent run as a tool can save, load and list the caller's artifacts only")
 )
+
+// agentToolKey marks the context of a sub-agent run (NewAgentTool) with the
+// call that started it.
+type agentToolKey struct{}
+
+// agentToolRun is the call that started a sub-agent run: the calling agent's
+// identity (nil if it has none), and the calling run's invocation, the tool
+// call's function call ID and its branch.
+type agentToolRun struct {
+	caller                               *Identity
+	invocationID, functionCallID, branch string
+}
 
 // ── run → Weil plugins ───────────────────────────────────────────────────
 

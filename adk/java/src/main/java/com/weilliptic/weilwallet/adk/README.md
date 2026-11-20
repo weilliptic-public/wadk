@@ -162,7 +162,7 @@ an applet call signed by the agent's wallet:
 |---|---|---|
 | `AuditAction` | user message, agents, model replies, tools, run end | a record on the auditor applet, fire-and-forget |
 | `TraceAction` | run start, model responses, before and after each tool, run end | one trace per run on `weilchain::weil`: the prompt, then each tool as a node with its arguments, result and parent, so tools called together branch; read back with `get_trace` when the run ends and published to `publisher::<org>`, topic `audits`. In `com.weilliptic.weilwallet`, beside `WeilClient` |
-| `PermissionGate` | before each secured tool | checks the caller's wallet; refused, the tool does not run and the model gets the reason |
+| `PermissionGate` | before each secured tool | checks the local agent's own wallet; refused, the tool does not run and the model gets the reason |
 
 Non-blocking actions can never stop a step. By default a hand-built plugin
 sends them before the hook returns (retried, and a failure reported);

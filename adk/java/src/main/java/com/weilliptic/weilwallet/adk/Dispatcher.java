@@ -152,36 +152,59 @@ public final class Dispatcher implements AutoCloseable {
         }
     }
 
+    /**
+     * Send {@code call}, retrying, then run {@code onDone}. The call counts as
+     * finished only once {@code onDone} has run: a follow-up it makes, such as
+     * a trace's publish after its {@code get_trace}, is then sent before
+     * {@link #flush} sees nothing pending, so an exit cannot cut it off.
+     */
     private void deliver(WeilIdentity identity, Call call, Completion onDone) {
         Throwable last = null;
         for (int attempt = 1; attempt <= attempts; attempt++) {
+            WeilResult result;
             try {
-                WeilResult result = identity.invoke(call);
-                completed.incrementAndGet();
-                if (onDone != null) {
-                    onDone.accept(result, null);
-                }
-                return;
+                result = identity.invoke(call);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 last = e;
                 break;
             } catch (Throwable t) {
                 last = t;
-            }
-            if (attempt < attempts) {
-                retried.incrementAndGet();
-                try {
-                    Thread.sleep(RETRY_BACKOFF_MILLIS << (attempt - 1));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
+                if (attempt < attempts) {
+                    retried.incrementAndGet();
+                    try {
+                        Thread.sleep(RETRY_BACKOFF_MILLIS << (attempt - 1));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                 }
+                continue;
             }
+            try {
+                // Outside the send's try: a follow-up that fails is reported,
+                // never taken for a failed send and sent again.
+                notify(onDone, result, null);
+            } finally {
+                completed.incrementAndGet();
+            }
+            return;
         }
-        failed.incrementAndGet();
-        if (onDone != null) {
-            onDone.accept(null, last);
+        try {
+            notify(onDone, null, last);
+        } finally {
+            failed.incrementAndGet();
+        }
+    }
+
+    private static void notify(Completion onDone, WeilResult result, Throwable error) {
+        if (onDone == null) {
+            return;
+        }
+        try {
+            onDone.accept(result, error);
+        } catch (Throwable t) {
+            System.err.println("[weil] follow-up to a queued call failed: " + t);
         }
     }
 

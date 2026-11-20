@@ -13,7 +13,7 @@ import (
 	"github.com/weilliptic-public/wadk/adk/go/weil_adk/examples/ported/adk_team/internal/team"
 )
 
-// --- Settings (settings.py) ---
+// --- Settings ---
 
 const (
 	githubBaseURL             = "https://api.github.com"
@@ -92,7 +92,7 @@ func pyFloat(f float64) string {
 	return strconv.FormatFloat(f, 'g', -1, 64)
 }
 
-// --- API call counter (utils.py) ---
+// --- API call counter ---
 
 var apiCallCount atomic.Int64
 

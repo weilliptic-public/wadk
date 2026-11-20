@@ -16,7 +16,7 @@ import (
 	"github.com/weilliptic-public/wadk/adk/go/weil_adk/examples/ported/adk_team/internal/team"
 )
 
-// settings.py
+// Settings.
 var (
 	githubBaseURL     = "https://api.github.com"
 	githubGraphQLURL  = githubBaseURL + "/graphql"
@@ -43,8 +43,6 @@ func loadSettings() {
 		"Accept":        "application/vnd.github.v3.diff",
 	}}
 }
-
-// utils.py
 
 func runGraphQLQuery(query string, variables map[string]any) (map[string]any, error) {
 	return github.GraphQL(githubGraphQLURL, query, variables)
@@ -79,8 +77,6 @@ func isAssignable(login string) bool {
 func errorResponse(msg string) map[string]any {
 	return map[string]any{"status": "error", "error_message": msg}
 }
-
-// agent.py
 
 func approvalInstruction() string {
 	if isInteractive {

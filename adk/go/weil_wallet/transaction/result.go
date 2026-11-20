@@ -90,3 +90,34 @@ func rawToMessage(raw json.RawMessage) string {
 	}
 	return string(raw)
 }
+
+// RejectedBy returns the *AppletError a method's txn_result carries, looking
+// through the {"Ok": ...} envelopes and JSON-text layers that wrap it, three
+// steps deep (each JSON decode or envelope unwrapped is one step). A result
+// that is empty or not JSON is not a rejection.
+func RejectedBy(txnResult string) error {
+	var value any = txnResult
+	for range 3 {
+		switch v := value.(type) {
+		case string:
+			var decoded any
+			if json.Unmarshal([]byte(v), &decoded) != nil {
+				return nil
+			}
+			value = decoded
+		case map[string]any:
+			if errValue, ok := v["Err"]; ok {
+				raw, _ := json.Marshal(errValue)
+				return &AppletError{Message: rawToMessage(raw)}
+			}
+			okValue, ok := v["Ok"]
+			if !ok {
+				return nil
+			}
+			value = okValue
+		default:
+			return nil
+		}
+	}
+	return nil
+}

@@ -2,10 +2,13 @@ package weiladk
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"time"
+	"unsafe"
 
 	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
 	"github.com/weilliptic-public/wadk/adk/go/weil_wallet/secured"
@@ -13,7 +16,7 @@ import (
 
 // SecuredUser gates an ADK function tool on the wallet of the agent running
 // it holding the Execution or Management purpose in scope ("subgroup.org" or
-// "org") — the twin of Python's @secured_user on an ADK tool:
+// "org"):
 //
 //	search, _ := functiontool.New(functiontool.Config{Name: "search_flights"},
 //		weiladk.SecuredUser("engg.weil", searchFlights))
@@ -26,26 +29,27 @@ func SecuredUser[In, Out any](scope string, fn functiontool.Func[In, Out]) funct
 	return securedTool(scope, secured.User, fn)
 }
 
-// SecuredAdmin gates an ADK function tool on its caller holding the
-// Management purpose in scope (Python: @secured_admin).
+// SecuredAdmin gates an ADK function tool on the wallet of the agent running
+// it holding the Management purpose in scope, as SecuredUser does for
+// Execution or Management.
 func SecuredAdmin[In, Out any](scope string, fn functiontool.Func[In, Out]) functiontool.Func[In, Out] {
 	return securedTool(scope, secured.Admin, fn)
 }
 
 func securedTool[In, Out any](scope string, level secured.Level, fn functiontool.Func[In, Out]) functiontool.Func[In, Out] {
-	if _, err := secured.ParseScope(scope); err != nil {
+	if err := secured.ValidateRule(scope); err != nil {
 		panic(err)
 	}
 	access := "user"
 	if level == secured.Admin {
 		access = "admin"
 	}
-	return func(ctx agent.Context, in In) (Out, error) {
-		if ctx != nil {
+	f := functiontool.Func[In, Out](func(ctx agent.Context, in In) (Out, error) {
+		// A WithSecureA2A plugin that recognised the tool (securedToolOf) has
+		// written adk.tool.before already. Otherwise write it now, before the
+		// check and the tool's own calls.
+		if ctx != nil && !securedCallAudited(ctx.FunctionCallID()) {
 			sc := securedCall{service: scope, access: access, at: time.Now()}
-			// Under a WithSecureA2A plugin, write adk.tool.before now, before
-			// the check and the tool's own calls, as Python's before-tool
-			// callback does.
 			sc.beforeAudited = auditToolBefore(ctx.FunctionCallID(), sc)
 			rememberSecuredCall(ctx.FunctionCallID(), sc)
 		}
@@ -54,7 +58,39 @@ func securedTool[In, Out any](scope string, level secured.Level, fn functiontool
 			return zero, err
 		}
 		return fn(ctx, in)
+	})
+	securedFuncs.Store(funcIdentity(&f), securedCall{service: scope, access: access})
+	return f
+}
+
+// securedFuncs holds the scope and access of each function SecuredUser and
+// SecuredAdmin returned, by its closure, so a plugin can tell a secured
+// function tool before it runs.
+var securedFuncs sync.Map // closure pointer → securedCall
+
+// funcIdentity is the closure a func value points to, which tells two
+// closures of the same function literal apart.
+func funcIdentity[F any](f *F) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(f))
+}
+
+// securedToolOf returns the scope and access of t if it is a function tool
+// (functiontool.New) built on SecuredUser or SecuredAdmin.
+func securedToolOf(t tool.Tool) (securedCall, bool) {
+	v := reflect.ValueOf(t)
+	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() || v.Elem().Kind() != reflect.Struct {
+		return securedCall{}, false
 	}
+	h := v.Elem().FieldByName("handler")
+	if !h.IsValid() || h.Kind() != reflect.Func {
+		return securedCall{}, false
+	}
+	// The field is unexported; read the closure pointer through its address.
+	sc, ok := securedFuncs.Load(*(*unsafe.Pointer)(h.Addr().UnsafePointer()))
+	if !ok {
+		return securedCall{}, false
+	}
+	return sc.(securedCall), true
 }
 
 // requireActing checks the acting agent's wallet against scope and level,
@@ -73,7 +109,7 @@ func requireActing(ctx context.Context, scope string, level secured.Level) error
 }
 
 // securedCall is what a secured tool's audit records name: its scope and
-// access level ("user"/"admin", Python's secured_info), and when it started.
+// access level ("user"/"admin"), and when it started.
 type securedCall struct {
 	service, access string
 	at              time.Time
@@ -82,9 +118,9 @@ type securedCall struct {
 }
 
 // securedCalls holds the secured tool calls in flight, by ADK function call
-// ID, until a plugin with WithSecureA2A audits them after the call. ADK-Go
-// does not let a plugin tell a secured function tool from another before it
-// runs, so the tool itself says so.
+// ID, until a plugin with WithSecureA2A audits them after the call. The
+// plugin records the calls it recognises as they start (securedToolOf); a
+// secured function it cannot see into records itself as it runs.
 var (
 	securedCalls   sync.Map // function call ID → securedCall
 	securedSweepMu sync.Mutex
@@ -110,6 +146,12 @@ func rememberSecuredCall(id string, c securedCall) {
 		}
 		return true
 	})
+}
+
+// securedCallAudited reports whether the call id has its adk.tool.before.
+func securedCallAudited(id string) bool {
+	v, ok := securedCalls.Load(id)
+	return ok && v.(securedCall).beforeAudited
 }
 
 func takeSecuredCall(id string) (securedCall, bool) {

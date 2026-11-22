@@ -1,0 +1,26 @@
+# The Placeholder Values are to replaced.
+# These are used here for DEMO Purposes
+# These Credentials can be generated in their respective platforms
+
+discord_webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+slack_webhook_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+
+
+twilio_account_sid: "ACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+twilio_auth_token: "your_twilio_auth_token_here"
+twilio_from_phone: "+91XXXXXXXXXX"
+
+pagerduty_api_key: "your_pagerduty_api_key_here"
+pagerduty_service_id: "PXXXXXXX"
+pagerduty_from_email: "oncall@yourcompany.com"
+
+statuspage_api_key: "your_statuspage_api_key_here"
+statuspage_page_id: "your_statuspage_page_id_here"
+
+sendgrid_api_key: "SG.your_sendgrid_api_key_here"
+sendgrid_from_email: "alerts@yourcompany.com"
+
+whereby_api_key: "your_whereby_api_key_here"
+
+# The deployed contract ID of the incident_logger smart contract
+logger_contract_id: "your_logger_contract_id_here"

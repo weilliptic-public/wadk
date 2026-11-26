@@ -161,7 +161,7 @@ an applet call signed by the agent's wallet:
 | Action | Step | What it does |
 |---|---|---|
 | `AuditAction` | user message, agents, model replies, tools, run end | a record on the auditor applet, fire-and-forget |
-| `TraceAction` | run start, model responses, before and after each tool, run end | one trace per run on `weilchain::weil`: the prompt, then each tool as a node with its arguments, result and parent, so tools called together branch; read back with `get_trace` when the run ends and published to `publisher::<org>`, topic `audits`. In `com.weilliptic.weilwallet`, beside `WeilClient` |
+| `TraceAction` | run start, model responses, before and after each tool, run end | one trace per run on `weilchain::weil`: the prompt, then each tool as a node with its arguments, result and parent, so tools called together branch; kept in memory as it is sent and published from there to `publisher::<org>`, topic `audits`, when the run ends. In `com.weilliptic.weilwallet`, beside `WeilClient` |
 | `PermissionGate` | before each secured tool | checks the local agent's own wallet; refused, the tool does not run and the model gets the reason |
 
 Non-blocking actions can never stop a step. By default a hand-built plugin
@@ -328,8 +328,8 @@ off.
 
 **Run traces.** Every run's trace, kept on `weilchain::weil` as the Python
 SDK's tracer keeps it, is published to the organisation's publisher on topic
-`audits` when the run ends, as `get_trace` returns it from the applet through
-Sentinel: the prompt, then each
+`audits` when the run ends, from the copy the run kept in memory as it sent
+each node, with no `get_trace` to read it back: the prompt, then each
 tool call as a node under the one it follows, so tools called together branch.
 Each node is a `TraceEvent`, `{id, parent_id, event_type, content}`, with
 `content` `{"args", "result", "tool"}` for a tool call. The applet also indexes it, so

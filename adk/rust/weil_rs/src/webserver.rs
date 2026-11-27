@@ -15,6 +15,8 @@
 //! Paths are normalized to map keys by replacing `/` with `~` (see
 //! [`WebServer::path_key`]) to ensure compatibility with map key constraints.
 
+use base32::{encode, Alphabet};
+
 use crate::{
     collections::{
         map::WeilMap,
@@ -88,8 +90,8 @@ impl WebServer {
     /// Normalize a user-facing path into a map key by replacing `/` with `~`.
     ///
     /// This avoids conflicts with path separators in key storage.
-    fn path_key(path: String) -> String {
-        path.as_str().replace("/", "~")
+    fn path_key(path: &str) -> String {
+        encode(Alphabet::Rfc4648Lower { padding: false }, path.as_bytes())
     }
 
     /// Infer a `Content-Type` header value from a file path using its extension.
@@ -123,7 +125,7 @@ impl WebServer {
         total_chunks: u32,
     ) -> Result<(), String> {
         Runtime::debug_log(&format!("[start_file_upload] path: {}", path));
-        let path_key = WebServer::path_key(path);
+        let path_key = WebServer::path_key(&path);
         Runtime::debug_log(&format!("[start_file_upload] path_key: {}", path_key));
 
         let memory = WeilMemory::with_num_chunks(id, total_chunks, self.chunk_size as u32)
@@ -146,7 +148,7 @@ impl WebServer {
     /// # Errors
     /// Returns `"path not found"` if no entry exists for the normalized key.
     pub fn total_chunks(&self, path: String) -> Result<u32, String> {
-        let path_key = WebServer::path_key(path);
+        let path_key = WebServer::path_key(&path);
 
         let Some(entry) = self.map_obj.get(&path_key) else {
             return Err("path not found".to_string());
@@ -172,7 +174,7 @@ impl WebServer {
         index: u32,
     ) -> Result<(), String> {
         // read the file into a vector of u8
-        let path_key = WebServer::path_key(path);
+        let path_key = WebServer::path_key(&path);
 
         let Some(entry) = self.map_obj.get(&path_key) else {
             return Err("chunk cannot be uploaded without calling `start_file_upload`".to_string());
@@ -207,7 +209,7 @@ impl WebServer {
     /// - Returns an error if the path is unknown.
     /// - Returns an error if the file is already marked `Ready`.
     pub fn finish_upload(&mut self, path: String, size_bytes: u32) -> Result<(), String> {
-        let path_key = WebServer::path_key(path);
+        let path_key = WebServer::path_key(&path);
 
         let Some(entry) = self.map_obj.get(&path_key) else {
             return Err("chunk cannot be uploaded without calling `start_file_upload`".to_string());
@@ -255,7 +257,7 @@ impl WebServer {
         let mut headers: HashMap<String, String> = HashMap::new();
         headers.insert("Content-Type".to_string(), Self::get_content_header(&path));
 
-        let path_replaced = WebServer::path_key(path);
+        let path_replaced = WebServer::path_key(&path);
         let body = self.map_obj.get(&path_replaced);
 
         if method == "HEAD" {
@@ -288,7 +290,7 @@ impl WebServer {
     /// # Errors
     /// Returns `"Not Found"` if `path` does not exist.
     pub fn size_bytes(&self, path: String) -> Result<u32, String> {
-        let path_replaced = Self::path_key(path);
+        let path_replaced = Self::path_key(&path);
         let body = self.map_obj.get(&path_replaced);
 
         if let Some(entry) = body {

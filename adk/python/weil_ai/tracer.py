@@ -528,6 +528,15 @@ async def index_trace(owner: Any, state: TraceState) -> TransactionResult:
     )
 
 
+def local_trace_payload(state: TraceState) -> dict[str, Any]:
+    """Return the completed trace from local in-memory state."""
+    return {
+        "trace_id": state.trace_id,
+        "root": state.root,
+        "trace": [contract_trace_event(event) for event in state.trace],
+    }
+
+
 async def publish_trace(owner: Any, trace: Any) -> TransactionResult:
     """Publish a completed trace to the organization audit stream."""
     client = owner._get_client()
@@ -548,7 +557,7 @@ async def publish_trace(owner: Any, trace: Any) -> TransactionResult:
 
 
 async def _finish_initialized_trace(owner: Any, state: TraceState) -> TransactionResult:
-    trace = await get_trace(owner, state)
+    trace = local_trace_payload(state)
     try:
         await index_trace(owner, state)
     except Exception as exc:

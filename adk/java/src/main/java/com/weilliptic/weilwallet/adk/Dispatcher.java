@@ -155,7 +155,7 @@ public final class Dispatcher implements AutoCloseable {
     /**
      * Send {@code call}, retrying, then run {@code onDone}. The call counts as
      * finished only once {@code onDone} has run: a follow-up it makes, such as
-     * a trace's publish after its {@code get_trace}, is then sent before
+     * a publish after a query's answer, is then sent before
      * {@link #flush} sees nothing pending, so an exit cannot cut it off.
      */
     private void deliver(WeilIdentity identity, Call call, Completion onDone) {

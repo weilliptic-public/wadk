@@ -1,6 +1,5 @@
 package com.weilliptic.weilwallet;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.adk.JsonBaseModel;
 import com.google.adk.tools.AgentTool;
@@ -16,7 +15,6 @@ import com.weilliptic.weilwallet.adk.WeilAgentServer;
 import com.weilliptic.weilwallet.adk.WeilEvent;
 import com.weilliptic.weilwallet.adk.WeilPlugin;
 import com.weilliptic.weilwallet.adk.WeilRemoteAgent;
-import com.weilliptic.weilwallet.adk.WeilResult;
 
 import java.util.ArrayList;
 import java.util.Deque;
@@ -59,10 +57,10 @@ import java.util.concurrent.ConcurrentLinkedDeque;
  *       tool, so its result is in the trace; a refused tool's refusal is its
  *       result.</li>
  *   <li><b>Run end</b> ({@link Hook#AFTER_RUN}, or {@link Hook#RUN_ERROR}):
- *       {@code index_trace} for similarity search, then {@code get_trace},
- *       which reads the trace back from the applet through Sentinel, and what
- *       it returns published to {@code publisher::<org>} on topic
- *       {@code audits}.</li>
+ *       {@code index_trace} for similarity search, then the trace this run
+ *       kept in memory as it sent its nodes published to
+ *       {@code publisher::<org>} on topic {@code audits}, with no
+ *       {@code get_trace} to read it back.</li>
  * </ol>
  *
  * <p>Sub-agents an agent transfers to run inside the same run, so they add
@@ -90,13 +88,12 @@ import java.util.concurrent.ConcurrentLinkedDeque;
  * {@link com.weilliptic.weilwallet.adk.Dispatcher} sends them. On the
  * ordered background queue {@link com.weilliptic.weilwallet.adk.Weil#plugin}
  * gives it, they go out one at a time in the order made, so a trace is
- * started before its nodes, and the agent waits for none of them, not even
- * {@code index_trace} or {@code get_trace}, queries Sentinel holds until they
- * are done. The others are sent fire-and-forget: a call Sentinel refuses is
- * reported, one the chain rejects later is not. {@code get_trace} is answered
- * on the dispatcher's thread, which then publishes the trace; the chain runs
- * one wallet's calls in the order they are sent, so it sees every node sent
- * before it.</p>
+ * started before its nodes, and the agent waits for none of them. They are
+ * sent fire-and-forget: a call Sentinel refuses is reported, one the chain
+ * rejects later is not. Each node is also kept in memory as it is made, and
+ * that copy is what the run publishes at its end, so publishing reads nothing
+ * back from the chain. The copy holds the nodes this process made: nodes a
+ * remote agent added to the trace are on the applet, not in it.</p>
  */
 public final class TraceAction {
 
@@ -117,6 +114,8 @@ public final class TraceAction {
         volatile boolean started;
 
         // Guarded by owner.
+        /** The events sent, kept in memory so the run's end need not call get_trace. */
+        final List<Map<String, Object>> trace = new ArrayList<>();
         /** The last node this run finished, which the model's next tools follow. */
         String last;
         /** The parent of the tools the model asked for in its latest response. */
@@ -317,8 +316,7 @@ public final class TraceAction {
                 .build(this::index)
                 .done(),
             WeilAction.named("trace:end").on(Hook.AFTER_RUN, Hook.RUN_ERROR).nonBlocking()
-                .build(this::getTrace)
-                .onResult(TraceAction::publish)
+                .build(this::publish)
                 .done(),
         };
     }
@@ -542,52 +540,35 @@ public final class TraceAction {
     }
 
     /**
-     * {@code get_trace} for a run's own trace, at its end: a query, so it is
-     * answered, and {@link #publish} sends the answer on.
+     * A run's own trace, at its end: the copy kept in memory, published on
+     * {@link #TOPIC} after the {@code index_trace} the index action sent.
      */
-    private Call getTrace(WeilEvent ev) {
+    private Call publish(WeilEvent ev) {
         Run run = ev.invocationId() == null ? null : runs.remove(ev.invocationId());
         if (run != null && run.owner.started) {
             ended.put(ev.invocationId(), run.traceId);
         }
-        if (run == null || !run.ownsTrace() || !run.started || run.joined) {
+        if (run == null || !run.ownsTrace() || !run.started || run.joined || ev.identity() == null) {
             return null; // a sub-agent's or a joined run is published with its caller's
         }
-        return Call.to(TRACER, "get_trace")
-            .args(Map.of("trace_id", run.traceId))
-            .hideArgs(false)
-            .fireAndForget(false)
-            .build();
-    }
-
-    /** The trace {@code get_trace} returned, published on {@link #TOPIC}. */
-    private static void publish(WeilEvent ev, WeilResult result) throws Exception {
         Map<String, Object> publish = new LinkedHashMap<>();
         publish.put("topic", TOPIC);
-        publish.put("payload", WeilAuth.pythonJson(parsed(result.decode())));
-        ev.identity().invoke(Call.to(Applet.byName(StreamAudit.publisherFor(ev.identity())), "publish")
+        publish.put("payload", WeilAuth.pythonJson(localTrace(run)));
+        return Call.to(Applet.byName(StreamAudit.publisherFor(ev.identity())), "publish")
             .args(publish)
             .hideArgs(false)
             .fireAndForget(true)
-            .build());
+            .build();
     }
 
-    /** The applet returns its answer as text inside {@code Ok}; read it once more when it is JSON. */
-    private static JsonNode parsed(JsonNode value) throws Exception {
-        if (value != null && value.isTextual()) {
-            String text = value.asText().trim();
-            if (text.startsWith("{") || text.startsWith("[")) {
-                return JSON.readTree(text);
-            }
-        }
-        return value;
-    }
-
-    /** {@code event}'s {@code build_trace}. */
+    /** {@code event}'s {@code build_trace}, the event also kept in its trace's copy in memory. */
     private static Call addNode(Run owner, Map<String, Object> event) {
         Map<String, Object> args = new LinkedHashMap<>();
         args.put("trace_id", owner.traceId);
         args.put("event", event);
+        synchronized (owner) {
+            owner.trace.add(event);
+        }
         return call("build_trace", args);
     }
 
@@ -603,6 +584,17 @@ public final class TraceAction {
         if (ev.identity() != null) {
             content.put("wallet", ev.identity().address());
         }
+    }
+
+    /** The trace as published: {@code {"trace_id", "root", "trace"}}, its events in the order made. */
+    private static Map<String, Object> localTrace(Run run) {
+        Map<String, Object> trace = new LinkedHashMap<>();
+        trace.put("trace_id", run.traceId);
+        trace.put("root", run.root);
+        synchronized (run) {
+            trace.put("trace", List.copyOf(run.trace));
+        }
+        return trace;
     }
 
     /** The applet's {@code TraceEvent} record. */
